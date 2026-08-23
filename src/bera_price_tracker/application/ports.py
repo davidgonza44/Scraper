@@ -40,6 +40,14 @@ class AIClassifierInvalidResponseError(RuntimeError):
     """Raised by an AI adapter when provider output cannot satisfy the contract."""
 
 
+class AlibabaNegotiationDraftUnavailableError(RuntimeError):
+    """Raised when MiniMax/Ollama cannot produce a negotiation draft."""
+
+
+class AlibabaNegotiationDraftInvalidError(RuntimeError):
+    """Raised when MiniMax/Ollama output cannot satisfy the negotiation contract."""
+
+
 @runtime_checkable
 class AIProductClassifier(Protocol):
     """Provider-neutral boundary for structured AI product classification."""
@@ -66,6 +74,26 @@ class AlibabaProductRefreshProvider(Protocol):
 
     def refresh_products(self, products: Sequence[Any]) -> Any:
         """Refresh the given tracked products in one batch."""
+
+        ...
+
+
+@runtime_checkable
+class AlibabaNegotiationDrafter(Protocol):
+    """MiniMax drafts and summaries. Must not invent or change prices."""
+
+    def draft_opening(self, context: Any) -> str:
+        """Draft the first supplier-facing message."""
+
+        ...
+
+    def analyze_reply(self, context: Any, supplier_text: str) -> Any:
+        """Summarize a pasted supplier reply without inventing numbers."""
+
+        ...
+
+    def draft_counter(self, context: Any) -> str:
+        """Draft the next message using the authorized counter price."""
 
         ...
 

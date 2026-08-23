@@ -1292,6 +1292,389 @@ def _alibaba_tracking() -> rx.Component:
     )
 
 
+def _alibaba_negotiation() -> rx.Component:
+    return rx.box(
+        rx.text("Negociación", size="3", weight="medium", color=styles.TEXT_PRIMARY),
+        rx.text(
+            "Python calcula los precios. MiniMax solo redacta. Nada se envía a Alibaba.",
+            size="1",
+            color=MUTED,
+            padding_top="4px",
+        ),
+        rx.cond(
+            TrackerState.alibaba_negotiation_error != "",
+            rx.text(
+                TrackerState.alibaba_negotiation_error,
+                size="2",
+                color=BRICK,
+                padding_top="8px",
+            ),
+        ),
+        rx.cond(
+            TrackerState.alibaba_has_negotiation_products,
+            rx.vstack(
+                rx.vstack(
+                    rx.text("Producto", size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+                    rx.select(
+                        TrackerState.alibaba_negotiation_option_labels,
+                        value=TrackerState.alibaba_negotiation_selected_label,
+                        on_change=TrackerState.set_alibaba_negotiation_product_key,
+                        width="100%",
+                        **styles.SELECT_STYLE,
+                    ),
+                    spacing="1",
+                    width="100%",
+                    align_items="start",
+                ),
+                rx.hstack(
+                    rx.vstack(
+                        rx.text(
+                            "Cantidad deseada",
+                            size="1",
+                            color=styles.TEXT_SECONDARY,
+                            weight="medium",
+                        ),
+                        rx.input(
+                            value=TrackerState.alibaba_negotiation_quantity,
+                            on_change=TrackerState.set_alibaba_negotiation_quantity,
+                            width="100%",
+                            **styles.INPUT_STYLE,
+                        ),
+                        spacing="1",
+                        width="100%",
+                        align_items="start",
+                    ),
+                    rx.vstack(
+                        rx.text(
+                            "Agresividad (0-100)",
+                            size="1",
+                            color=styles.TEXT_SECONDARY,
+                            weight="medium",
+                        ),
+                        rx.input(
+                            value=TrackerState.alibaba_negotiation_aggressiveness,
+                            on_change=TrackerState.set_alibaba_negotiation_aggressiveness,
+                            width="100%",
+                            **styles.INPUT_STYLE,
+                        ),
+                        spacing="1",
+                        width="100%",
+                        align_items="start",
+                    ),
+                    spacing="3",
+                    width="100%",
+                ),
+                rx.hstack(
+                    rx.vstack(
+                        rx.text(
+                            "Precio venta esperado",
+                            size="1",
+                            color=styles.TEXT_SECONDARY,
+                            weight="medium",
+                        ),
+                        rx.input(
+                            value=TrackerState.alibaba_negotiation_resale,
+                            on_change=TrackerState.set_alibaba_negotiation_resale,
+                            placeholder="opcional",
+                            width="100%",
+                            **styles.INPUT_STYLE,
+                        ),
+                        spacing="1",
+                        width="100%",
+                        align_items="start",
+                    ),
+                    rx.vstack(
+                        rx.text(
+                            "Margen objetivo %",
+                            size="1",
+                            color=styles.TEXT_SECONDARY,
+                            weight="medium",
+                        ),
+                        rx.input(
+                            value=TrackerState.alibaba_negotiation_margin,
+                            on_change=TrackerState.set_alibaba_negotiation_margin,
+                            placeholder="opcional",
+                            width="100%",
+                            **styles.INPUT_STYLE,
+                        ),
+                        spacing="1",
+                        width="100%",
+                        align_items="start",
+                    ),
+                    spacing="3",
+                    width="100%",
+                ),
+                rx.hstack(
+                    rx.vstack(
+                        rx.text(
+                            "Envío / unidad",
+                            size="1",
+                            color=styles.TEXT_SECONDARY,
+                            weight="medium",
+                        ),
+                        rx.input(
+                            value=TrackerState.alibaba_negotiation_shipping,
+                            on_change=TrackerState.set_alibaba_negotiation_shipping,
+                            placeholder="opcional",
+                            width="100%",
+                            **styles.INPUT_STYLE,
+                        ),
+                        spacing="1",
+                        width="100%",
+                        align_items="start",
+                    ),
+                    rx.vstack(
+                        rx.text(
+                            "Aranceles / unidad",
+                            size="1",
+                            color=styles.TEXT_SECONDARY,
+                            weight="medium",
+                        ),
+                        rx.input(
+                            value=TrackerState.alibaba_negotiation_duties,
+                            on_change=TrackerState.set_alibaba_negotiation_duties,
+                            placeholder="opcional",
+                            width="100%",
+                            **styles.INPUT_STYLE,
+                        ),
+                        spacing="1",
+                        width="100%",
+                        align_items="start",
+                    ),
+                    rx.vstack(
+                        rx.text(
+                            "Otros costos / unidad",
+                            size="1",
+                            color=styles.TEXT_SECONDARY,
+                            weight="medium",
+                        ),
+                        rx.input(
+                            value=TrackerState.alibaba_negotiation_other,
+                            on_change=TrackerState.set_alibaba_negotiation_other,
+                            placeholder="opcional",
+                            width="100%",
+                            **styles.INPUT_STYLE,
+                        ),
+                        spacing="1",
+                        width="100%",
+                        align_items="start",
+                    ),
+                    spacing="3",
+                    width="100%",
+                ),
+                rx.vstack(
+                    rx.text(
+                        "Tramos de precio (opcional)",
+                        size="1",
+                        color=styles.TEXT_SECONDARY,
+                        weight="medium",
+                    ),
+                    rx.text_area(
+                        value=TrackerState.alibaba_negotiation_ladder,
+                        on_change=TrackerState.set_alibaba_negotiation_ladder,
+                        placeholder="1-49:4.30\n50-199:4.00",
+                        width="100%",
+                        rows="3",
+                    ),
+                    spacing="1",
+                    width="100%",
+                    align_items="start",
+                ),
+                rx.button(
+                    "Calcular estrategia",
+                    on_click=TrackerState.calculate_alibaba_negotiation,
+                    size="2",
+                    **styles.BUTTON_STYLE,
+                ),
+                rx.cond(
+                    TrackerState.alibaba_negotiation_has_plan,
+                    rx.vstack(
+                        rx.hstack(
+                            rx.box(
+                                rx.text("Precio publicado", size="1", color=MUTED),
+                                rx.text(
+                                    TrackerState.alibaba_negotiation_public,
+                                    size="3",
+                                    weight="medium",
+                                    color=BRICK,
+                                ),
+                                padding="10px 12px",
+                                background_color=PAPER,
+                                border=f"1px solid {RULE}",
+                                width="100%",
+                            ),
+                            rx.box(
+                                rx.text("Oferta inicial", size="1", color=MUTED),
+                                rx.text(
+                                    TrackerState.alibaba_negotiation_opening,
+                                    size="3",
+                                    weight="medium",
+                                    color=styles.TEXT_PRIMARY,
+                                ),
+                                padding="10px 12px",
+                                background_color=PAPER,
+                                border=f"1px solid {RULE}",
+                                width="100%",
+                            ),
+                            rx.box(
+                                rx.text("Precio objetivo", size="1", color=MUTED),
+                                rx.text(
+                                    TrackerState.alibaba_negotiation_target,
+                                    size="3",
+                                    weight="medium",
+                                    color=styles.TEXT_PRIMARY,
+                                ),
+                                padding="10px 12px",
+                                background_color=PAPER,
+                                border=f"1px solid {RULE}",
+                                width="100%",
+                            ),
+                            rx.box(
+                                rx.text("Máximo aceptable", size="1", color=MUTED),
+                                rx.text(
+                                    TrackerState.alibaba_negotiation_ceiling,
+                                    size="3",
+                                    weight="medium",
+                                    color=styles.TEXT_PRIMARY,
+                                ),
+                                padding="10px 12px",
+                                background_color=PAPER,
+                                border=f"1px solid {RULE}",
+                                width="100%",
+                            ),
+                            spacing="3",
+                            width="100%",
+                        ),
+                        rx.text(
+                            "Cantidad deseada: " + TrackerState.alibaba_negotiation_quantity_shown,
+                            size="1",
+                            color=MUTED,
+                        ),
+                        rx.text(
+                            "Próximo tramo: " + TrackerState.alibaba_negotiation_next_tier,
+                            size="1",
+                            color=MUTED,
+                        ),
+                        rx.text(
+                            "Distancia al siguiente tramo: "
+                            + TrackerState.alibaba_negotiation_proximity,
+                            size="1",
+                            color=MUTED,
+                        ),
+                        rx.cond(
+                            TrackerState.alibaba_negotiation_is_unattractive,
+                            rx.text(
+                                "Trato económicamente poco atractivo con el margen indicado.",
+                                size="2",
+                                color=BRICK,
+                            ),
+                        ),
+                        rx.text(
+                            TrackerState.alibaba_negotiation_explanation,
+                            size="2",
+                            color=styles.TEXT_PRIMARY,
+                        ),
+                        rx.hstack(
+                            rx.button(
+                                "Generar mensaje con MiniMax",
+                                on_click=TrackerState.generate_alibaba_negotiation_opening,
+                                size="1",
+                                variant="outline",
+                            ),
+                            rx.button(
+                                "Regenerar",
+                                on_click=TrackerState.generate_alibaba_negotiation_opening,
+                                size="1",
+                                variant="outline",
+                            ),
+                            rx.button(
+                                "Copiar",
+                                on_click=rx.set_clipboard(TrackerState.alibaba_negotiation_message),
+                                size="1",
+                                variant="outline",
+                            ),
+                            spacing="2",
+                        ),
+                        rx.text_area(
+                            value=TrackerState.alibaba_negotiation_message,
+                            on_change=TrackerState.set_alibaba_negotiation_message,
+                            placeholder="El mensaje propuesto aparecerá aquí. No se envía.",
+                            width="100%",
+                            rows="6",
+                        ),
+                        rx.text(
+                            "Respuesta del proveedor (pega el texto; no se consulta Alibaba)",
+                            size="1",
+                            color=styles.TEXT_SECONDARY,
+                            weight="medium",
+                        ),
+                        rx.text_area(
+                            value=TrackerState.alibaba_negotiation_supplier_text,
+                            on_change=TrackerState.set_alibaba_negotiation_supplier_text,
+                            width="100%",
+                            rows="4",
+                        ),
+                        rx.hstack(
+                            rx.button(
+                                "Analizar respuesta",
+                                on_click=TrackerState.analyze_alibaba_supplier_reply,
+                                size="1",
+                                variant="outline",
+                            ),
+                            rx.button(
+                                "Generar contraoferta",
+                                on_click=TrackerState.generate_alibaba_negotiation_reply,
+                                size="1",
+                                variant="outline",
+                            ),
+                            spacing="2",
+                        ),
+                        rx.cond(
+                            TrackerState.alibaba_negotiation_analysis_decision != "",
+                            rx.box(
+                                rx.text(
+                                    "Decisión: "
+                                    + TrackerState.alibaba_negotiation_analysis_decision,
+                                    size="2",
+                                    weight="medium",
+                                    color=styles.TEXT_PRIMARY,
+                                ),
+                                rx.text(
+                                    TrackerState.alibaba_negotiation_analysis_summary,
+                                    size="1",
+                                    color=MUTED,
+                                ),
+                                rx.text(
+                                    TrackerState.alibaba_negotiation_analysis_notes,
+                                    size="1",
+                                    color=MUTED,
+                                ),
+                                padding_top="6px",
+                            ),
+                        ),
+                        spacing="3",
+                        width="100%",
+                    ),
+                ),
+                spacing="3",
+                width="100%",
+                padding_top="10px",
+            ),
+            rx.text(
+                "Sigue un producto o carga resultados de búsqueda para negociar.",
+                size="2",
+                color=MUTED,
+                padding_top="8px",
+            ),
+        ),
+        padding="14px 16px",
+        background_color=CARD,
+        border=f"1px solid {RULE}",
+        width="100%",
+        margin_top="16px",
+    )
+
+
 def _alibaba_table() -> rx.Component:
     return rx.box(
         rx.table.root(
@@ -1440,6 +1823,7 @@ def dashboard() -> rx.Component:
                     _alibaba_form(),
                     _alibaba_body(),
                     _alibaba_tracking(),
+                    _alibaba_negotiation(),
                     spacing="0",
                     width="100%",
                 ),

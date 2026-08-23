@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 from bera_price_tracker.application import (
     AlibabaFollowObservation,
+    AlibabaNegotiationDrafter,
     AlibabaProductRefreshProvider,
     AlibabaRefreshSummary,
     AlibabaTrackedProduct,
@@ -473,3 +474,19 @@ def build_alibaba_search(settings: Settings | None = None) -> SearchAlibabaProdu
         actor_id=resolved.apify_alibaba_actor,
     )
     return SearchAlibabaProducts(provider=client)
+
+
+def build_alibaba_negotiation_drafter(
+    settings: Settings | None = None,
+) -> AlibabaNegotiationDrafter:
+    """Wire MiniMax/Ollama for Alibaba negotiation drafts. No marketplace HTTP."""
+
+    from bera_price_tracker.infrastructure.ai import OllamaAlibabaNegotiationDrafter
+
+    resolved = Settings.from_env() if settings is None else settings
+    drafter: AlibabaNegotiationDrafter = OllamaAlibabaNegotiationDrafter(
+        base_url=resolved.ollama_base_url,
+        model=resolved.ollama_model,
+        timeout_seconds=resolved.ollama_timeout_seconds,
+    )
+    return drafter

@@ -7,7 +7,7 @@ import dataclasses
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from bera_price_tracker.composition import ApplicationComposition, build_composition
@@ -529,6 +529,8 @@ def tracked_product_to_row(tracked: Any) -> dict[str, str]:
         "url": tracked.url,
         "is_active": "1" if tracked.is_active else "0",
         "snapshot_count": str(tracked.variation.snapshot_count),
+        "price_min": "" if tracked.price_min is None else str(tracked.price_min),
+        "price_max": "" if tracked.price_max is None else str(tracked.price_max),
     }
 
 
@@ -649,3 +651,325 @@ def refresh_alibaba_tracked(
         refresh_provider=refresh_provider,
     )
     return refresh_summary_to_row(summary)
+
+
+ALIBABA_NEGOTIATION_GENERIC_ERROR = "No se pudo completar la negociación."
+ALIBABA_NEGOTIATION_PRODUCT_ERROR = "Selecciona un producto para negociar."
+
+
+def sanitize_alibaba_negotiation_error(exc: BaseException) -> str:
+    from bera_price_tracker.application.alibaba_negotiation import AlibabaNegotiationError
+
+    if isinstance(exc, AlibabaNegotiationError):
+        return str(exc)
+    logger.info("Alibaba negotiation failed: %s", type(exc).__name__)
+    return ALIBABA_NEGOTIATION_GENERIC_ERROR
+
+
+def _optional_form_money(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = Decimal(value.strip().replace(",", "").replace("$", ""))
+    except InvalidOperation:
+        return None
+    if not parsed.is_finite() or parsed <= Decimal("0"):
+        return None
+    return parsed
+
+
+def _parse_aggressiveness(value: object) -> int:
+    if isinstance(value, bool):
+        return 50
+    if isinstance(value, int) and 0 <= value <= 100:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        if 0 <= parsed <= 100:
+            return parsed
+    return 50
+
+
+def _optional_form_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed if parsed > 0 else None
+    return None
+
+
+def build_alibaba_negotiation_catalog(
+    tracked_rows: Sequence[Mapping[str, object]],
+    result_rows: Sequence[Mapping[str, object]],
+) -> list[dict[str, str]]:
+    """Selector options from followed products first, then loaded search rows."""
+
+    catalog: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in tracked_rows:
+        product_id = str(row.get("product_id") or "").strip()
+        if not product_id or product_id in seen:
+            continue
+        seen.add(product_id)
+        title = str(row.get("title") or product_id)
+        catalog.append(
+            {
+                "key": f"t:{product_id}",
+                "label": f"{title[:60]} · seguido",
+                "source": "tracked",
+                "product_id": product_id,
+                "title": title,
+                "supplier_name": str(row.get("supplier_name") or ""),
+                "last_price": str(row.get("last_price") or ""),
+                "price_min": str(row.get("price_min") or ""),
+                "price_max": str(row.get("price_max") or ""),
+                "moq": "",
+                "representative": "",
+            }
+        )
+    for row in result_rows:
+        product_id = str(row.get("product_id") or "").strip()
+        if not product_id or product_id in seen:
+            continue
+        seen.add(product_id)
+        title = str(row.get("title") or product_id)
+        catalog.append(
+            {
+                "key": f"s:{product_id}",
+                "label": f"{title[:60]} · búsqueda",
+                "source": "search",
+                "product_id": product_id,
+                "title": title,
+                "supplier_name": str(row.get("supplier_name") or ""),
+                "last_price": "",
+                "price_min": str(row.get("price_min") or ""),
+                "price_max": str(row.get("price_max") or ""),
+                "moq": str(row.get("moq") or ""),
+                "representative": str(row.get("representative") or ""),
+            }
+        )
+    return catalog
+
+
+def negotiation_plan_to_row(plan: Any) -> dict[str, str]:
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+
+    next_qty = plan.next_tier_min_quantity
+    proximity = plan.tier_proximity
+    return {
+        "title": plan.title,
+        "supplier_name": plan.supplier_name or "",
+        "desired_quantity": str(plan.desired_quantity),
+        "public_unit_price": format_alibaba_money(plan.public_unit_price),
+        "opening_offer": format_alibaba_money(plan.opening_offer),
+        "target_price": format_alibaba_money(plan.target_price),
+        "ceiling_price": format_alibaba_money(plan.ceiling_price),
+        "negotiable_reference": format_alibaba_money(plan.negotiable_reference),
+        "next_tier": (
+            "—"
+            if next_qty is None or plan.next_tier_price is None
+            else f"{next_qty} u · {format_alibaba_money(plan.next_tier_price)}"
+        ),
+        "tier_proximity": (
+            "—" if proximity is None else f"{(proximity * Decimal('100')).quantize(Decimal('1'))}%"
+        ),
+        "explanation": plan.explanation,
+        "attractiveness": plan.attractiveness.value,
+        "ladder_summary": plan.ladder_summary,
+        "public_raw": str(plan.public_unit_price),
+        "min_order_quantity": (
+            "" if plan.min_order_quantity is None else str(plan.min_order_quantity)
+        ),
+    }
+
+
+def calculate_alibaba_negotiation(
+    catalog_row: Mapping[str, object] | None,
+    *,
+    desired_quantity: object,
+    expected_resale_price: object = "",
+    target_margin_percent: object = "",
+    shipping_per_unit: object = "",
+    duties_per_unit: object = "",
+    other_costs_per_unit: object = "",
+    negotiation_aggressiveness: object = "50",
+    ladder_text: object = "",
+) -> dict[str, str]:
+    from bera_price_tracker.application.alibaba_negotiation import (
+        AlibabaNegotiationError,
+        AlibabaNegotiationInput,
+        calculate_alibaba_negotiation_plan,
+        parse_ladder_text,
+        public_price_from_catalog_row,
+    )
+    from bera_price_tracker.application.alibaba_score import extract_moq_quantity
+
+    if catalog_row is None:
+        raise AlibabaNegotiationError(ALIBABA_NEGOTIATION_PRODUCT_ERROR)
+    quantity = _optional_form_int(desired_quantity)
+    if quantity is None:
+        raise AlibabaNegotiationError("Indica una cantidad deseada mayor que cero.")
+    aggressiveness = _parse_aggressiveness(negotiation_aggressiveness)
+    moq_decimal = extract_moq_quantity(catalog_row.get("moq"))
+    moq = None if moq_decimal is None else int(moq_decimal)
+    margin = _optional_form_money(target_margin_percent)
+    plan = calculate_alibaba_negotiation_plan(
+        AlibabaNegotiationInput(
+            desired_quantity=quantity,
+            title=str(catalog_row.get("title") or ""),
+            supplier_name=str(catalog_row.get("supplier_name") or "") or None,
+            min_order_quantity=moq,
+            tiers=parse_ladder_text(ladder_text),
+            public_unit_price=public_price_from_catalog_row(catalog_row),
+            expected_resale_price=_optional_form_money(expected_resale_price),
+            target_margin_percent=margin,
+            shipping_per_unit=_optional_form_money(shipping_per_unit),
+            duties_per_unit=_optional_form_money(duties_per_unit),
+            other_costs_per_unit=_optional_form_money(other_costs_per_unit),
+            negotiation_aggressiveness=aggressiveness,
+        )
+    )
+    row = negotiation_plan_to_row(plan)
+    row.update(
+        {
+            "ladder_text": ladder_text if isinstance(ladder_text, str) else "",
+            "expected_resale_price": (
+                ""
+                if _optional_form_money(expected_resale_price) is None
+                else str(_optional_form_money(expected_resale_price))
+            ),
+            "target_margin_percent": "" if margin is None else str(margin),
+            "shipping_per_unit": (
+                ""
+                if _optional_form_money(shipping_per_unit) is None
+                else str(_optional_form_money(shipping_per_unit))
+            ),
+            "duties_per_unit": (
+                ""
+                if _optional_form_money(duties_per_unit) is None
+                else str(_optional_form_money(duties_per_unit))
+            ),
+            "other_costs_per_unit": (
+                ""
+                if _optional_form_money(other_costs_per_unit) is None
+                else str(_optional_form_money(other_costs_per_unit))
+            ),
+            "aggressiveness": str(aggressiveness),
+        }
+    )
+    return row
+
+
+def _plan_from_row(row: Mapping[str, object]) -> Any:
+    from bera_price_tracker.application.alibaba_negotiation import (
+        AlibabaNegotiationError,
+        AlibabaNegotiationInput,
+        calculate_alibaba_negotiation_plan,
+        parse_ladder_text,
+    )
+
+    quantity = _optional_form_int(row.get("desired_quantity"))
+    public = _optional_form_money(str(row.get("public_raw") or ""))
+    if quantity is None or public is None:
+        raise AlibabaNegotiationError("Calcula la estrategia antes de generar un mensaje.")
+    return calculate_alibaba_negotiation_plan(
+        AlibabaNegotiationInput(
+            desired_quantity=quantity,
+            title=str(row.get("title") or ""),
+            supplier_name=str(row.get("supplier_name") or "") or None,
+            min_order_quantity=_optional_form_int(row.get("min_order_quantity")),
+            tiers=parse_ladder_text(row.get("ladder_text") or ""),
+            public_unit_price=public,
+            expected_resale_price=_optional_form_money(row.get("expected_resale_price")),
+            target_margin_percent=_optional_form_money(row.get("target_margin_percent")),
+            shipping_per_unit=_optional_form_money(row.get("shipping_per_unit")),
+            duties_per_unit=_optional_form_money(row.get("duties_per_unit")),
+            other_costs_per_unit=_optional_form_money(row.get("other_costs_per_unit")),
+            negotiation_aggressiveness=_parse_aggressiveness(row.get("aggressiveness")),
+        )
+    )
+
+
+def generate_alibaba_negotiation_opening(
+    plan_row: Mapping[str, object],
+    *,
+    drafter: Any | None = None,
+) -> str:
+    from bera_price_tracker.application.alibaba_negotiation import (
+        AlibabaNegotiationDrafter,
+        GenerateNegotiationOpeningMessage,
+    )
+    from bera_price_tracker.composition import build_alibaba_negotiation_drafter
+
+    resolved: AlibabaNegotiationDrafter = (
+        drafter if drafter is not None else build_alibaba_negotiation_drafter()
+    )
+    return GenerateNegotiationOpeningMessage(resolved).execute(_plan_from_row(plan_row))
+
+
+def analyze_alibaba_supplier_reply(
+    plan_row: Mapping[str, object],
+    supplier_text: str,
+    *,
+    drafter: Any | None = None,
+) -> dict[str, str]:
+    from bera_price_tracker.application.alibaba_negotiation import (
+        AlibabaNegotiationDrafter,
+        AnalyzeSupplierResponse,
+    )
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.composition import build_alibaba_negotiation_drafter
+
+    resolved: AlibabaNegotiationDrafter = (
+        drafter if drafter is not None else build_alibaba_negotiation_drafter()
+    )
+    parsed, recommendation = AnalyzeSupplierResponse(resolved).execute(
+        _plan_from_row(plan_row),
+        supplier_text,
+    )
+    return {
+        "response_summary": parsed.response_summary,
+        "quoted_unit_price": (
+            "—"
+            if parsed.quoted_unit_price is None
+            else format_alibaba_money(parsed.quoted_unit_price)
+        ),
+        "quoted_quantity": "—" if parsed.quoted_quantity is None else str(parsed.quoted_quantity),
+        "quoted_moq": "—" if parsed.quoted_moq is None else str(parsed.quoted_moq),
+        "shipping_mentioned": "sí" if parsed.shipping_mentioned else "no",
+        "decision": recommendation.decision.value,
+        "authorized_price": (
+            "—"
+            if recommendation.authorized_price is None
+            else format_alibaba_money(recommendation.authorized_price)
+        ),
+        "notes": recommendation.notes,
+        "needs_review": "1" if parsed.needs_human_review else "0",
+        "quoted_raw": "" if parsed.quoted_unit_price is None else str(parsed.quoted_unit_price),
+    }
+
+
+def generate_alibaba_negotiation_reply(
+    plan_row: Mapping[str, object],
+    supplier_text: str,
+    *,
+    drafter: Any | None = None,
+) -> str:
+    from bera_price_tracker.application.alibaba_negotiation import (
+        AlibabaNegotiationDrafter,
+        AnalyzeSupplierResponse,
+        GenerateNegotiationReply,
+    )
+    from bera_price_tracker.composition import build_alibaba_negotiation_drafter
+
+    resolved: AlibabaNegotiationDrafter = (
+        drafter if drafter is not None else build_alibaba_negotiation_drafter()
+    )
+    plan = _plan_from_row(plan_row)
+    parsed, recommendation = AnalyzeSupplierResponse(resolved).execute(plan, supplier_text)
+    return GenerateNegotiationReply(resolved).execute(plan, parsed, recommendation)

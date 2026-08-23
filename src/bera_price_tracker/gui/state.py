@@ -103,6 +103,8 @@ class AlibabaTrackedRow(rx.Base):
     history: str = ""
     url: str = ""
     snapshot_count: str = ""
+    price_min: str = ""
+    price_max: str = ""
     selected: bool = False
 
 
@@ -203,6 +205,33 @@ class TrackerState(rx.State):
     alibaba_applied_reputation_weight: int = DEFAULT_REPUTATION_WEIGHT
     alibaba_chart_scope: str = analysis.CHART_SCOPE_ALL
     marketplace_tab: str = "facebook"
+    alibaba_negotiation_product_key: str = ""
+    alibaba_negotiation_quantity: str = "40"
+    alibaba_negotiation_resale: str = ""
+    alibaba_negotiation_margin: str = ""
+    alibaba_negotiation_shipping: str = ""
+    alibaba_negotiation_duties: str = ""
+    alibaba_negotiation_other: str = ""
+    alibaba_negotiation_aggressiveness: str = "50"
+    alibaba_negotiation_ladder: str = ""
+    alibaba_negotiation_error: str = ""
+    alibaba_negotiation_has_plan: bool = False
+    alibaba_negotiation_public: str = ""
+    alibaba_negotiation_opening: str = ""
+    alibaba_negotiation_target: str = ""
+    alibaba_negotiation_ceiling: str = ""
+    alibaba_negotiation_next_tier: str = ""
+    alibaba_negotiation_proximity: str = ""
+    alibaba_negotiation_quantity_shown: str = ""
+    alibaba_negotiation_explanation: str = ""
+    alibaba_negotiation_attractiveness: str = ""
+    alibaba_negotiation_message: str = ""
+    alibaba_negotiation_supplier_text: str = ""
+    alibaba_negotiation_analysis_summary: str = ""
+    alibaba_negotiation_analysis_decision: str = ""
+    alibaba_negotiation_analysis_notes: str = ""
+    alibaba_negotiation_is_drafting: bool = False
+    alibaba_negotiation_plan_payload: dict[str, str] = {}
 
     def set_query(self, value: str) -> None:
         self.query = value
@@ -276,6 +305,186 @@ class TrackerState(rx.State):
     def show_alibaba_tab(self) -> None:
         self.marketplace_tab = "alibaba"
         self.refresh_alibaba_tracking()
+
+    def set_alibaba_negotiation_product_key(self, value: str) -> None:
+        key = value.split(" · ", 1)[0].strip()
+        self.alibaba_negotiation_product_key = key
+
+    def set_alibaba_negotiation_quantity(self, value: str) -> None:
+        self.alibaba_negotiation_quantity = value
+
+    def set_alibaba_negotiation_resale(self, value: str) -> None:
+        self.alibaba_negotiation_resale = value
+
+    def set_alibaba_negotiation_margin(self, value: str) -> None:
+        self.alibaba_negotiation_margin = value
+
+    def set_alibaba_negotiation_shipping(self, value: str) -> None:
+        self.alibaba_negotiation_shipping = value
+
+    def set_alibaba_negotiation_duties(self, value: str) -> None:
+        self.alibaba_negotiation_duties = value
+
+    def set_alibaba_negotiation_other(self, value: str) -> None:
+        self.alibaba_negotiation_other = value
+
+    def set_alibaba_negotiation_aggressiveness(self, value: str) -> None:
+        self.alibaba_negotiation_aggressiveness = value
+
+    def set_alibaba_negotiation_ladder(self, value: str) -> None:
+        self.alibaba_negotiation_ladder = value
+
+    def set_alibaba_negotiation_message(self, value: str) -> None:
+        self.alibaba_negotiation_message = value
+
+    def set_alibaba_negotiation_supplier_text(self, value: str) -> None:
+        self.alibaba_negotiation_supplier_text = value
+
+    def _alibaba_negotiation_catalog(self) -> list[dict[str, str]]:
+        tracked = [
+            {
+                "product_id": row.product_id,
+                "title": row.title,
+                "supplier_name": row.supplier_name,
+                "last_price": row.last_price,
+                "price_min": row.price_min,
+                "price_max": row.price_max,
+            }
+            for row in self.alibaba_tracked_rows
+        ]
+        results = [
+            {
+                "product_id": row.product_id,
+                "title": row.title,
+                "supplier_name": row.supplier_name,
+                "price_min": row.price_min,
+                "price_max": row.price_max,
+                "moq": row.moq,
+                "representative": row.representative,
+            }
+            for row in self.alibaba_results
+        ]
+        return services.build_alibaba_negotiation_catalog(tracked, results)
+
+    def _selected_negotiation_product(self) -> dict[str, str] | None:
+        for item in self._alibaba_negotiation_catalog():
+            if item["key"] == self.alibaba_negotiation_product_key:
+                return item
+        return None
+
+    def _apply_negotiation_plan(self, row: dict[str, str]) -> None:
+        self.alibaba_negotiation_has_plan = True
+        self.alibaba_negotiation_error = ""
+        self.alibaba_negotiation_public = row.get("public_unit_price", "")
+        self.alibaba_negotiation_opening = row.get("opening_offer", "")
+        self.alibaba_negotiation_target = row.get("target_price", "")
+        self.alibaba_negotiation_ceiling = row.get("ceiling_price", "")
+        self.alibaba_negotiation_next_tier = row.get("next_tier", "")
+        self.alibaba_negotiation_proximity = row.get("tier_proximity", "")
+        self.alibaba_negotiation_quantity_shown = row.get("desired_quantity", "")
+        self.alibaba_negotiation_explanation = row.get("explanation", "")
+        self.alibaba_negotiation_attractiveness = row.get("attractiveness", "")
+        self.alibaba_negotiation_plan_payload = dict(row)
+        self.alibaba_negotiation_message = ""
+        self.alibaba_negotiation_analysis_summary = ""
+        self.alibaba_negotiation_analysis_decision = ""
+        self.alibaba_negotiation_analysis_notes = ""
+
+    def calculate_alibaba_negotiation(self) -> None:
+        try:
+            row = services.calculate_alibaba_negotiation(
+                self._selected_negotiation_product(),
+                desired_quantity=self.alibaba_negotiation_quantity,
+                expected_resale_price=self.alibaba_negotiation_resale,
+                target_margin_percent=self.alibaba_negotiation_margin,
+                shipping_per_unit=self.alibaba_negotiation_shipping,
+                duties_per_unit=self.alibaba_negotiation_duties,
+                other_costs_per_unit=self.alibaba_negotiation_other,
+                negotiation_aggressiveness=self.alibaba_negotiation_aggressiveness,
+                ladder_text=self.alibaba_negotiation_ladder,
+            )
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
+            self.alibaba_negotiation_has_plan = False
+            return
+        self._apply_negotiation_plan(row)
+
+    @rx.event(background=True)
+    async def generate_alibaba_negotiation_opening(self) -> None:
+        async with self:
+            if self.alibaba_negotiation_is_drafting or not self.alibaba_negotiation_has_plan:
+                return
+            self.alibaba_negotiation_is_drafting = True
+            self.alibaba_negotiation_error = ""
+            payload = dict(self.alibaba_negotiation_plan_payload)
+        try:
+            message = await asyncio.to_thread(
+                services.generate_alibaba_negotiation_opening,
+                payload,
+            )
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            async with self:
+                self.alibaba_negotiation_is_drafting = False
+                self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
+            return
+        async with self:
+            self.alibaba_negotiation_is_drafting = False
+            self.alibaba_negotiation_message = message
+
+    @rx.event(background=True)
+    async def analyze_alibaba_supplier_reply(self) -> None:
+        async with self:
+            if self.alibaba_negotiation_is_drafting or not self.alibaba_negotiation_has_plan:
+                return
+            self.alibaba_negotiation_is_drafting = True
+            self.alibaba_negotiation_error = ""
+            payload = dict(self.alibaba_negotiation_plan_payload)
+            supplier_text = self.alibaba_negotiation_supplier_text
+        try:
+            analysis_row = await asyncio.to_thread(
+                services.analyze_alibaba_supplier_reply,
+                payload,
+                supplier_text,
+            )
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            async with self:
+                self.alibaba_negotiation_is_drafting = False
+                self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
+            return
+        async with self:
+            self.alibaba_negotiation_is_drafting = False
+            self.alibaba_negotiation_analysis_summary = analysis_row.get("response_summary", "")
+            self.alibaba_negotiation_analysis_decision = analysis_row.get("decision", "")
+            notes = analysis_row.get("notes", "")
+            quoted = analysis_row.get("quoted_unit_price", "")
+            authorized = analysis_row.get("authorized_price", "")
+            self.alibaba_negotiation_analysis_notes = (
+                f"{notes} Precio citado: {quoted}. Precio autorizado: {authorized}."
+            )
+
+    @rx.event(background=True)
+    async def generate_alibaba_negotiation_reply(self) -> None:
+        async with self:
+            if self.alibaba_negotiation_is_drafting or not self.alibaba_negotiation_has_plan:
+                return
+            self.alibaba_negotiation_is_drafting = True
+            self.alibaba_negotiation_error = ""
+            payload = dict(self.alibaba_negotiation_plan_payload)
+            supplier_text = self.alibaba_negotiation_supplier_text
+        try:
+            message = await asyncio.to_thread(
+                services.generate_alibaba_negotiation_reply,
+                payload,
+                supplier_text,
+            )
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            async with self:
+                self.alibaba_negotiation_is_drafting = False
+                self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
+            return
+        async with self:
+            self.alibaba_negotiation_is_drafting = False
+            self.alibaba_negotiation_message = message
 
     def set_alibaba_query(self, value: str) -> None:
         self.alibaba_query = value
@@ -469,6 +678,8 @@ class TrackerState(rx.State):
                 history=str(item.get("history", "")),
                 url=str(item.get("url", "")),
                 snapshot_count=str(item.get("snapshot_count", "")),
+                price_min=str(item.get("price_min", "")),
+                price_max=str(item.get("price_max", "")),
             )
             for item in rows
         ]
@@ -727,3 +938,26 @@ class TrackerState(rx.State):
     @rx.var
     def alibaba_boxplot_available(self) -> bool:
         return self.alibaba_boxplot.get("available", "") == "1"
+
+    @rx.var
+    def alibaba_negotiation_option_keys(self) -> list[str]:
+        return [item["key"] for item in self._alibaba_negotiation_catalog()]
+
+    @rx.var
+    def alibaba_negotiation_option_labels(self) -> list[str]:
+        return [f"{item['key']} · {item['label']}" for item in self._alibaba_negotiation_catalog()]
+
+    @rx.var
+    def alibaba_has_negotiation_products(self) -> bool:
+        return len(self.alibaba_negotiation_option_keys) > 0
+
+    @rx.var
+    def alibaba_negotiation_selected_label(self) -> str:
+        for item in self._alibaba_negotiation_catalog():
+            if item["key"] == self.alibaba_negotiation_product_key:
+                return f"{item['key']} · {item['label']}"
+        return ""
+
+    @rx.var
+    def alibaba_negotiation_is_unattractive(self) -> bool:
+        return self.alibaba_negotiation_attractiveness == "ECONOMICALLY_UNATTRACTIVE"
