@@ -6,10 +6,11 @@ against those authorized numbers. This module never talks to Alibaba or Apify.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Protocol
@@ -57,6 +58,8 @@ _SHIPPING_PATTERN = re.compile(
     r"\b(?:ship(?:ping)?|freight|fob|cif|ddp|envio|envío|flete)\b",
     re.IGNORECASE,
 )
+DEFAULT_DRAFT_LANGUAGE = "English"
+DEFAULT_DRAFT_CURRENCY = "USD"
 _FORBIDDEN_CONTEXT_TOKENS = (
     "apify",
     "apitoken",
@@ -67,6 +70,17 @@ _FORBIDDEN_CONTEXT_TOKENS = (
     "bearer ",
     "score_price",
     "score_clarity",
+    "target_price",
+    "ceiling_price",
+    "negotiable_reference",
+    "aggressiveness",
+    "ladder",
+    "max_product",
+    "margin",
+)
+_QUANTITY_SUFFIX = re.compile(
+    r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
+    re.IGNORECASE,
 )
 
 
@@ -95,7 +109,9 @@ class NegotiationStage(StrEnum):
 
     OPENING = "opening"
     SUPPLIER_REPLY = "supplier_reply"
-    COUNTER = "counter"
+    COUNTEROFFER = "counteroffer"
+    ACCEPTABLE = "acceptable"
+    ABOVE_CEILING = "final_offer"
 
 
 class NegotiationWarning(StrEnum):
@@ -209,26 +225,24 @@ class NegotiationRecommendation:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class SanitizedNegotiationContext:
-    """JSON-safe payload sent to MiniMax. Never includes secrets or raw items."""
+class NegotiationDraftContext:
+    """Least-privilege payload for MiniMax. Internal plan prices never belong here."""
 
     product_title: str
-    supplier_company_name: str | None
+    public_supplier_name: str | None
     desired_quantity: int
-    public_unit_price: str
-    opening_offer: str
-    target_price: str
-    ceiling_price: str
-    negotiable_reference: str
-    min_order_quantity: int | None
-    public_ladder_summary: str
-    next_tier_min_quantity: int | None
-    next_tier_price: str | None
-    negotiation_stage: str
-    attractiveness: str
-    authorized_counter_price: str | None = None
-    supplier_decision: str | None = None
+    currency: str
+    stage: str
+    language: str
+    authorized_offer: str | None = None
+    authorized_counter_offer: str | None = None
+    authorized_final_offer: str | None = None
+    min_order_quantity: int | None = None
+    decision: str | None = None
     supplier_quoted_price: str | None = None
+    supplier_response: str | None = None
+    ask_lead_time: bool = False
+    ask_packaging: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -246,15 +260,15 @@ class NegotiationDraftAnalysis:
 class AlibabaNegotiationDrafter(Protocol):
     """MiniMax/Ollama port. Implementations must not invent or change prices."""
 
-    def draft_opening(self, context: SanitizedNegotiationContext) -> str: ...
+    def draft_opening(self, context: NegotiationDraftContext) -> str: ...
 
     def analyze_reply(
         self,
-        context: SanitizedNegotiationContext,
+        context: NegotiationDraftContext,
         supplier_text: str,
     ) -> NegotiationDraftAnalysis: ...
 
-    def draft_counter(self, context: SanitizedNegotiationContext) -> str: ...
+    def draft_counter(self, context: NegotiationDraftContext) -> str: ...
 
 
 def _required_money(value: object, name: str) -> Decimal:
@@ -710,6 +724,17 @@ def classify_supplier_price(
     )
 
 
+def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
+    """Treat quantity words and bare integers as units, not USD amounts."""
+
+    if _QUANTITY_SUFFIX.match(text[match.end() :]):
+        return True
+    token = match.group(0)
+    has_money_marker = "$" in token or "usd" in token.lower()
+    has_decimal = "." in match.group(1)
+    return not has_money_marker and not has_decimal
+
+
 def extract_supplier_money(text: str) -> tuple[Decimal, ...]:
     """Unique unit-price candidates found in pasted supplier text."""
 
@@ -719,8 +744,7 @@ def extract_supplier_money(text: str) -> tuple[Decimal, ...]:
         parsed = _parse_money(match.group(1))
         if parsed is None or parsed in seen:
             continue
-        # Ignore bare integers that are more likely quantities than unit prices.
-        if "." not in match.group(1) and parsed >= Decimal("20"):
+        if _looks_like_quantity(match, text):
             continue
         seen.add(parsed)
         found.append(parsed)
@@ -808,79 +832,198 @@ def _money_text(value: Decimal) -> str:
     return f"{quantize_money(value):f}"
 
 
+def draft_context_from_plan(
+    plan: AlibabaNegotiationPlan,
+    *,
+    stage: NegotiationStage,
+    recommendation: NegotiationRecommendation | None = None,
+    supplier: SupplierCounterOffer | None = None,
+    language: str = DEFAULT_DRAFT_LANGUAGE,
+    currency: str = DEFAULT_DRAFT_CURRENCY,
+) -> NegotiationDraftContext:
+    """Build the only payload MiniMax may see. The full plan stays in Python."""
+
+    title = sanitize_negotiation_text(plan.title, MAX_NEGOTIATION_TITLE_LENGTH)
+    supplier_name = (
+        None
+        if plan.supplier_name is None
+        else sanitize_negotiation_text(plan.supplier_name, MAX_NEGOTIATION_SUPPLIER_NAME_LENGTH)
+        or None
+    )
+    authorized_offer: str | None = None
+    authorized_counter: str | None = None
+    authorized_final: str | None = None
+    decision: str | None = None
+    quoted: str | None = None
+    supplier_response: str | None = None
+    ask_lead_time = False
+    resolved_stage = stage.value
+    if stage is NegotiationStage.OPENING:
+        authorized_offer = _money_text(plan.opening_offer)
+        ask_lead_time = True
+    elif stage is NegotiationStage.SUPPLIER_REPLY:
+        resolved_stage = NegotiationStage.SUPPLIER_REPLY.value
+    elif recommendation is not None:
+        decision = recommendation.decision.value
+        if recommendation.decision is CounterOfferDecision.ACCEPTABLE:
+            resolved_stage = NegotiationStage.ACCEPTABLE.value
+            if supplier is not None and supplier.quoted_unit_price is not None:
+                quoted = _money_text(supplier.quoted_unit_price)
+        elif recommendation.decision is CounterOfferDecision.NEGOTIABLE:
+            resolved_stage = NegotiationStage.COUNTEROFFER.value
+            if recommendation.authorized_price is not None:
+                authorized_counter = _money_text(recommendation.authorized_price)
+        elif recommendation.decision is CounterOfferDecision.ABOVE_CEILING:
+            resolved_stage = NegotiationStage.ABOVE_CEILING.value
+            decision = None
+            if recommendation.authorized_price is not None:
+                authorized_final = _money_text(recommendation.authorized_price)
+        if supplier is not None and supplier.raw_text:
+            supplier_response = sanitize_negotiation_text(
+                supplier.raw_text, MAX_NEGOTIATION_SUPPLIER_TEXT_LENGTH
+            )
+    context = NegotiationDraftContext(
+        product_title=title,
+        public_supplier_name=supplier_name,
+        desired_quantity=plan.desired_quantity,
+        currency=currency,
+        stage=resolved_stage,
+        language=language,
+        authorized_offer=authorized_offer,
+        authorized_counter_offer=authorized_counter,
+        authorized_final_offer=authorized_final,
+        min_order_quantity=plan.min_order_quantity,
+        decision=decision,
+        supplier_quoted_price=quoted,
+        supplier_response=supplier_response,
+        ask_lead_time=ask_lead_time,
+    )
+    assert_context_has_no_secrets(context)
+    return context
+
+
 def sanitized_negotiation_context(
     plan: AlibabaNegotiationPlan,
     *,
     stage: NegotiationStage,
     recommendation: NegotiationRecommendation | None = None,
     supplier: SupplierCounterOffer | None = None,
-) -> SanitizedNegotiationContext:
-    """Build the only payload MiniMax may see."""
+) -> NegotiationDraftContext:
+    """Compatibility alias for :func:`draft_context_from_plan`."""
 
-    authorized = None if recommendation is None else recommendation.authorized_price
-    quoted = None if supplier is None else supplier.quoted_unit_price
-    context = SanitizedNegotiationContext(
-        product_title=sanitize_negotiation_text(plan.title, MAX_NEGOTIATION_TITLE_LENGTH),
-        supplier_company_name=(
-            None
-            if plan.supplier_name is None
-            else sanitize_negotiation_text(plan.supplier_name, MAX_NEGOTIATION_SUPPLIER_NAME_LENGTH)
-            or None
-        ),
-        desired_quantity=plan.desired_quantity,
-        public_unit_price=_money_text(plan.public_unit_price),
-        opening_offer=_money_text(plan.opening_offer),
-        target_price=_money_text(plan.target_price),
-        ceiling_price=_money_text(plan.ceiling_price),
-        negotiable_reference=_money_text(plan.negotiable_reference),
-        min_order_quantity=plan.min_order_quantity,
-        public_ladder_summary=sanitize_negotiation_text(
-            plan.ladder_summary, MAX_NEGOTIATION_LADDER_SUMMARY_LENGTH
-        ),
-        next_tier_min_quantity=plan.next_tier_min_quantity,
-        next_tier_price=None if plan.next_tier_price is None else _money_text(plan.next_tier_price),
-        negotiation_stage=stage.value,
-        attractiveness=plan.attractiveness.value,
-        authorized_counter_price=None if authorized is None else _money_text(authorized),
-        supplier_decision=None if recommendation is None else recommendation.decision.value,
-        supplier_quoted_price=None if quoted is None else _money_text(quoted),
+    return draft_context_from_plan(
+        plan,
+        stage=stage,
+        recommendation=recommendation,
+        supplier=supplier,
     )
-    assert_context_has_no_secrets(context)
-    return context
 
 
-def assert_context_has_no_secrets(context: SanitizedNegotiationContext) -> None:
+def draft_context_payload(
+    context: NegotiationDraftContext,
+    *,
+    supplier_text: str | None = None,
+) -> dict[str, object]:
+    """JSON object actually sent to the MiniMax adapter. Omits unused fields."""
+
+    if not isinstance(context, NegotiationDraftContext):
+        raise TypeError("context must be a NegotiationDraftContext")
+    instructions: dict[str, object] = {
+        "product_title": context.product_title,
+        "public_supplier_name": context.public_supplier_name,
+        "desired_quantity": context.desired_quantity,
+        "currency": context.currency,
+        "stage": context.stage,
+        "language": context.language,
+    }
+    if context.min_order_quantity is not None:
+        instructions["min_order_quantity"] = context.min_order_quantity
+    if context.authorized_offer is not None:
+        instructions["authorized_offer"] = context.authorized_offer
+        instructions["instruction"] = (
+            "Draft a short supplier message offering exactly authorized_offer "
+            f"{context.currency} per unit. Insert that price only. "
+            "Do not choose or mention any other unit price."
+        )
+    if context.authorized_counter_offer is not None:
+        instructions["authorized_counter_offer"] = context.authorized_counter_offer
+        instructions["instruction"] = (
+            "Draft a short reply offering exactly authorized_counter_offer "
+            f"{context.currency} per unit. Insert that price only. "
+            "Do not choose or mention any other unit price."
+        )
+    if context.authorized_final_offer is not None:
+        instructions["authorized_final_offer"] = context.authorized_final_offer
+        instructions["instruction"] = (
+            "Draft a short reply offering exactly authorized_final_offer "
+            f"{context.currency} per unit. Insert that price only. "
+            "Do not choose or mention any other unit price."
+        )
+    if context.decision is not None:
+        instructions["decision"] = context.decision
+    if context.supplier_quoted_price is not None:
+        instructions["supplier_quoted_price"] = context.supplier_quoted_price
+    if context.stage == NegotiationStage.ACCEPTABLE.value:
+        instructions["instruction"] = (
+            "Draft a short reply accepting the supplier quoted unit price. "
+            "Do not invent or propose a different unit price."
+        )
+    if context.stage == NegotiationStage.SUPPLIER_REPLY.value:
+        instructions["instruction"] = (
+            "Summarize the untrusted supplier reply. Extract only numbers that "
+            "appear in that text. Do not invent prices."
+        )
+    if (
+        context.stage == NegotiationStage.ABOVE_CEILING.value
+        and context.authorized_final_offer is None
+    ):
+        instructions["instruction"] = (
+            "Draft a short reply declining the quote. Do not invent or propose a unit price."
+        )
+    if context.ask_lead_time:
+        instructions["ask_lead_time"] = True
+    if context.ask_packaging:
+        instructions["ask_packaging"] = True
+    payload: dict[str, object] = {"draft_instructions": instructions}
+    reply = supplier_text if supplier_text is not None else context.supplier_response
+    if reply is not None:
+        payload["untrusted_supplier_reply"] = {
+            "text": sanitize_negotiation_text(reply, MAX_NEGOTIATION_SUPPLIER_TEXT_LENGTH)
+        }
+    return payload
+
+
+def assert_context_has_no_secrets(context: NegotiationDraftContext) -> None:
     """Reject accidental leakage of tokens, raw items, or scoring internals."""
 
-    blob = " ".join(str(getattr(context, field.name)).lower() for field in fields(context))
+    payload = draft_context_payload(context)
+    blob = json.dumps(payload.get("draft_instructions"), ensure_ascii=False).lower()
     for token in _FORBIDDEN_CONTEXT_TOKENS:
         if token in blob:
             raise AlibabaNegotiationError("El contexto de negociación contiene datos prohibidos.")
 
 
-def authorized_money_set(
-    plan: AlibabaNegotiationPlan,
-    *,
-    recommendation: NegotiationRecommendation | None = None,
-    supplier: SupplierCounterOffer | None = None,
-) -> frozenset[Decimal]:
-    """Unit prices a MiniMax draft may mention."""
+def authorized_money_set(context: NegotiationDraftContext) -> frozenset[Decimal]:
+    """Unit prices a MiniMax draft may mention for this stage."""
 
-    allowed = {
-        plan.public_unit_price,
-        plan.opening_offer,
-        plan.target_price,
-        plan.ceiling_price,
-        plan.negotiable_reference,
-    }
-    if plan.next_tier_price is not None:
-        allowed.add(plan.next_tier_price)
-    if recommendation is not None and recommendation.authorized_price is not None:
-        allowed.add(recommendation.authorized_price)
-    if supplier is not None:
-        allowed.update(supplier.extracted_prices)
-        if supplier.quoted_unit_price is not None:
-            allowed.add(supplier.quoted_unit_price)
+    allowed: set[Decimal] = set()
+    if context.stage == NegotiationStage.OPENING.value and context.authorized_offer is not None:
+        allowed.add(_required_money(context.authorized_offer, "authorized_offer"))
+    elif (
+        context.stage == NegotiationStage.COUNTEROFFER.value
+        and context.authorized_counter_offer is not None
+    ):
+        allowed.add(_required_money(context.authorized_counter_offer, "authorized_counter_offer"))
+    elif (
+        context.stage == NegotiationStage.ABOVE_CEILING.value
+        and context.authorized_final_offer is not None
+    ):
+        allowed.add(_required_money(context.authorized_final_offer, "authorized_final_offer"))
+    elif (
+        context.stage == NegotiationStage.ACCEPTABLE.value
+        and context.supplier_quoted_price is not None
+    ):
+        allowed.add(_required_money(context.supplier_quoted_price, "supplier_quoted_price"))
     return frozenset(allowed)
 
 
@@ -894,20 +1037,11 @@ def unauthorized_prices_in_text(text: str, allowed: frozenset[Decimal]) -> tuple
     return tuple(extras)
 
 
-def _reject_unauthorized_draft(
-    message: str,
-    plan: AlibabaNegotiationPlan,
-    *,
-    recommendation: NegotiationRecommendation | None = None,
-    supplier: SupplierCounterOffer | None = None,
-) -> str:
+def _reject_unauthorized_draft(message: str, context: NegotiationDraftContext) -> str:
     cleaned = sanitize_negotiation_text(message, MAX_NEGOTIATION_SUPPLIER_TEXT_LENGTH)
     if not cleaned:
         raise AlibabaNegotiationError(MISSING_DRAFT)
-    extras = unauthorized_prices_in_text(
-        cleaned,
-        authorized_money_set(plan, recommendation=recommendation, supplier=supplier),
-    )
+    extras = unauthorized_prices_in_text(cleaned, authorized_money_set(context))
     if extras:
         raise AlibabaNegotiationError(UNAUTHORIZED_DRAFT_PRICE)
     return cleaned
@@ -929,8 +1063,8 @@ class GenerateNegotiationOpeningMessage:
     def execute(self, plan: AlibabaNegotiationPlan) -> str:
         if not isinstance(plan, AlibabaNegotiationPlan):
             raise TypeError("plan must be an AlibabaNegotiationPlan")
-        context = sanitized_negotiation_context(plan, stage=NegotiationStage.OPENING)
-        return _reject_unauthorized_draft(self._drafter.draft_opening(context), plan)
+        context = draft_context_from_plan(plan, stage=NegotiationStage.OPENING)
+        return _reject_unauthorized_draft(self._drafter.draft_opening(context), context)
 
 
 class AnalyzeSupplierResponse:
@@ -948,7 +1082,7 @@ class AnalyzeSupplierResponse:
             raise TypeError("plan must be an AlibabaNegotiationPlan")
         draft = NegotiationDraftAnalysis(response_summary="")
         if self._drafter is not None:
-            context = sanitized_negotiation_context(plan, stage=NegotiationStage.SUPPLIER_REPLY)
+            context = draft_context_from_plan(plan, stage=NegotiationStage.SUPPLIER_REPLY)
             draft = self._drafter.analyze_reply(context, supplier_text)
         parsed = parse_supplier_response(
             supplier_text,
@@ -992,18 +1126,13 @@ class GenerateNegotiationReply:
                 raise AlibabaNegotiationError(
                     "El trato no es económicamente atractivo; no se prometen volúmenes."
                 )
-        context = sanitized_negotiation_context(
+        context = draft_context_from_plan(
             plan,
-            stage=NegotiationStage.COUNTER,
+            stage=NegotiationStage.COUNTEROFFER,
             recommendation=recommendation,
             supplier=supplier,
         )
-        return _reject_unauthorized_draft(
-            self._drafter.draft_counter(context),
-            plan,
-            recommendation=recommendation,
-            supplier=supplier,
-        )
+        return _reject_unauthorized_draft(self._drafter.draft_counter(context), context)
 
 
 def public_price_from_catalog_row(row: Mapping[str, object]) -> Decimal | None:
@@ -1028,6 +1157,8 @@ def public_price_from_catalog_row(row: Mapping[str, object]) -> Decimal | None:
 
 
 __all__ = [
+    "DEFAULT_DRAFT_CURRENCY",
+    "DEFAULT_DRAFT_LANGUAGE",
     "DEFAULT_NEGOTIATION_AGGRESSIVENESS",
     "INVALID_AGGRESSIVENESS",
     "MAX_NEGOTIATION_AGGRESSIVENESS",
@@ -1048,18 +1179,21 @@ __all__ = [
     "GenerateNegotiationOpeningMessage",
     "GenerateNegotiationReply",
     "NegotiationDraftAnalysis",
+    "NegotiationDraftContext",
     "NegotiationPriceBounds",
     "NegotiationRecommendation",
     "NegotiationStage",
     "NegotiationTier",
     "NegotiationWarning",
-    "SanitizedNegotiationContext",
     "SupplierCounterOffer",
+    "assert_context_has_no_secrets",
     "authorized_money_set",
     "build_negotiation_explanation",
     "calculate_alibaba_negotiation_plan",
     "calculate_price_bounds",
     "classify_supplier_price",
+    "draft_context_from_plan",
+    "draft_context_payload",
     "extract_supplier_money",
     "margin_product_ceiling",
     "negotiable_reference_price",

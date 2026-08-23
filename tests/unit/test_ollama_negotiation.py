@@ -11,11 +11,11 @@ import pytest
 
 from bera_price_tracker.application.alibaba_negotiation import (
     AlibabaNegotiationInput,
+    NegotiationDraftContext,
     NegotiationStage,
     NegotiationTier,
-    SanitizedNegotiationContext,
     calculate_alibaba_negotiation_plan,
-    sanitized_negotiation_context,
+    draft_context_from_plan,
 )
 from bera_price_tracker.application.ports import (
     AlibabaNegotiationDraftInvalidError,
@@ -31,7 +31,7 @@ from bera_price_tracker.infrastructure.ai.ollama_negotiation import (
 type Handler = Callable[[httpx.Request], httpx.Response]
 
 
-def _plan_context() -> SanitizedNegotiationContext:
+def _plan_context() -> NegotiationDraftContext:
     plan = calculate_alibaba_negotiation_plan(
         AlibabaNegotiationInput(
             desired_quantity=40,
@@ -43,7 +43,7 @@ def _plan_context() -> SanitizedNegotiationContext:
             ),
         )
     )
-    return sanitized_negotiation_context(plan, stage=NegotiationStage.OPENING)
+    return draft_context_from_plan(plan, stage=NegotiationStage.OPENING)
 
 
 def _tool_response(
@@ -90,13 +90,21 @@ def test_opening_request_uses_local_chat_and_system_constraints() -> None:
     assert body["think"] is False
     system = body["messages"][0]["content"]
     assert system == OLLAMA_NEGOTIATION_SYSTEM_PROMPT
-    assert "never invent prices" in system
-    assert "never change opening_offer" in system
+    assert "never invent, change, or choose a unit price" in system
+    assert "target_price" not in system
+    assert "ceiling_price" not in system
     user = json.loads(body["messages"][1]["content"])
-    authorized = user["authorized_negotiation"]
-    assert "token" not in json.dumps(user).lower()
-    assert authorized["opening_offer"] == "4.03"
-    assert authorized["target_price"] == "4.06"
+    authorized = user["draft_instructions"]
+    user_blob = json.dumps(user).lower()
+    assert "token" not in user_blob
+    assert authorized["authorized_offer"] == "4.03"
+    assert "target_price" not in user_blob
+    assert "ceiling" not in user_blob
+    assert "4.06" not in user_blob
+    assert "4.30" not in user_blob
+    assert "3.80" not in user_blob
+    assert "3.50" not in user_blob
+    assert "ladder" not in user_blob
 
 
 def test_analyze_parses_tool_arguments() -> None:
