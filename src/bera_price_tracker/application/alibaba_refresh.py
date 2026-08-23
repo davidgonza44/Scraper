@@ -1,18 +1,24 @@
 """Manual Alibaba product-detail refresh. Separate from keyword search.
 
-Price rule (ladder, documented):
-    Take every finite Decimal > 0 from ``ladderPrices[].price``.
-    ``price_min`` = minimum of those values.
-    ``price_max`` = maximum of those values.
-    ``representative_price`` = (price_min + price_max) / 2.
+Currency:
+    A) explicit ISO-4217 (three ASCII letters) from ``currency``.
+    B) else valid ``pricePerUnitUSD`` values → USD, evidence
+       ``xtracto_pricePerUnitUSD``.
+    C) otherwise unavailable → INVALID_PRICE.
 
-    If no valid ladder prices exist, and ``priceFormatted`` contains one or two
-    finite positive numbers, and ``currency`` is an explicit ISO-4217 code
-    (three ASCII letters; never inferred from ``$``):
-        those numbers become min/max (a single number means min == max);
-        representative = (min + max) / 2.
+    Never infer USD from ``$``, ``priceFormatted``, or ``${0}``. No FX.
 
-    Otherwise the observation is INVALID_PRICE. No FX. No Facebook rules.
+Tracking price (history snapshot amount):
+    The published price of the ladder tier that covers ``minOrderQuantity``.
+    Not the midpoint of all tiers. That midpoint remains discovery-only
+    (``alibaba_representative_price``) and is not persisted here.
+
+Range:
+    ``price_min`` / ``price_max`` stay the min/max of valid tier amounts
+    in the chosen currency evidence. ``price_display`` stays as published.
+
+Without ladder:
+    One unambiguous Decimal plus explicit ISO currency. Otherwise INVALID_PRICE.
 
 Identity:
     Persist a snapshot only when returned ``productId`` equals
@@ -60,6 +66,9 @@ BATCH_TOO_LARGE = "No se pueden actualizar más de 50 productos en una sola oper
 EMPTY_SELECTION = "Selecciona al menos un producto para actualizar."
 MISSING_OPERATION = "Falta el identificador de la operación."
 ISO_CURRENCY_REQUIRED = "La moneda debe ser un código ISO de tres letras."
+CURRENCY_EVIDENCE_ISO = "iso"
+CURRENCY_EVIDENCE_XTRACTO_USD = "xtracto_pricePerUnitUSD"
+_UNBOUNDED_MAX = 10**12
 
 
 def _utc_now() -> datetime:
@@ -97,6 +106,7 @@ class LadderTier:
     max_quantity: int | None
     price: Decimal | None
     price_formatted: str | None
+    price_usd: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -121,13 +131,17 @@ class ProductRefreshBatch:
 
 @dataclass(frozen=True, slots=True)
 class NormalizedRefreshPrice:
-    """Deterministic min/max/representative derived from ladder or display."""
+    """Tracking price plus published range. Midpoint is not the snapshot amount."""
 
-    representative: Decimal
+    tracking_price: Decimal
     price_min: Decimal
     price_max: Decimal
     currency: str
     price_display: str | None
+    currency_evidence: str
+    selected_min_quantity: int | None = None
+    selected_max_quantity: int | None = None
+    representative: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,33 +258,103 @@ def _decimals_from_display(display: str) -> list[Decimal]:
     return values
 
 
-def normalize_refresh_price(record: ProductRefreshRecord) -> NormalizedRefreshPrice | None:
-    """Derive min/max/representative. Returns None when price is unusable."""
+def _tier_amount(tier: LadderTier, *, use_usd: bool) -> Decimal | None:
+    return _parse_decimal(tier.price_usd if use_usd else tier.price)
 
-    currency = _explicit_iso_currency(record.currency)
-    if currency is None:
+
+def _tier_covers(tier: LadderTier, quantity: int) -> bool:
+    if tier.min_quantity is None and tier.max_quantity is None:
+        return False
+    if tier.min_quantity is not None and quantity < tier.min_quantity:
+        return False
+    return not (tier.max_quantity is not None and quantity > tier.max_quantity)
+
+
+def select_moq_tier(
+    tiers: Sequence[LadderTier],
+    min_order_quantity: int | None,
+    *,
+    use_usd: bool,
+) -> LadderTier | None:
+    """Return the tier that covers the published MOQ. Not the first array item."""
+
+    priced = [tier for tier in tiers if _tier_amount(tier, use_usd=use_usd) is not None]
+    if not priced:
         return None
-    ladder_values = [tier.price for tier in record.ladder_prices if tier.price is not None]
+    if min_order_quantity is not None and min_order_quantity > 0:
+        moq = min_order_quantity
+    else:
+        mins = [tier.min_quantity for tier in priced if tier.min_quantity is not None]
+        if not mins:
+            return None
+        moq = min(mins)
+    covering = [tier for tier in priced if _tier_covers(tier, moq)]
+    if not covering:
+        return None
+    covering.sort(
+        key=lambda tier: (
+            -(tier.min_quantity if tier.min_quantity is not None else 0),
+            tier.max_quantity if tier.max_quantity is not None else _UNBOUNDED_MAX,
+        )
+    )
+    return covering[0]
+
+
+def _resolve_refresh_currency(
+    record: ProductRefreshRecord,
+) -> tuple[str, str, bool] | None:
+    iso = _explicit_iso_currency(record.currency)
+    if iso is not None:
+        return iso, CURRENCY_EVIDENCE_ISO, False
+    if any(_tier_amount(tier, use_usd=True) is not None for tier in record.ladder_prices):
+        return "USD", CURRENCY_EVIDENCE_XTRACTO_USD, True
+    return None
+
+
+def normalize_refresh_price(record: ProductRefreshRecord) -> NormalizedRefreshPrice | None:
+    """Derive tracking price and published range. Returns None when unusable."""
+
+    resolved = _resolve_refresh_currency(record)
+    if resolved is None:
+        return None
+    currency, evidence, use_usd = resolved
+    ladder_values = [
+        amount
+        for tier in record.ladder_prices
+        if (amount := _tier_amount(tier, use_usd=use_usd)) is not None
+    ]
+    selected: LadderTier | None = None
+    tracking: Decimal | None = None
     if ladder_values:
+        selected = select_moq_tier(record.ladder_prices, record.min_order_quantity, use_usd=use_usd)
+        if selected is None:
+            return None
+        tracking = _tier_amount(selected, use_usd=use_usd)
+        if tracking is None:
+            return None
         price_min = min(ladder_values)
         price_max = max(ladder_values)
     else:
+        if evidence != CURRENCY_EVIDENCE_ISO:
+            return None
         display = record.price_formatted or ""
         numbers = _decimals_from_display(display)
-        if not numbers or len(numbers) > 2:
+        if len(numbers) != 1:
             return None
-        price_min = numbers[0]
-        price_max = numbers[1] if len(numbers) == 2 else numbers[0]
-        if price_min > price_max:
-            price_min, price_max = price_max, price_min
-    representative = (price_min + price_max) / Decimal("2")
-    price_display = _optional_text(record.price_formatted)
+        tracking = numbers[0]
+        price_min = tracking
+        price_max = tracking
+    midpoint = (price_min + price_max) / Decimal("2")
     return NormalizedRefreshPrice(
-        representative=representative,
+        tracking_price=tracking,
         price_min=price_min,
         price_max=price_max,
         currency=currency,
-        price_display=price_display,
+        price_display=_optional_text(record.price_formatted),
+        currency_evidence=evidence,
+        selected_min_quantity=None if selected is None else selected.min_quantity,
+        selected_max_quantity=None if selected is None else selected.max_quantity,
+        representative=midpoint,
     )
 
 
@@ -385,9 +469,9 @@ def _item_status_for_record(
     if last_currency is not None and last_currency != normalized.currency:
         return ProductRefreshStatus.INVALID_PRICE, None, "currency mismatch"
     last_price = _last_representative(tracked)
-    if last_price is not None and last_price == normalized.representative:
-        return ProductRefreshStatus.UNCHANGED, normalized, ""
-    return ProductRefreshStatus.UPDATED, normalized, ""
+    if last_price is not None and last_price == normalized.tracking_price:
+        return ProductRefreshStatus.UNCHANGED, normalized, normalized.currency_evidence
+    return ProductRefreshStatus.UPDATED, normalized, normalized.currency_evidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -528,7 +612,7 @@ class RefreshTrackedAlibabaProducts:
                             product_id=tracked_product.product_id,
                             title=tracked_product.title,
                             url=tracked_product.url,
-                            representative_price=normalized.representative,
+                            representative_price=normalized.tracking_price,
                             currency=normalized.currency,
                             query=operation_query.text,
                             price_display=normalized.price_display,
@@ -565,6 +649,8 @@ class RefreshTrackedAlibabaProducts:
 __all__ = [
     "ALLOWED_PRODUCT_HOSTS",
     "BATCH_TOO_LARGE",
+    "CURRENCY_EVIDENCE_ISO",
+    "CURRENCY_EVIDENCE_XTRACTO_USD",
     "EMPTY_SELECTION",
     "ISO_CURRENCY_REQUIRED",
     "MAX_ALIBABA_REFRESH_BATCH",
@@ -584,5 +670,6 @@ __all__ = [
     "is_alibaba_product_detail_url",
     "normalize_refresh_price",
     "refresh_operation_query",
+    "select_moq_tier",
     "summary_from_items",
 ]

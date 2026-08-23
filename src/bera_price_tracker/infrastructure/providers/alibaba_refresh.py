@@ -116,15 +116,25 @@ def _parse_scraped_at(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _coalesce(record: Mapping[str, object], *names: str) -> object:
+    for name in names:
+        if name in record and record.get(name) is not None:
+            return record.get(name)
+    return None
+
+
 def _map_tier(raw: object) -> LadderTier | None:
     if not isinstance(raw, Mapping):
         return None
     record = cast(Mapping[str, object], raw)
     return LadderTier(
-        min_quantity=_optional_int(record.get("minQuantity")),
-        max_quantity=_optional_int(record.get("maxQuantity")),
-        price=_optional_decimal(record.get("price")),
-        price_formatted=_optional_text(record.get("priceFormatted")),
+        min_quantity=_optional_int(_coalesce(record, "minQuantity", "minQty")),
+        max_quantity=_optional_int(_coalesce(record, "maxQuantity", "maxQty")),
+        price=_optional_decimal(_coalesce(record, "price", "pricePerUnit")),
+        price_formatted=_optional_text(
+            _coalesce(record, "priceFormatted", "pricePerUnitFormatted")
+        ),
+        price_usd=_optional_decimal(record.get("pricePerUnitUSD")),
     )
 
 
@@ -143,7 +153,7 @@ def map_xtracto_item(raw: object) -> ProductRefreshRecord | None:
                 tiers.append(mapped)
     return ProductRefreshRecord(
         product_id=_optional_text(record.get("productId")),
-        product_url=_optional_text(record.get("productUrl")),
+        product_url=_optional_text(_coalesce(record, "productUrl", "url")),
         price_formatted=_optional_text(record.get("priceFormatted")),
         currency=_optional_text(record.get("currency")),
         ladder_prices=tuple(tiers),

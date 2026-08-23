@@ -12,6 +12,8 @@ import pytest
 
 from bera_price_tracker.application.alibaba_refresh import (
     BATCH_TOO_LARGE,
+    CURRENCY_EVIDENCE_ISO,
+    CURRENCY_EVIDENCE_XTRACTO_USD,
     MAX_ALIBABA_REFRESH_BATCH,
     AlibabaRefreshError,
     LadderTier,
@@ -21,6 +23,7 @@ from bera_price_tracker.application.alibaba_refresh import (
     TrackedAlibabaProduct,
     is_alibaba_product_detail_url,
     normalize_refresh_price,
+    select_moq_tier,
 )
 from bera_price_tracker.application.alibaba_tracking import AlibabaFollowObservation
 from bera_price_tracker.application.ports import MarketplaceSourceUnavailable
@@ -93,6 +96,9 @@ def _follow_observation(
     )
 
 
+_TIER_BOUNDS = ((1, 49), (50, 199), (200, 999), (1000, None))
+
+
 def _record(
     *,
     product_id: str = "1600000000000",
@@ -100,11 +106,22 @@ def _record(
     currency: str | None = "USD",
     price_formatted: str | None = "$12.50 - $18.00",
     prices: Sequence[Decimal] | None = None,
+    min_order_quantity: int | None = 1,
 ) -> ProductRefreshRecord:
-    values = list(prices) if prices is not None else [Decimal("18.00"), Decimal("12.50")]
+    if prices is None:
+        values = [Decimal("15.25"), Decimal("12.50")]
+    else:
+        values = list(prices)
     tiers = tuple(
-        LadderTier(min_quantity=1, max_quantity=None, price=value, price_formatted=None)
-        for value in values
+        LadderTier(
+            min_quantity=_TIER_BOUNDS[index][0]
+            if index < len(_TIER_BOUNDS)
+            else 1000 * (index + 1),
+            max_quantity=_TIER_BOUNDS[index][1] if index < len(_TIER_BOUNDS) else None,
+            price=value,
+            price_formatted=None,
+        )
+        for index, value in enumerate(values)
     )
     return ProductRefreshRecord(
         product_id=product_id,
@@ -112,9 +129,45 @@ def _record(
         price_formatted=price_formatted,
         currency=currency,
         ladder_prices=tiers,
-        min_order_quantity=2,
+        min_order_quantity=min_order_quantity,
         scraped_at=BASE,
     )
+
+
+def _observed_xtracto_item(
+    *,
+    currency: object = "${0}",
+    include_usd: bool = True,
+    min_order_quantity: int = 1,
+    usd_values: Sequence[object] | None = None,
+) -> dict[str, object]:
+    units = (Decimal("4.3"), Decimal("4"), Decimal("3.8"), Decimal("3.5"))
+    usd = list(usd_values) if usd_values is not None else list(units)
+    tiers: list[dict[str, object]] = []
+    bounds = ((1, 49), (50, 199), (200, 999), (1000, None))
+    formatted = ("$4.30", "$4", "$3.80", "$3.50")
+    for index, (unit, bound, display) in enumerate(zip(units, bounds, formatted, strict=True)):
+        tier: dict[str, object] = {
+            "minQty": bound[0],
+            "pricePerUnit": unit,
+            "pricePerUnitFormatted": display,
+        }
+        if bound[1] is not None:
+            tier["maxQty"] = bound[1]
+        if include_usd:
+            tier["pricePerUnitUSD"] = usd[index]
+        tiers.append(tier)
+    return {
+        "productId": 1601763520797,
+        "url": (
+            "https://www.alibaba.com/product-detail/"
+            "Fast-Delivery-for-Resellers-Wireless-Game_1601763520797.html"
+        ),
+        "priceFormatted": "$3.50-4.30",
+        "currency": currency,
+        "minOrderQuantity": min_order_quantity,
+        "ladderPrices": tiers,
+    }
 
 
 def _follow_many(
@@ -170,7 +223,7 @@ def test_product_detail_url_rejects_other_hosts() -> None:
     assert not is_alibaba_product_detail_url("https://www.alibaba.com/trade/search?keywords=x")
 
 
-def test_ladder_midpoint_is_deterministic() -> None:
+def test_ladder_midpoint_is_not_tracking_price() -> None:
     normalized = normalize_refresh_price(
         _record(prices=(Decimal("18.00"), Decimal("15.50"), Decimal("12.50")))
     )
@@ -178,11 +231,100 @@ def test_ladder_midpoint_is_deterministic() -> None:
     assert normalized.price_min == Decimal("12.50")
     assert normalized.price_max == Decimal("18.00")
     assert normalized.representative == Decimal("15.25")
+    assert normalized.tracking_price == Decimal("18.00")
+    assert normalized.tracking_price != normalized.representative
     assert normalized.currency == "USD"
+    assert normalized.currency_evidence == CURRENCY_EVIDENCE_ISO
 
 
 def test_dollar_symbol_is_not_usd() -> None:
     assert normalize_refresh_price(_record(currency="$")) is None
+
+
+def test_template_currency_alone_is_not_usd() -> None:
+    mapped = map_xtracto_item(_observed_xtracto_item(include_usd=False))
+    assert mapped is not None
+    assert mapped.currency == "${0}"
+    assert normalize_refresh_price(mapped) is None
+
+
+def test_formatted_dollar_alone_is_not_usd() -> None:
+    mapped = map_xtracto_item(
+        {
+            "productId": 1601763520797,
+            "priceFormatted": "$4.30",
+            "currency": "${0}",
+            "ladderPrices": [],
+        }
+    )
+    assert mapped is not None
+    assert normalize_refresh_price(mapped) is None
+
+
+def test_price_per_unit_usd_is_explicit_usd() -> None:
+    mapped = map_xtracto_item(_observed_xtracto_item())
+    assert mapped is not None
+    normalized = normalize_refresh_price(mapped)
+    assert normalized is not None
+    assert normalized.currency == "USD"
+    assert normalized.currency_evidence == CURRENCY_EVIDENCE_XTRACTO_USD
+    assert normalized.tracking_price == Decimal("4.3")
+    assert normalized.price_min == Decimal("3.5")
+    assert normalized.price_max == Decimal("4.3")
+    assert normalized.price_display == "$3.50-4.30"
+    assert normalized.representative == Decimal("3.9")
+    assert normalized.tracking_price != normalized.representative
+    assert normalized.selected_min_quantity == 1
+    assert normalized.selected_max_quantity == 49
+    assert isinstance(normalized.tracking_price, Decimal)
+
+
+def test_invalid_price_per_unit_usd_is_ignored() -> None:
+    mapped = map_xtracto_item(_observed_xtracto_item(usd_values=("abc", -1, 0, None)))
+    assert mapped is not None
+    assert all(tier.price_usd is None for tier in mapped.ladder_prices)
+    assert normalize_refresh_price(mapped) is None
+
+
+def test_moq_selects_covering_tier() -> None:
+    mapped = map_xtracto_item(_observed_xtracto_item(min_order_quantity=200))
+    assert mapped is not None
+    selected = select_moq_tier(mapped.ladder_prices, 200, use_usd=True)
+    assert selected is not None
+    assert selected.min_quantity == 200
+    normalized = normalize_refresh_price(mapped)
+    assert normalized is not None
+    assert normalized.tracking_price == Decimal("3.8")
+    assert normalized.price_min == Decimal("3.5")
+    assert normalized.price_max == Decimal("4.3")
+
+
+def test_map_xtracto_observed_ladder_keys() -> None:
+    mapped = map_xtracto_item(
+        {
+            "productId": 1601763520797,
+            "url": "https://www.alibaba.com/product-detail/Fast-Delivery_1601763520797.html",
+            "priceFormatted": "$3.50-4.30",
+            "currency": "USD",
+            "minOrderQuantity": 1,
+            "ladderPrices": [
+                {"minQty": 1, "maxQty": 49, "pricePerUnit": 4.3, "pricePerUnitFormatted": "$4.30"},
+                {"minQty": 1000, "pricePerUnit": 3.5, "pricePerUnitFormatted": "$3.50"},
+            ],
+        }
+    )
+    assert mapped is not None
+    assert mapped.product_url is not None
+    assert mapped.ladder_prices[0].price == Decimal("4.3")
+    assert mapped.ladder_prices[1].price == Decimal("3.5")
+    normalized = normalize_refresh_price(mapped)
+    assert normalized is not None
+    assert normalized.price_min == Decimal("3.5")
+    assert normalized.price_max == Decimal("4.3")
+    assert normalized.representative == Decimal("3.9")
+    assert normalized.tracking_price == Decimal("4.3")
+    assert normalized.currency == "USD"
+    assert normalized.currency_evidence == CURRENCY_EVIDENCE_ISO
 
 
 def test_batch_of_one(tmp_path: Path) -> None:
@@ -206,7 +348,7 @@ def test_batch_of_one(tmp_path: Path) -> None:
     tracked = composition.list_alibaba_tracked()[0]
     assert tracked.product_id == "1600000000000"
     assert tracked.variation.snapshot_count == 2
-    assert tracked.variation.last_price == Decimal("15")
+    assert tracked.variation.last_price == Decimal("20")
 
 
 def test_batch_of_ten_is_one_provider_call(tmp_path: Path) -> None:
@@ -382,6 +524,57 @@ def test_partial_success(tmp_path: Path) -> None:
     assert rows[first].variation.snapshot_count == 2
     assert rows[second].variation.snapshot_count == 1
     assert rows[third].variation.snapshot_count == 1
+
+
+def test_observed_run_unchanged_creates_snapshot(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(
+        _follow_observation(
+            product_id="1601763520797",
+            price=Decimal("4.30"),
+            minimum=Decimal("4.30"),
+            maximum=Decimal("4.30"),
+            display="$4.30",
+            title="Fast Delivery for Resellers Wireless Game Mouse",
+        ),
+        clock=_clock(BASE),
+    )
+    mapped = map_xtracto_item(_observed_xtracto_item())
+    assert mapped is not None
+    provider = FakeAlibabaProductRefreshProvider([mapped])
+    summary = composition.refresh_alibaba_products(
+        ["1601763520797"],
+        operation_id="op-observed",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    assert summary.unchanged == 1
+    assert summary.items[0].message == CURRENCY_EVIDENCE_XTRACTO_USD
+    tracked = composition.list_alibaba_tracked()[0]
+    assert tracked.variation.snapshot_count == 2
+    assert tracked.variation.last_price == Decimal("4.30")
+    assert tracked.variation.absolute_change == Decimal("0")
+    assert tracked.price_min == Decimal("3.5")
+    assert tracked.price_max == Decimal("4.3")
+    assert tracked.history[-1].price == Decimal("4.30")
+    assert tracked.history[-1].currency == "USD"
+
+
+def test_discovery_representative_price_stays_midpoint() -> None:
+    from types import SimpleNamespace
+
+    from bera_price_tracker.application.alibaba_statistics import alibaba_representative_price
+
+    product = SimpleNamespace(min_price=Decimal("3.50"), max_price=Decimal("4.30"))
+    assert alibaba_representative_price(product) == Decimal("3.90")
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "bera_price_tracker"
+        / "application"
+        / "alibaba_statistics.py"
+    ).read_text(encoding="utf-8")
+    assert "the midpoint of a published range" in source
 
 
 def test_unchanged_creates_new_snapshot(tmp_path: Path) -> None:
