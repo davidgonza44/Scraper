@@ -232,6 +232,27 @@ class TrackerState(rx.State):
     alibaba_negotiation_analysis_notes: str = ""
     alibaba_negotiation_is_drafting: bool = False
     alibaba_negotiation_plan_payload: dict[str, str] = {}
+    alibaba_landed_quantity: str = "40"
+    alibaba_landed_supplier_price: str = ""
+    alibaba_landed_cartons: str = ""
+    alibaba_landed_units_per_carton: str = ""
+    alibaba_landed_length: str = ""
+    alibaba_landed_width: str = ""
+    alibaba_landed_height: str = ""
+    alibaba_landed_weight: str = ""
+    alibaba_landed_rate: str = ""
+    alibaba_landed_rate_confirmed: bool = False
+    alibaba_landed_has_battery: bool = False
+    alibaba_landed_battery_multiplier: str = "1"
+    alibaba_landed_wood_surcharge: str = ""
+    alibaba_landed_insurance: str = ""
+    alibaba_landed_other_logistics: str = ""
+    alibaba_landed_other_import: str = ""
+    alibaba_landed_sale_price: str = ""
+    alibaba_landed_margin: str = ""
+    alibaba_landed_error: str = ""
+    alibaba_landed_has_result: bool = False
+    alibaba_landed_result: dict[str, str] = {}
 
     def set_query(self, value: str) -> None:
         self.query = value
@@ -485,6 +506,103 @@ class TrackerState(rx.State):
         async with self:
             self.alibaba_negotiation_is_drafting = False
             self.alibaba_negotiation_message = message
+
+    def set_alibaba_landed_quantity(self, value: str) -> None:
+        self.alibaba_landed_quantity = value
+
+    def set_alibaba_landed_supplier_price(self, value: str) -> None:
+        self.alibaba_landed_supplier_price = value
+
+    def set_alibaba_landed_cartons(self, value: str) -> None:
+        self.alibaba_landed_cartons = value
+
+    def set_alibaba_landed_units_per_carton(self, value: str) -> None:
+        self.alibaba_landed_units_per_carton = value
+
+    def set_alibaba_landed_length(self, value: str) -> None:
+        self.alibaba_landed_length = value
+
+    def set_alibaba_landed_width(self, value: str) -> None:
+        self.alibaba_landed_width = value
+
+    def set_alibaba_landed_height(self, value: str) -> None:
+        self.alibaba_landed_height = value
+
+    def set_alibaba_landed_weight(self, value: str) -> None:
+        self.alibaba_landed_weight = value
+
+    def set_alibaba_landed_rate(self, value: str) -> None:
+        self.alibaba_landed_rate = value
+
+    def set_alibaba_landed_rate_confirmed(self, value: bool) -> None:
+        self.alibaba_landed_rate_confirmed = bool(value)
+
+    def set_alibaba_landed_has_battery(self, value: bool) -> None:
+        self.alibaba_landed_has_battery = bool(value)
+
+    def set_alibaba_landed_battery_multiplier(self, value: str) -> None:
+        self.alibaba_landed_battery_multiplier = value
+
+    def set_alibaba_landed_wood_surcharge(self, value: str) -> None:
+        self.alibaba_landed_wood_surcharge = value
+
+    def set_alibaba_landed_insurance(self, value: str) -> None:
+        self.alibaba_landed_insurance = value
+
+    def set_alibaba_landed_other_logistics(self, value: str) -> None:
+        self.alibaba_landed_other_logistics = value
+
+    def set_alibaba_landed_other_import(self, value: str) -> None:
+        self.alibaba_landed_other_import = value
+
+    def set_alibaba_landed_sale_price(self, value: str) -> None:
+        self.alibaba_landed_sale_price = value
+
+    def set_alibaba_landed_margin(self, value: str) -> None:
+        self.alibaba_landed_margin = value
+
+    def use_negotiation_values_for_landed_cost(self) -> None:
+        """Minimal wiring: copy quantity and opening offer from the negotiation plan."""
+
+        payload = self.alibaba_negotiation_plan_payload
+        if not payload:
+            return
+        self.alibaba_landed_quantity = payload.get("desired_quantity", self.alibaba_landed_quantity)
+        opening = payload.get("opening_offer", "")
+        if opening:
+            self.alibaba_landed_supplier_price = opening
+
+    def calculate_alibaba_landed_cost(self) -> None:
+        try:
+            row = services.calculate_alibaba_landed_cost(
+                quantity=self.alibaba_landed_quantity,
+                supplier_unit_price=self.alibaba_landed_supplier_price,
+                cartons=self.alibaba_landed_cartons,
+                units_per_carton=self.alibaba_landed_units_per_carton,
+                carton_length_cm=self.alibaba_landed_length,
+                carton_width_cm=self.alibaba_landed_width,
+                carton_height_cm=self.alibaba_landed_height,
+                gross_weight_kg_per_carton=self.alibaba_landed_weight,
+                rate_usd_per_cbm=self.alibaba_landed_rate,
+                rate_confirmed=self.alibaba_landed_rate_confirmed,
+                has_battery=self.alibaba_landed_has_battery,
+                battery_multiplier=self.alibaba_landed_battery_multiplier,
+                wood_surcharge=self.alibaba_landed_wood_surcharge,
+                insurance=self.alibaba_landed_insurance,
+                other_shipping_costs=self.alibaba_landed_other_logistics,
+                other_import_costs=self.alibaba_landed_other_import,
+                expected_sale_price=self.alibaba_landed_sale_price,
+                target_margin_percent=self.alibaba_landed_margin,
+                product_title=self.alibaba_negotiation_plan_payload.get("title", ""),
+            )
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            self.alibaba_landed_error = services.sanitize_alibaba_landed_cost_error(exc)
+            self.alibaba_landed_has_result = False
+            self.alibaba_landed_result = {}
+            return
+        self.alibaba_landed_error = ""
+        self.alibaba_landed_has_result = True
+        self.alibaba_landed_result = row
 
     def set_alibaba_query(self, value: str) -> None:
         self.alibaba_query = value

@@ -973,3 +973,174 @@ def generate_alibaba_negotiation_reply(
     plan = _plan_from_row(plan_row)
     parsed, recommendation = AnalyzeSupplierResponse(resolved).execute(plan, supplier_text)
     return GenerateNegotiationReply(resolved).execute(plan, parsed, recommendation)
+
+
+ALIBABA_LANDED_COST_GENERIC_ERROR = "No se pudo calcular el costo puesto en Venezuela."
+ALIBABA_LANDED_ESTIMATE_LABEL = "ESTIMACIÓN LOGÍSTICA"
+ALIBABA_LANDED_CONFIRMED_LABEL = "Cotización confirmada"
+
+
+def sanitize_alibaba_landed_cost_error(exc: BaseException) -> str:
+    from bera_price_tracker.application.landed_cost import LandedCostError
+
+    if isinstance(exc, LandedCostError):
+        return str(exc)
+    logger.info("Alibaba landed cost failed: %s", type(exc).__name__)
+    return ALIBABA_LANDED_COST_GENERIC_ERROR
+
+
+def _zero_or_form_money(value: object, message: str) -> Decimal:
+    """Blank form fields mean 0. Non-blank fields must be non-negative money."""
+
+    from bera_price_tracker.application.landed_cost import LandedCostError
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return Decimal("0")
+    if not isinstance(value, str):
+        raise LandedCostError(message)
+    try:
+        parsed = Decimal(value.strip().replace(",", "").replace("$", ""))
+    except InvalidOperation:
+        raise LandedCostError(message) from None
+    if not parsed.is_finite() or parsed < Decimal("0"):
+        raise LandedCostError(message)
+    return parsed
+
+
+def calculate_alibaba_landed_cost(
+    *,
+    quantity: object,
+    supplier_unit_price: object,
+    cartons: object,
+    units_per_carton: object,
+    carton_length_cm: object,
+    carton_width_cm: object,
+    carton_height_cm: object,
+    gross_weight_kg_per_carton: object,
+    rate_usd_per_cbm: object,
+    rate_confirmed: bool = False,
+    has_battery: bool = False,
+    battery_multiplier: object = "",
+    wood_surcharge: object = "",
+    insurance: object = "",
+    other_shipping_costs: object = "",
+    other_import_costs: object = "",
+    expected_sale_price: object = "",
+    target_margin_percent: object = "",
+    product_title: str = "",
+) -> dict[str, str]:
+    """Parse GUI form strings and return a display row. Formulas live in application."""
+
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.landed_cost import (
+        INVALID_BATTERY_MULTIPLIER,
+        INVALID_CARGO_RATE,
+        INVALID_IMPORT_COST,
+        INVALID_LANDED_QUANTITY,
+        INVALID_SUPPLIER_PRICE,
+        INVALID_SURCHARGE,
+        CargoPackagingInput,
+        ImportOtherCosts,
+        LandedCostError,
+        LandedCostInput,
+        LandedCostViability,
+        ShippingRateProfile,
+        ShippingRateStatus,
+        ShippingSurcharges,
+        calculate_landed_cost,
+    )
+
+    parsed_quantity = _optional_form_int(quantity)
+    if parsed_quantity is None:
+        raise LandedCostError(INVALID_LANDED_QUANTITY)
+    parsed_price = _optional_form_money(supplier_unit_price)
+    if parsed_price is None:
+        raise LandedCostError(INVALID_SUPPLIER_PRICE)
+    parsed_sale = _optional_form_money(expected_sale_price)
+    parsed_rate = _optional_form_money(rate_usd_per_cbm)
+    if parsed_rate is None:
+        raise LandedCostError(INVALID_CARGO_RATE)
+    multiplier = Decimal("1")
+    if has_battery:
+        parsed_multiplier = _optional_form_money(battery_multiplier)
+        if parsed_multiplier is None:
+            raise LandedCostError(INVALID_BATTERY_MULTIPLIER)
+        multiplier = parsed_multiplier
+    analysis = calculate_landed_cost(
+        LandedCostInput(
+            quantity=parsed_quantity,
+            supplier_unit_price=parsed_price,
+            packaging=CargoPackagingInput(
+                cartons=_optional_form_int(cartons),
+                units_per_carton=_optional_form_int(units_per_carton),
+                carton_length_cm=_optional_form_money(carton_length_cm),
+                carton_width_cm=_optional_form_money(carton_width_cm),
+                carton_height_cm=_optional_form_money(carton_height_cm),
+                gross_weight_kg_per_carton=_optional_form_money(gross_weight_kg_per_carton),
+            ),
+            rate=ShippingRateProfile(
+                rate_usd_per_cbm=parsed_rate,
+                status=(
+                    ShippingRateStatus.CONFIRMED_QUOTE
+                    if rate_confirmed
+                    else ShippingRateStatus.ESTIMATE
+                ),
+                rate_source="manual" if not rate_confirmed else "confirmed_quote",
+            ),
+            surcharges=ShippingSurcharges(
+                battery_multiplier=multiplier,
+                pallet_or_wood_surcharge=_zero_or_form_money(wood_surcharge, INVALID_SURCHARGE),
+                insurance=_zero_or_form_money(insurance, INVALID_SURCHARGE),
+                other_shipping_costs=_zero_or_form_money(other_shipping_costs, INVALID_SURCHARGE),
+            ),
+            import_costs=ImportOtherCosts(
+                other_import_costs=_zero_or_form_money(other_import_costs, INVALID_IMPORT_COST),
+            ),
+            expected_sale_price_per_unit=parsed_sale,
+            target_margin_percent=_optional_form_money(target_margin_percent),
+        )
+    )
+    return {
+        "product_title": product_title,
+        "quantity": str(analysis.quantity),
+        "merchandise_cost": format_alibaba_money(analysis.merchandise_cost),
+        "carton_cbm": f"{analysis.carton_cbm.normalize():f} CBM",
+        "total_cbm": f"{analysis.total_cbm.normalize():f} CBM",
+        "total_weight": f"{analysis.total_weight_kg.normalize():f} kg",
+        "freight_base": format_alibaba_money(analysis.freight_base),
+        "freight_adjusted": format_alibaba_money(analysis.freight_adjusted),
+        "shipping_surcharges": format_alibaba_money(analysis.shipping_surcharges),
+        "shipping_total": format_alibaba_money(analysis.shipping_total),
+        "other_import_costs": format_alibaba_money(analysis.other_import_costs),
+        "total_landed_cost": format_alibaba_money(analysis.total_landed_cost),
+        "landed_cost_per_unit": format_alibaba_money(analysis.landed_cost_per_unit),
+        "break_even": format_alibaba_money(analysis.break_even_sale_price),
+        "rate_label": (
+            ALIBABA_LANDED_CONFIRMED_LABEL
+            if analysis.rate_status is ShippingRateStatus.CONFIRMED_QUOTE
+            else ALIBABA_LANDED_ESTIMATE_LABEL
+        ),
+        "rate_display": f"{analysis.rate_usd_per_cbm.normalize():f} USD/CBM · "
+        f"{analysis.provider} · {analysis.service} · {analysis.destination_country}",
+        "expected_sale_price": ("" if parsed_sale is None else format_alibaba_money(parsed_sale)),
+        "revenue": "" if analysis.revenue is None else format_alibaba_money(analysis.revenue),
+        "gross_profit": (
+            "" if analysis.gross_profit is None else format_alibaba_money(analysis.gross_profit)
+        ),
+        "gross_profit_per_unit": (
+            ""
+            if analysis.gross_profit_per_unit is None
+            else format_alibaba_money(analysis.gross_profit_per_unit)
+        ),
+        "margin_percent": (
+            "" if analysis.margin_percent is None else f"{analysis.margin_percent}%"
+        ),
+        "max_supplier_price": (
+            ""
+            if analysis.maximum_supplier_unit_price is None
+            else format_alibaba_money(analysis.maximum_supplier_unit_price)
+        ),
+        "unattractive": (
+            "1" if analysis.viability is LandedCostViability.ECONOMICALLY_UNATTRACTIVE else "0"
+        ),
+    }

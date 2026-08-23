@@ -1675,6 +1675,310 @@ def _alibaba_negotiation() -> rx.Component:
     )
 
 
+def _landed_field(label: str, value: object, on_change: object, placeholder: str = "") -> object:
+    return rx.vstack(
+        rx.text(label, size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+        rx.input(
+            value=value,
+            on_change=on_change,
+            placeholder=placeholder,
+            width="100%",
+            **styles.INPUT_STYLE,
+        ),
+        spacing="1",
+        width="100%",
+        align_items="start",
+    )
+
+
+def _landed_card(label: str, value: object, color: str) -> object:
+    return rx.box(
+        rx.text(label, size="1", color=MUTED),
+        rx.text(value, size="3", weight="medium", color=color),
+        padding="10px 12px",
+        background_color=PAPER,
+        border=f"1px solid {RULE}",
+        width="100%",
+    )
+
+
+def _alibaba_landed_cost() -> rx.Component:
+    result = TrackerState.alibaba_landed_result
+    return rx.box(
+        rx.text(
+            "Importación / Costo Venezuela",
+            size="3",
+            weight="medium",
+            color=styles.TEXT_PRIMARY,
+        ),
+        rx.text(
+            "Cálculo determinista de costo puesto en Venezuela (DTD Cargo, puerta a puerta). "
+            "No se consulta DTD Cargo: la tarifa es un dato editable.",
+            size="1",
+            color=MUTED,
+            padding_top="4px",
+        ),
+        rx.cond(
+            TrackerState.alibaba_landed_error != "",
+            rx.text(TrackerState.alibaba_landed_error, size="2", color=BRICK, padding_top="8px"),
+        ),
+        rx.vstack(
+            rx.hstack(
+                _landed_field(
+                    "Cantidad",
+                    TrackerState.alibaba_landed_quantity,
+                    TrackerState.set_alibaba_landed_quantity,
+                ),
+                _landed_field(
+                    "Precio proveedor (USD/unidad)",
+                    TrackerState.alibaba_landed_supplier_price,
+                    TrackerState.set_alibaba_landed_supplier_price,
+                ),
+                rx.vstack(
+                    rx.text(" ", size="1", color=MUTED),
+                    rx.button(
+                        "Usar datos de negociación",
+                        on_click=TrackerState.use_negotiation_values_for_landed_cost,
+                        size="1",
+                        variant="outline",
+                    ),
+                    spacing="1",
+                    width="100%",
+                    align_items="start",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            rx.hstack(
+                _landed_field(
+                    "Número de cajas",
+                    TrackerState.alibaba_landed_cartons,
+                    TrackerState.set_alibaba_landed_cartons,
+                ),
+                _landed_field(
+                    "Unidades por caja",
+                    TrackerState.alibaba_landed_units_per_carton,
+                    TrackerState.set_alibaba_landed_units_per_carton,
+                ),
+                _landed_field(
+                    "Peso caja (kg)",
+                    TrackerState.alibaba_landed_weight,
+                    TrackerState.set_alibaba_landed_weight,
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            rx.hstack(
+                _landed_field(
+                    "Largo caja (cm)",
+                    TrackerState.alibaba_landed_length,
+                    TrackerState.set_alibaba_landed_length,
+                ),
+                _landed_field(
+                    "Ancho caja (cm)",
+                    TrackerState.alibaba_landed_width,
+                    TrackerState.set_alibaba_landed_width,
+                ),
+                _landed_field(
+                    "Alto caja (cm)",
+                    TrackerState.alibaba_landed_height,
+                    TrackerState.set_alibaba_landed_height,
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            rx.hstack(
+                _landed_field(
+                    "Tarifa DTD USD/CBM",
+                    TrackerState.alibaba_landed_rate,
+                    TrackerState.set_alibaba_landed_rate,
+                    "estimada",
+                ),
+                rx.vstack(
+                    rx.text(
+                        "Cotización confirmada",
+                        size="1",
+                        color=styles.TEXT_SECONDARY,
+                        weight="medium",
+                    ),
+                    rx.checkbox(
+                        checked=TrackerState.alibaba_landed_rate_confirmed,
+                        on_change=TrackerState.set_alibaba_landed_rate_confirmed,
+                    ),
+                    spacing="1",
+                    width="100%",
+                    align_items="start",
+                ),
+                rx.vstack(
+                    rx.text(
+                        "Tiene batería",
+                        size="1",
+                        color=styles.TEXT_SECONDARY,
+                        weight="medium",
+                    ),
+                    rx.checkbox(
+                        checked=TrackerState.alibaba_landed_has_battery,
+                        on_change=TrackerState.set_alibaba_landed_has_battery,
+                    ),
+                    spacing="1",
+                    width="100%",
+                    align_items="start",
+                ),
+                _landed_field(
+                    "Multiplicador batería",
+                    TrackerState.alibaba_landed_battery_multiplier,
+                    TrackerState.set_alibaba_landed_battery_multiplier,
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            rx.hstack(
+                _landed_field(
+                    "Recargo madera/paleta",
+                    TrackerState.alibaba_landed_wood_surcharge,
+                    TrackerState.set_alibaba_landed_wood_surcharge,
+                    "opcional",
+                ),
+                _landed_field(
+                    "Seguro",
+                    TrackerState.alibaba_landed_insurance,
+                    TrackerState.set_alibaba_landed_insurance,
+                    "opcional",
+                ),
+                _landed_field(
+                    "Otros gastos logísticos",
+                    TrackerState.alibaba_landed_other_logistics,
+                    TrackerState.set_alibaba_landed_other_logistics,
+                    "opcional",
+                ),
+                _landed_field(
+                    "Otros gastos importación",
+                    TrackerState.alibaba_landed_other_import,
+                    TrackerState.set_alibaba_landed_other_import,
+                    "opcional",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            rx.hstack(
+                _landed_field(
+                    "Precio venta esperado",
+                    TrackerState.alibaba_landed_sale_price,
+                    TrackerState.set_alibaba_landed_sale_price,
+                    "opcional",
+                ),
+                _landed_field(
+                    "Margen objetivo %",
+                    TrackerState.alibaba_landed_margin,
+                    TrackerState.set_alibaba_landed_margin,
+                    "opcional",
+                ),
+                spacing="3",
+                width="100%",
+            ),
+            rx.button(
+                "Calcular costo puesto en Venezuela",
+                on_click=TrackerState.calculate_alibaba_landed_cost,
+                size="2",
+                **styles.BUTTON_STYLE,
+            ),
+            rx.cond(
+                TrackerState.alibaba_landed_has_result,
+                rx.vstack(
+                    rx.text(
+                        result["rate_label"],
+                        size="1",
+                        weight="medium",
+                        color=BRICK,
+                    ),
+                    rx.text(result["rate_display"], size="1", color=MUTED),
+                    rx.hstack(
+                        _landed_card("Producto", result["merchandise_cost"], styles.TEXT_PRIMARY),
+                        _landed_card("Transporte estimado", result["shipping_total"], BRICK),
+                        _landed_card(
+                            "Costo total Venezuela",
+                            result["total_landed_cost"],
+                            styles.TEXT_PRIMARY,
+                        ),
+                        _landed_card(
+                            "Costo por unidad",
+                            result["landed_cost_per_unit"],
+                            styles.TEXT_PRIMARY,
+                        ),
+                        spacing="3",
+                        width="100%",
+                    ),
+                    rx.cond(
+                        result["expected_sale_price"] != "",
+                        rx.hstack(
+                            _landed_card(
+                                "Venta esperada",
+                                result["expected_sale_price"],
+                                styles.TEXT_PRIMARY,
+                            ),
+                            _landed_card(
+                                "Ganancia/unidad",
+                                result["gross_profit_per_unit"],
+                                styles.TEXT_PRIMARY,
+                            ),
+                            _landed_card("Margen", result["margin_percent"], styles.TEXT_PRIMARY),
+                            _landed_card(
+                                "Máximo recomendable proveedor",
+                                result["max_supplier_price"],
+                                BRICK,
+                            ),
+                            spacing="3",
+                            width="100%",
+                        ),
+                    ),
+                    rx.cond(
+                        result["unattractive"] == "1",
+                        rx.text(
+                            "Económicamente poco atractivo: el margen objetivo no deja "
+                            "espacio para pagar al proveedor.",
+                            size="2",
+                            color=BRICK,
+                        ),
+                    ),
+                    rx.text("CBM total: " + result["total_cbm"], size="1", color=MUTED),
+                    rx.text("Peso total: " + result["total_weight"], size="1", color=MUTED),
+                    rx.text("Flete base: " + result["freight_base"], size="1", color=MUTED),
+                    rx.text(
+                        "Flete ajustado: " + result["freight_adjusted"],
+                        size="1",
+                        color=MUTED,
+                    ),
+                    rx.text(
+                        "Recargos logísticos: " + result["shipping_surcharges"],
+                        size="1",
+                        color=MUTED,
+                    ),
+                    rx.text(
+                        "Otros gastos de importación: " + result["other_import_costs"],
+                        size="1",
+                        color=MUTED,
+                    ),
+                    rx.text(
+                        "Precio mínimo de venta para no perder dinero: " + result["break_even"],
+                        size="1",
+                        color=MUTED,
+                    ),
+                    spacing="3",
+                    width="100%",
+                ),
+            ),
+            spacing="3",
+            width="100%",
+            padding_top="10px",
+        ),
+        padding="14px 16px",
+        background_color=CARD,
+        border=f"1px solid {RULE}",
+        width="100%",
+        margin_top="16px",
+    )
+
+
 def _alibaba_table() -> rx.Component:
     return rx.box(
         rx.table.root(
@@ -1824,6 +2128,7 @@ def dashboard() -> rx.Component:
                     _alibaba_body(),
                     _alibaba_tracking(),
                     _alibaba_negotiation(),
+                    _alibaba_landed_cost(),
                     spacing="0",
                     width="100%",
                 ),
