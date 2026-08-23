@@ -13,12 +13,15 @@ import pytest
 from bera_price_tracker.application.alibaba_tracking import (
     FOLLOW_SOURCE,
     MISSING_PRODUCT_ID,
+    REFRESH_QUERY_PREFIX,
     AlibabaFollowError,
     AlibabaFollowObservation,
     FollowAlibabaPrice,
     ListAlibabaTracked,
     RecordAlibabaPriceSnapshot,
     UnfollowAlibabaPrice,
+    calculate_alibaba_tracking_variation,
+    is_canonical_tracking_observation,
     observation_from_loaded_row,
     percentage_change,
 )
@@ -29,6 +32,7 @@ from bera_price_tracker.domain import (
     Listing,
     ListingKey,
     MarketplaceSource,
+    PriceObservation,
     SearchQuery,
 )
 from bera_price_tracker.gui import services
@@ -341,3 +345,134 @@ def test_service_classes_use_repository_not_sqlite() -> None:
 
 def test_missing_product_id_constant() -> None:
     assert "identificador" in MISSING_PRODUCT_ID
+
+
+def _price_observation(
+    price: str,
+    *,
+    query: str = "wireless mouse",
+    minimum: str | None = None,
+    maximum: str | None = None,
+    at: datetime = BASE,
+) -> PriceObservation:
+    return PriceObservation(
+        price=Decimal(price),
+        currency="USD",
+        collected_at=at,
+        query=SearchQuery(query),
+        price_min=None if minimum is None else Decimal(minimum),
+        price_max=None if maximum is None else Decimal(maximum),
+    )
+
+
+def test_simple_discovery_price_is_canonical() -> None:
+    assert is_canonical_tracking_observation(
+        _price_observation("4.30", minimum="4.30", maximum="4.30")
+    )
+    assert is_canonical_tracking_observation(_price_observation("4.30"))
+
+
+def test_range_discovery_midpoint_is_provisional() -> None:
+    provisional = _price_observation("98.70", minimum="89.20", maximum="108.20")
+    assert not is_canonical_tracking_observation(provisional)
+    variation = calculate_alibaba_tracking_variation([provisional])
+    assert variation.baseline_price is None
+    assert variation.absolute_change is None
+    assert variation.percentage_change is None
+
+
+def test_refresh_observation_is_canonical_even_with_range() -> None:
+    canonical = _price_observation(
+        "108.20",
+        query=f"{REFRESH_QUERY_PREFIX}op-1",
+        minimum="89.20",
+        maximum="108.20",
+    )
+    assert is_canonical_tracking_observation(canonical)
+
+
+def test_first_canonical_after_provisional_has_no_variation() -> None:
+    """Regression 1601769395876: discovery 98.70 + canonical 108.20 must not
+    report +9.63%; the canonical observation establishes the baseline."""
+
+    provisional = _price_observation("98.70", minimum="89.20", maximum="108.20")
+    canonical = _price_observation(
+        "108.20",
+        query=f"{REFRESH_QUERY_PREFIX}op-1",
+        minimum="89.20",
+        maximum="108.20",
+        at=BASE + timedelta(hours=1),
+    )
+    variation = calculate_alibaba_tracking_variation([provisional, canonical])
+    assert variation.first_price == Decimal("98.70")
+    assert variation.baseline_price == Decimal("108.20")
+    assert variation.last_price == Decimal("108.20")
+    assert variation.absolute_change is None
+    assert variation.percentage_change is None
+    assert variation.historical_minimum == Decimal("108.20")
+    assert variation.historical_maximum == Decimal("108.20")
+    assert variation.snapshot_count == 2
+
+
+def test_two_canonical_observations_compare_between_themselves() -> None:
+    provisional = _price_observation("98.70", minimum="89.20", maximum="108.20")
+    first = _price_observation(
+        "108.20", query=f"{REFRESH_QUERY_PREFIX}op-1", at=BASE + timedelta(hours=1)
+    )
+    second = _price_observation(
+        "105", query=f"{REFRESH_QUERY_PREFIX}op-2", at=BASE + timedelta(hours=2)
+    )
+    variation = calculate_alibaba_tracking_variation([provisional, first, second])
+    assert variation.baseline_price == Decimal("108.20")
+    assert variation.last_price == Decimal("105")
+    assert variation.absolute_change == Decimal("-3.20")
+    assert variation.percentage_change is not None
+    assert variation.percentage_change.quantize(Decimal("0.01")) == Decimal("-2.96")
+    assert variation.historical_minimum == Decimal("105")
+    assert variation.historical_maximum == Decimal("108.20")
+
+
+def test_canonical_min_max_ignore_provisional_midpoint() -> None:
+    provisional = _price_observation("2.00", minimum="1.00", maximum="3.00")
+    first = _price_observation(
+        "3.00", query=f"{REFRESH_QUERY_PREFIX}op-1", at=BASE + timedelta(hours=1)
+    )
+    second = _price_observation(
+        "2.80", query=f"{REFRESH_QUERY_PREFIX}op-2", at=BASE + timedelta(hours=2)
+    )
+    variation = calculate_alibaba_tracking_variation([provisional, first, second])
+    assert variation.historical_minimum == Decimal("2.80")
+    assert variation.historical_maximum == Decimal("3.00")
+
+
+def test_provisional_only_history_keeps_midpoint_comparison() -> None:
+    """Discovery midpoints share the same semantics, so the legacy comparison
+    between them is preserved while no canonical observation exists."""
+
+    first = _price_observation("1.45", minimum="1.30", maximum="1.60")
+    second = _price_observation("1.60", minimum="1.50", maximum="1.70", at=BASE + timedelta(days=1))
+    variation = calculate_alibaba_tracking_variation([first, second])
+    assert variation.baseline_price is None
+    assert variation.absolute_change == Decimal("0.15")
+
+
+def test_simple_follow_price_is_the_baseline(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    tracked = composition.follow_alibaba_price(
+        _observation(
+            price=Decimal("4.30"),
+            minimum=Decimal("4.30"),
+            maximum=Decimal("4.30"),
+            display="$4.30",
+        ),
+        clock=_clock(BASE),
+    )
+    assert tracked.variation.baseline_price == Decimal("4.30")
+    assert tracked.variation.absolute_change is None
+
+
+def test_range_follow_has_no_baseline_yet(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    tracked = composition.follow_alibaba_price(_observation(), clock=_clock(BASE))
+    assert tracked.variation.baseline_price is None
+    assert tracked.variation.first_price == Decimal("1.45")

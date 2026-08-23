@@ -228,7 +228,7 @@ class SQLiteListingRepository(ListingRepository):
             rows = connection.execute(
                 """
                 SELECT cr.id AS run_id, cr.query, cr.collected_at, ps.price, ps.currency,
-                       ps.usd_amount
+                       ps.usd_amount, ps.price_min, ps.price_max
                 FROM price_snapshots AS ps
                 JOIN collection_runs AS cr ON cr.id = ps.collection_run_id
                 JOIN listings AS l ON l.id = ps.listing_id
@@ -250,6 +250,8 @@ class SQLiteListingRepository(ListingRepository):
                     currency=str(row["currency"]),
                     collected_at=_datetime_from_text(row["collected_at"]),
                     usd_amount=_optional_decimal_from_text(row["usd_amount"]),
+                    price_min=_optional_decimal_from_text(row["price_min"]),
+                    price_max=_optional_decimal_from_text(row["price_max"]),
                 ),
             )
             for row in rows

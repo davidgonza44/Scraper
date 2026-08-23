@@ -76,9 +76,9 @@ def _follow_observation(
     *,
     product_id: str = "1600000000000",
     price: Decimal = Decimal("15.25"),
-    minimum: Decimal = Decimal("12.50"),
-    maximum: Decimal = Decimal("18.00"),
-    display: str = "$12.50 - $18.00",
+    minimum: Decimal = Decimal("15.25"),
+    maximum: Decimal = Decimal("15.25"),
+    display: str = "$15.25",
     title: str = "Wireless Mouse",
 ) -> AlibabaFollowObservation:
     return AlibabaFollowObservation(
@@ -558,6 +558,91 @@ def test_observed_run_unchanged_creates_snapshot(tmp_path: Path) -> None:
     assert tracked.price_max == Decimal("4.3")
     assert tracked.history[-1].price == Decimal("4.30")
     assert tracked.history[-1].currency == "USD"
+
+
+def test_regression_1601769395876_discovery_midpoint_is_not_compared(tmp_path: Path) -> None:
+    """Real pilot case: follow stored the 89.20-108.20 midpoint (98.70) and the
+    first xtracto refresh returned the MOQ tier price 108.20. That must establish
+    the baseline, never report +9.63%."""
+
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(
+        _follow_observation(
+            product_id="1601769395876",
+            price=Decimal("98.70"),
+            minimum=Decimal("89.20"),
+            maximum=Decimal("108.20"),
+            display="$89.20 - $108.20",
+            title="Custom Brake Pads",
+        ),
+        clock=_clock(BASE),
+    )
+    provider = FakeAlibabaProductRefreshProvider(
+        [
+            _record(
+                product_id="1601769395876",
+                price_formatted="$89.20 - $108.20",
+                prices=(Decimal("108.20"), Decimal("89.20")),
+            )
+        ]
+    )
+    summary = composition.refresh_alibaba_products(
+        ["1601769395876"],
+        operation_id="op-baseline",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    assert summary.updated == 1
+    tracked = composition.list_alibaba_tracked()[0]
+    assert tracked.variation.snapshot_count == 2
+    assert tracked.variation.first_price == Decimal("98.70")
+    assert tracked.variation.baseline_price == Decimal("108.20")
+    assert tracked.variation.last_price == Decimal("108.20")
+    assert tracked.variation.absolute_change is None
+    assert tracked.variation.percentage_change is None
+    assert tracked.variation.historical_minimum == Decimal("108.20")
+    assert tracked.variation.historical_maximum == Decimal("108.20")
+
+
+def test_second_canonical_refresh_compares_canonical_prices(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(
+        _follow_observation(
+            product_id="1601769395876",
+            price=Decimal("98.70"),
+            minimum=Decimal("89.20"),
+            maximum=Decimal("108.20"),
+            display="$89.20 - $108.20",
+        ),
+        clock=_clock(BASE),
+    )
+    first_provider = FakeAlibabaProductRefreshProvider(
+        [_record(product_id="1601769395876", prices=(Decimal("108.20"), Decimal("89.20")))]
+    )
+    composition.refresh_alibaba_products(
+        ["1601769395876"],
+        operation_id="op-first",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=first_provider,
+    )
+    second_provider = FakeAlibabaProductRefreshProvider(
+        [_record(product_id="1601769395876", prices=(Decimal("105"), Decimal("89.20")))]
+    )
+    summary = composition.refresh_alibaba_products(
+        ["1601769395876"],
+        operation_id="op-second",
+        clock=_clock(BASE + timedelta(hours=2)),
+        refresh_provider=second_provider,
+    )
+    assert summary.updated == 1
+    tracked = composition.list_alibaba_tracked()[0]
+    assert tracked.variation.baseline_price == Decimal("108.20")
+    assert tracked.variation.last_price == Decimal("105")
+    assert tracked.variation.absolute_change == Decimal("-3.20")
+    assert tracked.variation.percentage_change is not None
+    assert tracked.variation.percentage_change.quantize(Decimal("0.01")) == Decimal("-2.96")
+    assert tracked.variation.historical_minimum == Decimal("105")
+    assert tracked.variation.historical_maximum == Decimal("108.20")
 
 
 def test_discovery_representative_price_stays_midpoint() -> None:

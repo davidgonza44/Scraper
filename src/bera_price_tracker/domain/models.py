@@ -404,6 +404,8 @@ class PriceObservation:
     collected_at: datetime
     query: SearchQuery
     usd_amount: Decimal | None = None
+    price_min: Decimal | None = None
+    price_max: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.query, SearchQuery):
@@ -415,6 +417,18 @@ class PriceObservation:
         if usd_amount is not None:
             usd_amount = _price(usd_amount)
         object.__setattr__(self, "usd_amount", usd_amount)
+        price_min = self.price_min
+        if price_min is not None:
+            price_min = _price(price_min)
+        price_max = self.price_max
+        if price_max is not None:
+            price_max = _price(price_max)
+        if price_min is not None and price_max is None:
+            price_max = price_min
+        if price_min is not None and price_max is not None and price_min > price_max:
+            raise ValueError("price_min must not exceed price_max")
+        object.__setattr__(self, "price_min", price_min)
+        object.__setattr__(self, "price_max", price_max)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

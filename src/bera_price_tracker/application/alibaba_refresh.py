@@ -43,22 +43,29 @@ from urllib.parse import urlsplit
 
 from bera_price_tracker.application.alibaba_tracking import (
     FOLLOW_SOURCE,
+    REFRESH_QUERY_PREFIX,
     AlibabaFollowError,
     AlibabaFollowObservation,
     AlibabaTrackedProduct,
     AlibabaTrackingRepository,
     alibaba_listing_key,
     history_from_repository,
+    is_canonical_tracking_observation,
     listing_from_observation,
     tracked_product_from_repository,
 )
 from bera_price_tracker.application.ports import MarketplaceSourceUnavailable
-from bera_price_tracker.domain import CollectionBatch, Listing, ListingKey, SearchQuery
+from bera_price_tracker.domain import (
+    CollectionBatch,
+    Listing,
+    ListingKey,
+    PriceObservation,
+    SearchQuery,
+)
 
 type CollectionClock = Callable[[], datetime]
 
 MAX_ALIBABA_REFRESH_BATCH = 50
-REFRESH_QUERY_PREFIX = "alibaba-refresh:"
 ALLOWED_PRODUCT_HOSTS = frozenset({"alibaba.com", "www.alibaba.com"})
 _NUMBER = r"(\d+(?:\.\d+)?)"
 
@@ -380,16 +387,24 @@ def summary_from_items(
     )
 
 
+def _last_canonical_observation(tracked: AlibabaTrackedProduct) -> PriceObservation | None:
+    """Latest canonical tracking observation, or None when only provisional
+    discovery observations exist (the incoming refresh establishes the baseline)."""
+
+    for observation in reversed(tracked.history):
+        if is_canonical_tracking_observation(observation):
+            return observation
+    return None
+
+
 def _last_representative(tracked: AlibabaTrackedProduct) -> Decimal | None:
-    if not tracked.history:
-        return None
-    return tracked.history[-1].price
+    observation = _last_canonical_observation(tracked)
+    return None if observation is None else observation.price
 
 
 def _last_currency(tracked: AlibabaTrackedProduct) -> str | None:
-    if not tracked.history:
-        return None
-    return tracked.history[-1].currency
+    observation = _last_canonical_observation(tracked)
+    return None if observation is None else observation.currency
 
 
 def _operation_already_recorded(
@@ -433,8 +448,15 @@ def _replay_item(
         )
     index = matches[-1]
     current = history.observations[index].price
-    previous = history.observations[index - 1].price if index > 0 else current
-    status = ProductRefreshStatus.UNCHANGED if current == previous else ProductRefreshStatus.UPDATED
+    previous_canonical = [
+        observation.price
+        for observation in history.observations[:index]
+        if is_canonical_tracking_observation(observation)
+    ]
+    if not previous_canonical or current != previous_canonical[-1]:
+        status = ProductRefreshStatus.UPDATED
+    else:
+        status = ProductRefreshStatus.UNCHANGED
     return AlibabaRefreshItemResult(product_id=product_id, status=status)
 
 

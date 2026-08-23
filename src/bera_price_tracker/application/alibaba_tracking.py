@@ -27,6 +27,7 @@ from bera_price_tracker.domain import (
 type CollectionClock = Callable[[], datetime]
 
 FOLLOW_SOURCE = MarketplaceSource.ALIBABA
+REFRESH_QUERY_PREFIX = "alibaba-refresh:"
 MISSING_PRODUCT_ID = "Este producto no tiene un identificador estable."
 MISSING_PRICE = "Este producto no tiene un precio utilizable."
 MISSING_URL = "Este producto no tiene un enlace público."
@@ -81,7 +82,13 @@ class AlibabaFollowObservation:
 
 @dataclass(frozen=True, slots=True)
 class AlibabaTrackingVariation:
-    """Decimal variation derived from persisted representative prices."""
+    """Decimal variation derived from canonical (comparable) tracking prices.
+
+    ``first_price`` is the very first observation (price seen when following).
+    ``baseline_price`` is the first canonical tracking observation, or None when
+    only provisional discovery observations exist. Min/max/last/changes use the
+    canonical subset when at least one canonical observation exists.
+    """
 
     first_price: Decimal
     last_price: Decimal
@@ -90,6 +97,7 @@ class AlibabaTrackingVariation:
     snapshot_count: int
     absolute_change: Decimal | None
     percentage_change: Decimal | None
+    baseline_price: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +219,8 @@ def history_from_repository(
             collected_at=item.snapshot.collected_at,
             query=item.query,
             usd_amount=item.snapshot.usd_amount,
+            price_min=item.snapshot.price_min,
+            price_max=item.snapshot.price_max,
         )
         for item in repository.get_price_history(key)
     )
@@ -237,23 +247,53 @@ def percentage_change(absolute_change: Decimal, previous_price: Decimal) -> Deci
     return (absolute_change / previous_price) * Decimal("100")
 
 
+def is_canonical_tracking_observation(observation: PriceObservation) -> bool:
+    """Whether an observation is a comparable canonical tracking price.
+
+    Canonical observations are product-detail refresh snapshots (their query
+    carries the ``alibaba-refresh:`` prefix) and follow/discovery snapshots with
+    an unambiguous simple price (no published min/max range). A follow snapshot
+    whose published range differs (min != max) stored a representative midpoint,
+    which is a provisional discovery observation, not a tracking baseline.
+    """
+
+    if observation.query.text.startswith(REFRESH_QUERY_PREFIX):
+        return True
+    minimum = observation.price_min
+    maximum = observation.price_max
+    return not (minimum is not None and maximum is not None and minimum != maximum)
+
+
 def calculate_alibaba_tracking_variation(
     observations: Sequence[PriceObservation],
 ) -> AlibabaTrackingVariation:
-    """First/last/min/max/count plus change vs the previous snapshot.
+    """First/last/min/max/count plus change between comparable snapshots.
 
-    Percentage is unavailable when there is no previous price or it is 0.
+    When at least one canonical observation exists, min/max/last and the change
+    are derived only from canonical observations; provisional discovery
+    midpoints are kept for audit but never distort tracking variation. When no
+    canonical observation exists yet, all observations share the discovery
+    midpoint semantics and are compared among themselves, with no baseline.
+    Percentage is unavailable when there is no previous comparable price or it
+    is 0.
     """
 
     if not observations:
         raise AlibabaFollowError("No hay snapshots de precio.")
+    all_observations = tuple(observations)
+    canonical = tuple(
+        observation
+        for observation in all_observations
+        if is_canonical_tracking_observation(observation)
+    )
+    comparable = canonical if canonical else all_observations
     history = ListingHistory(
         key=ListingKey(source=FOLLOW_SOURCE, external_id="variation"),
         title="variation",
         url="https://www.alibaba.com/product-detail/variation.html",
-        first_seen_at=observations[0].collected_at,
-        last_seen_at=observations[-1].collected_at,
-        observations=tuple(observations),
+        first_seen_at=comparable[0].collected_at,
+        last_seen_at=comparable[-1].collected_at,
+        observations=comparable,
     )
     stats = calculate_listing_statistics(history)
     previous = stats.previous_price
@@ -261,13 +301,14 @@ def calculate_alibaba_tracking_variation(
     if previous is not None and stats.absolute_change is not None:
         percentage = percentage_change(stats.absolute_change, previous)
     return AlibabaTrackingVariation(
-        first_price=observations[0].price,
+        first_price=all_observations[0].price,
         last_price=stats.current_price,
         historical_minimum=stats.minimum_price,
         historical_maximum=stats.maximum_price,
-        snapshot_count=stats.observation_count,
+        snapshot_count=len(all_observations),
         absolute_change=stats.absolute_change,
         percentage_change=percentage,
+        baseline_price=canonical[0].price if canonical else None,
     )
 
 
@@ -395,6 +436,7 @@ __all__ = [
     "MISSING_TITLE",
     "MISSING_URL",
     "PERCENT_UNAVAILABLE",
+    "REFRESH_QUERY_PREFIX",
     "UNKNOWN_LISTING",
     "AlibabaFollowError",
     "AlibabaFollowObservation",
@@ -407,6 +449,7 @@ __all__ = [
     "alibaba_listing_key",
     "calculate_alibaba_tracking_variation",
     "history_from_repository",
+    "is_canonical_tracking_observation",
     "listing_from_observation",
     "observation_from_loaded_row",
     "tracked_product_from_repository",

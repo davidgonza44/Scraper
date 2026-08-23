@@ -1188,7 +1188,16 @@ def _alibaba_tracking() -> rx.Component:
                             color=BRICK,
                             weight="medium",
                         ),
-                        rx.text("Primer precio: " + item["first_price"], size="1", color=MUTED),
+                        rx.text(
+                            "Precio observado al seguir: " + item["first_price"],
+                            size="1",
+                            color=MUTED,
+                        ),
+                        rx.text(
+                            "Baseline de seguimiento: " + item["baseline"],
+                            size="1",
+                            color=MUTED,
+                        ),
                         rx.text(
                             "Última actualización: " + item["last_updated"],
                             size="1",

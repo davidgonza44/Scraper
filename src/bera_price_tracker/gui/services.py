@@ -480,17 +480,21 @@ def _format_tracked_variation(tracked: Any) -> str:
 
 def tracked_product_to_row(tracked: Any) -> dict[str, str]:
     from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.alibaba_tracking import is_canonical_tracking_observation
 
     history_lines = [
         f"{_format_tracked_utc(item.collected_at)} · {format_alibaba_money(item.price)}"
+        + ("" if is_canonical_tracking_observation(item) else " · discovery")
         for item in tracked.history
     ]
+    baseline = tracked.variation.baseline_price
     return {
         "product_id": tracked.product_id,
         "title": tracked.title,
         "supplier_name": tracked.supplier_name or "",
         "current_price": tracked.current_price_display,
         "first_price": format_alibaba_money(tracked.variation.first_price),
+        "baseline": "—" if baseline is None else format_alibaba_money(baseline),
         "last_updated": _format_tracked_utc(tracked.last_updated),
         "variation": _format_tracked_variation(tracked),
         "history": "\n".join(history_lines),
