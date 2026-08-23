@@ -18,6 +18,7 @@ class MarketplaceSource(StrEnum):
 
     MERCADO_LIBRE = "mercado_libre"
     FACEBOOK_MARKETPLACE = "facebook_marketplace"
+    ALIBABA = "alibaba"
 
 
 def _required_text(value: str, field_name: str) -> str:
@@ -127,6 +128,8 @@ class Listing:
     usd_exchange_rate: Decimal | None = None
     usd_exchange_rate_source: str | None = None
     usd_exchange_rate_at: datetime | None = None
+    price_min: Decimal | None = None
+    price_max: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, MarketplaceSource):
@@ -175,6 +178,18 @@ class Listing:
         if rate_at is not None:
             rate_at = _collected_at(rate_at)
         object.__setattr__(self, "usd_exchange_rate_at", rate_at)
+        price_min = self.price_min
+        if price_min is not None:
+            price_min = _price(price_min)
+        price_max = self.price_max
+        if price_max is not None:
+            price_max = _price(price_max)
+        if price_min is not None and price_max is None:
+            price_max = price_min
+        if price_min is not None and price_max is not None and price_min > price_max:
+            raise ValueError("price_min must not exceed price_max")
+        object.__setattr__(self, "price_min", price_min)
+        object.__setattr__(self, "price_max", price_max)
 
     @property
     def key(self) -> ListingKey:
@@ -249,6 +264,8 @@ class PriceSnapshot:
     usd_exchange_rate: Decimal | None = None
     usd_exchange_rate_source: str | None = None
     usd_exchange_rate_at: datetime | None = None
+    price_min: Decimal | None = None
+    price_max: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.listing_key, ListingKey):
@@ -273,6 +290,18 @@ class PriceSnapshot:
         if rate_at is not None:
             rate_at = _collected_at(rate_at)
         object.__setattr__(self, "usd_exchange_rate_at", rate_at)
+        price_min = self.price_min
+        if price_min is not None:
+            price_min = _price(price_min)
+        price_max = self.price_max
+        if price_max is not None:
+            price_max = _price(price_max)
+        if price_min is not None and price_max is None:
+            price_max = price_min
+        if price_min is not None and price_max is not None and price_min > price_max:
+            raise ValueError("price_min must not exceed price_max")
+        object.__setattr__(self, "price_min", price_min)
+        object.__setattr__(self, "price_max", price_max)
 
     @classmethod
     def from_listing(cls, listing: Listing) -> PriceSnapshot:
@@ -289,6 +318,8 @@ class PriceSnapshot:
             usd_exchange_rate=listing.usd_exchange_rate,
             usd_exchange_rate_source=listing.usd_exchange_rate_source,
             usd_exchange_rate_at=listing.usd_exchange_rate_at,
+            price_min=listing.price_min,
+            price_max=listing.price_max,
         )
 
 

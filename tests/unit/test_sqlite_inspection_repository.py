@@ -454,8 +454,8 @@ def test_inspection_open_never_applies_pending_writer_migrations(
     database_path = tmp_path / "no-migration.db"
     record_batches(database_path, make_batch(make_listing("MLV-NO-MIGRATION")))
     marker = Migration(
-        version=3,
-        name="003_must_not_run_from_inspection",
+        version=4,
+        name="004_must_not_run_from_inspection",
         statements=("CREATE TABLE forbidden_inspection_migration (id INTEGER)",),
     )
     monkeypatch.setattr(sqlite_repository, "MIGRATIONS", (*MIGRATIONS, marker))
@@ -464,7 +464,7 @@ def test_inspection_open_never_applies_pending_writer_migrations(
         assert reader.get_latest_run(MarketplaceSource.MERCADO_LIBRE, QUERY, 20) is not None
 
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (2,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (3,)
         marker_table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'forbidden_inspection_migration'"
         ).fetchone()

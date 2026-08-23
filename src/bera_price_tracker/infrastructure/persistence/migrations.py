@@ -80,4 +80,16 @@ MIGRATIONS: tuple[Migration, ...] = (
             "ALTER TABLE price_snapshots ADD COLUMN original_formatted TEXT",
         ),
     ),
+    Migration(
+        version=3,
+        name="003_listing_tracking_and_price_range",
+        statements=(
+            "ALTER TABLE listings ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE listings ADD COLUMN price_min TEXT",
+            "ALTER TABLE listings ADD COLUMN price_max TEXT",
+            "ALTER TABLE listings ADD COLUMN price_display TEXT",
+            "ALTER TABLE price_snapshots ADD COLUMN price_min TEXT",
+            "ALTER TABLE price_snapshots ADD COLUMN price_max TEXT",
+        ),
+    ),
 )

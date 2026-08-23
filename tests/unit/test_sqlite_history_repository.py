@@ -258,8 +258,8 @@ def test_history_open_never_applies_pending_writer_migrations(
         persist(writer, listing)
 
     marker = Migration(
-        version=3,
-        name="003_must_not_run_from_history",
+        version=4,
+        name="004_must_not_run_from_history",
         statements=("CREATE TABLE forbidden_history_migration (id INTEGER)",),
     )
     monkeypatch.setattr(sqlite_repository, "MIGRATIONS", (*MIGRATIONS, marker))
@@ -268,7 +268,7 @@ def test_history_open_never_applies_pending_writer_migrations(
         assert reader.get_history(listing.key) is not None
 
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (2,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (3,)
         marker_table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'forbidden_history_migration'"
         ).fetchone()

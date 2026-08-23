@@ -1,4 +1,4 @@
-# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def"
+# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value"
 """Single dashboard / search page."""
 
 from __future__ import annotations
@@ -1022,6 +1022,112 @@ def _alibaba_relevance_cell(row: rx.Var) -> rx.Component:
     )
 
 
+def _alibaba_follow_cell(row: rx.Var) -> rx.Component:
+    return rx.cond(
+        row["product_id"] != "",
+        rx.cond(
+            row["is_followed"],
+            rx.button(
+                "Dejar de seguir",
+                on_click=TrackerState.unfollow_alibaba_product(row["product_id"]),
+                size="1",
+                variant="outline",
+            ),
+            rx.cond(
+                row["representative"] != "",
+                rx.button(
+                    "Seguir precio",
+                    on_click=TrackerState.follow_alibaba_product(row["product_id"]),
+                    size="1",
+                    variant="outline",
+                ),
+                rx.text("Sin precio", size="1", color=MUTED),
+            ),
+        ),
+        rx.text("Sin ID", size="1", color=MUTED),
+    )
+
+
+def _alibaba_tracking() -> rx.Component:
+    return rx.box(
+        rx.text("Seguimiento", size="3", weight="medium", color=styles.TEXT_PRIMARY),
+        rx.text(
+            "Solo se guardan los productos que eliges seguir, usando el precio ya cargado.",
+            size="1",
+            color=MUTED,
+            padding_top="4px",
+        ),
+        rx.cond(
+            TrackerState.alibaba_tracking_error != "",
+            rx.text(
+                TrackerState.alibaba_tracking_error,
+                size="2",
+                color=BRICK,
+                padding_top="8px",
+            ),
+        ),
+        rx.cond(
+            TrackerState.alibaba_has_tracked_rows,
+            rx.vstack(
+                rx.foreach(
+                    TrackerState.alibaba_tracked_rows,
+                    lambda item: rx.box(
+                        rx.text(
+                            item["title"], size="2", weight="medium", color=styles.TEXT_PRIMARY
+                        ),
+                        rx.text(
+                            "Proveedor: " + item["supplier_name"],
+                            size="1",
+                            color=MUTED,
+                        ),
+                        rx.text(
+                            "Precio actual conocido: " + item["current_price"],
+                            size="2",
+                            color=BRICK,
+                            weight="medium",
+                        ),
+                        rx.text("Primer precio: " + item["first_price"], size="1", color=MUTED),
+                        rx.text(
+                            "Última actualización: " + item["last_updated"],
+                            size="1",
+                            color=MUTED,
+                        ),
+                        rx.text(
+                            "Variación: " + item["variation"], size="1", color=styles.TEXT_PRIMARY
+                        ),
+                        rx.text("Historial", size="1", weight="medium", color=styles.TEXT_PRIMARY),
+                        rx.text(item["history"], size="1", color=MUTED, white_space="pre-line"),
+                        rx.button(
+                            "Dejar de seguir",
+                            on_click=TrackerState.unfollow_alibaba_product(item["product_id"]),
+                            size="1",
+                            variant="outline",
+                        ),
+                        padding="12px 14px",
+                        background_color=CARD,
+                        border=f"1px solid {RULE}",
+                        width="100%",
+                    ),
+                ),
+                spacing="3",
+                width="100%",
+                padding_top="10px",
+            ),
+            rx.text(
+                "Aún no hay productos en seguimiento.",
+                size="2",
+                color=MUTED,
+                padding_top="8px",
+            ),
+        ),
+        padding="14px 16px",
+        background_color=CARD,
+        border=f"1px solid {RULE}",
+        width="100%",
+        margin_top="16px",
+    )
+
+
 def _alibaba_table() -> rx.Component:
     return rx.box(
         rx.table.root(
@@ -1037,12 +1143,13 @@ def _alibaba_table() -> rx.Component:
                     rx.table.column_header_cell("Relevancia", color=styles.TEXT_PRIMARY),
                     rx.table.column_header_cell("Ranking", color=styles.TEXT_PRIMARY),
                     rx.table.column_header_cell("Reputación", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Seguimiento", color=styles.TEXT_PRIMARY),
                     rx.table.column_header_cell("Enlace", color=styles.TEXT_PRIMARY),
                 )
             ),
             rx.table.body(
                 rx.foreach(
-                    TrackerState.alibaba_visible_rows,
+                    TrackerState.alibaba_table_rows,
                     lambda row: rx.table.row(
                         rx.table.cell(
                             rx.cond(
@@ -1073,6 +1180,7 @@ def _alibaba_table() -> rx.Component:
                         rx.table.cell(_alibaba_relevance_cell(row)),
                         rx.table.cell(_alibaba_ranking_cell(row)),
                         rx.table.cell(_alibaba_reputation_cell(row)),
+                        rx.table.cell(_alibaba_follow_cell(row)),
                         rx.table.cell(
                             rx.link(
                                 "Ver producto",
@@ -1164,7 +1272,13 @@ def dashboard() -> rx.Component:
             rx.cond(
                 TrackerState.marketplace_tab == "facebook",
                 rx.vstack(_form(), _body(), spacing="0", width="100%"),
-                rx.vstack(_alibaba_form(), _alibaba_body(), spacing="0", width="100%"),
+                rx.vstack(
+                    _alibaba_form(),
+                    _alibaba_body(),
+                    _alibaba_tracking(),
+                    spacing="0",
+                    width="100%",
+                ),
             ),
             max_width="1080px",
             width="100%",

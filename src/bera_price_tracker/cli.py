@@ -209,6 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
 def _source_name(source: MarketplaceSource) -> str:
     if source is MarketplaceSource.MERCADO_LIBRE:
         return "Mercado Libre"
+    if source is MarketplaceSource.ALIBABA:
+        return "Alibaba"
     return source.value
 
 

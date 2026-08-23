@@ -5,8 +5,9 @@ from __future__ import annotations
 import copy
 import dataclasses
 import logging
-from collections.abc import Callable
-from decimal import ROUND_HALF_UP, Decimal
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 from typing import Any
 
 from bera_price_tracker.composition import ApplicationComposition, build_composition
@@ -306,6 +307,8 @@ def sanitize_alibaba_error(exc: BaseException) -> str:
 def alibaba_product_to_row(product: object) -> dict[str, Any]:
     price_display = getattr(product, "price_display", None)
     price = str(price_display).strip() if price_display else ""
+    min_price = getattr(product, "min_price", None)
+    max_price = getattr(product, "max_price", None)
     return {
         "title": str(getattr(product, "title", "") or ""),
         "price": price,
@@ -314,6 +317,10 @@ def alibaba_product_to_row(product: object) -> dict[str, Any]:
         "supplier_country": str(getattr(product, "supplier_country", "") or ""),
         "url": str(getattr(product, "product_url", "") or ""),
         "image_url": str(getattr(product, "image_url", "") or ""),
+        "product_id": str(getattr(product, "product_id", "") or ""),
+        "price_min": "" if min_price is None else str(min_price),
+        "price_max": "" if max_price is None else str(max_price),
+        "currency": str(getattr(product, "currency", "") or ""),
     }
 
 
@@ -450,3 +457,87 @@ def run_alibaba_search(
         },
         "error_message": "",
     }
+
+
+def _format_tracked_utc(value: datetime) -> str:
+    utc_value = value.astimezone(UTC)
+    return utc_value.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _format_tracked_variation(tracked: Any) -> str:
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.alibaba_tracking import PERCENT_UNAVAILABLE
+
+    variation = tracked.variation
+    if variation.absolute_change is None:
+        return "—"
+    absolute = format_alibaba_money(variation.absolute_change)
+    if variation.percentage_change is None:
+        return f"{absolute} ({PERCENT_UNAVAILABLE})"
+    percent = variation.percentage_change.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
+    return f"{absolute} ({percent}%)"
+
+
+def tracked_product_to_row(tracked: Any) -> dict[str, str]:
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+
+    history_lines = [
+        f"{_format_tracked_utc(item.collected_at)} · {format_alibaba_money(item.price)}"
+        for item in tracked.history
+    ]
+    return {
+        "product_id": tracked.product_id,
+        "title": tracked.title,
+        "supplier_name": tracked.supplier_name or "",
+        "current_price": tracked.current_price_display,
+        "first_price": format_alibaba_money(tracked.variation.first_price),
+        "last_updated": _format_tracked_utc(tracked.last_updated),
+        "variation": _format_tracked_variation(tracked),
+        "history": "\n".join(history_lines),
+        "url": tracked.url,
+        "is_active": "1" if tracked.is_active else "0",
+        "snapshot_count": str(tracked.variation.snapshot_count),
+    }
+
+
+def follow_alibaba_price(
+    row: Mapping[str, object],
+    query: str,
+    *,
+    settings: Settings | None = None,
+    clock: Any | None = None,
+    composition: Any | None = None,
+) -> dict[str, str]:
+    from bera_price_tracker.application.alibaba_tracking import observation_from_loaded_row
+
+    resolved = settings if settings is not None else Settings.from_env()
+    service = composition if composition is not None else build_composition(resolved)
+    observation = observation_from_loaded_row(row, query)
+    tracked = service.follow_alibaba_price(observation, clock=clock)
+    return tracked_product_to_row(tracked)
+
+
+def unfollow_alibaba_price(
+    product_id: str,
+    *,
+    settings: Settings | None = None,
+    composition: Any | None = None,
+) -> dict[str, str]:
+    resolved = settings if settings is not None else Settings.from_env()
+    service = composition if composition is not None else build_composition(resolved)
+    tracked = service.unfollow_alibaba_price(product_id)
+    return tracked_product_to_row(tracked)
+
+
+def list_alibaba_tracked(
+    *,
+    settings: Settings | None = None,
+    composition: Any | None = None,
+    active_only: bool = True,
+) -> list[dict[str, str]]:
+    resolved = settings if settings is not None else Settings.from_env()
+    service = composition if composition is not None else build_composition(resolved)
+    return [
+        tracked_product_to_row(item)
+        for item in service.list_alibaba_tracked(active_only=active_only)
+    ]

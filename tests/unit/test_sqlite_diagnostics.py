@@ -109,7 +109,7 @@ def test_missing_required_table_is_incompatible(tmp_path: Path) -> None:
     result = SQLiteDatabaseDiagnostics(database_path).inspect()
 
     assert result.state is DatabaseState.INCOMPATIBLE
-    assert result.schema_version == 2
+    assert result.schema_version == 3
     assert result.detail is not None
     assert "listings" in result.detail
 
@@ -125,7 +125,7 @@ def test_missing_applied_migration_is_incompatible(tmp_path: Path) -> None:
 
     assert result.state is DatabaseState.INCOMPATIBLE
     assert result.schema_version == 0
-    assert result.expected_schema_version == 2
+    assert result.expected_schema_version == 3
     assert result.detail == "schema migration versions are incompatible"
 
 
@@ -143,7 +143,7 @@ def test_unknown_applied_migration_is_incompatible(tmp_path: Path) -> None:
 
     assert result.state is DatabaseState.INCOMPATIBLE
     assert result.schema_version == 999
-    assert result.expected_schema_version == 2
+    assert result.expected_schema_version == 3
 
 
 def test_pending_migration_is_reported_but_never_applied(
@@ -153,8 +153,8 @@ def test_pending_migration_is_reported_but_never_applied(
     database_path = tmp_path / "pending-schema.db"
     initialize_database(database_path)
     marker = Migration(
-        version=3,
-        name="003_must_not_run_from_doctor",
+        version=4,
+        name="004_must_not_run_from_doctor",
         statements=("CREATE TABLE forbidden_doctor_migration (id INTEGER)",),
     )
     monkeypatch.setattr(sqlite_diagnostics, "MIGRATIONS", (*MIGRATIONS, marker))
@@ -162,10 +162,10 @@ def test_pending_migration_is_reported_but_never_applied(
     result = SQLiteDatabaseDiagnostics(database_path).inspect()
 
     assert result.state is DatabaseState.INCOMPATIBLE
-    assert result.schema_version == 2
-    assert result.expected_schema_version == 3
+    assert result.schema_version == 3
+    assert result.expected_schema_version == 4
     with closing(sqlite3.connect(database_path)) as connection:
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (2,)
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone() == (3,)
         forbidden = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'forbidden_doctor_migration'"
         ).fetchone()
@@ -262,4 +262,4 @@ def test_extra_application_table_is_compatible(tmp_path: Path) -> None:
     result = SQLiteDatabaseDiagnostics(database_path).inspect()
 
     assert result.state is DatabaseState.OK
-    assert result.schema_version == 2
+    assert result.schema_version == 3

@@ -38,6 +38,17 @@ from bera_price_tracker.application.alibaba_statistics import (
     format_alibaba_money,
     interpret_alibaba_prices,
 )
+from bera_price_tracker.application.alibaba_tracking import (
+    AlibabaFollowError,
+    AlibabaFollowObservation,
+    AlibabaTrackedProduct,
+    FollowAlibabaPrice,
+    ListAlibabaTracked,
+    RecordAlibabaPriceSnapshot,
+    UnfollowAlibabaPrice,
+    calculate_alibaba_tracking_variation,
+    observation_from_loaded_row,
+)
 from bera_price_tracker.application.classification import (
     MAX_AI_DESCRIPTION_LENGTH,
     MAX_AI_TITLE_LENGTH,
@@ -97,9 +108,18 @@ from bera_price_tracker.application.statistics import (
 
 __all__ = [
     "AIClassification",
+    "AlibabaFollowError",
+    "AlibabaFollowObservation",
     "AlibabaListingRelevance",
     "AlibabaListingScore",
     "AlibabaRanking",
+    "AlibabaTrackedProduct",
+    "FollowAlibabaPrice",
+    "ListAlibabaTracked",
+    "RecordAlibabaPriceSnapshot",
+    "UnfollowAlibabaPrice",
+    "calculate_alibaba_tracking_variation",
+    "observation_from_loaded_row",
     "RankingWeights",
     "SupplierReputationScore",
     "calculate_supplier_reputation",

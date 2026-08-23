@@ -41,6 +41,10 @@ class StoredListing:
     product_condition: str | None
     first_seen_at: datetime
     last_seen_at: datetime
+    is_active: bool = True
+    price_min: Decimal | None = None
+    price_max: Decimal | None = None
+    price_display: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,7 +207,8 @@ class SQLiteListingRepository(ListingRepository):
             row = connection.execute(
                 """
                 SELECT id, source, external_id, title, url, seller_name, location,
-                       product_condition, first_seen_at, last_seen_at
+                       product_condition, first_seen_at, last_seen_at, is_active,
+                       price_min, price_max, price_display
                 FROM listings
                 WHERE source = ? AND external_id = ?
                 """,
@@ -249,6 +254,61 @@ class SQLiteListingRepository(ListingRepository):
             )
             for row in rows
         ]
+
+    def set_listing_active(self, key: ListingKey, active: bool) -> bool:
+        """Mark a listing active or inactive without deleting snapshots."""
+
+        if not isinstance(key, ListingKey):
+            raise TypeError("key must be a ListingKey")
+        connection = self._connection_or_raise()
+        try:
+            cursor = connection.execute(
+                """
+                UPDATE listings
+                SET is_active = ?
+                WHERE source = ? AND external_id = ?
+                """,
+                (1 if active else 0, key.source.value, key.external_id),
+            )
+        except sqlite3.Error as exc:
+            raise PersistenceError("could not update listing tracking state") from exc
+        return cursor.rowcount > 0
+
+    def list_listing_keys(
+        self,
+        source: MarketplaceSource,
+        *,
+        active_only: bool = False,
+    ) -> list[ListingKey]:
+        """Return listing identities for one marketplace source."""
+
+        if not isinstance(source, MarketplaceSource):
+            raise TypeError("source must be a MarketplaceSource")
+        connection = self._connection_or_raise()
+        try:
+            if active_only:
+                rows = connection.execute(
+                    """
+                    SELECT external_id
+                    FROM listings
+                    WHERE source = ? AND is_active = 1
+                    ORDER BY last_seen_at DESC, title ASC
+                    """,
+                    (source.value,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT external_id
+                    FROM listings
+                    WHERE source = ?
+                    ORDER BY last_seen_at DESC, title ASC
+                    """,
+                    (source.value,),
+                ).fetchall()
+        except sqlite3.Error as exc:
+            raise PersistenceError("could not list listings") from exc
+        return [ListingKey(source=source, external_id=str(row["external_id"])) for row in rows]
 
     def count_listings(self) -> int:
         """Return the number of unique marketplace listings."""
@@ -351,9 +411,10 @@ class SQLiteListingRepository(ListingRepository):
             """
             INSERT INTO listings (
                 source, external_id, title, url, seller_name, location,
-                product_condition, first_seen_at, last_seen_at
+                product_condition, first_seen_at, last_seen_at, is_active,
+                price_min, price_max, price_display
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
             ON CONFLICT (source, external_id) DO UPDATE SET
                 title = excluded.title,
                 url = excluded.url,
@@ -366,7 +427,10 @@ class SQLiteListingRepository(ListingRepository):
                     WHEN excluded.last_seen_at > listings.last_seen_at
                     THEN excluded.last_seen_at
                     ELSE listings.last_seen_at
-                END
+                END,
+                price_min = COALESCE(excluded.price_min, listings.price_min),
+                price_max = COALESCE(excluded.price_max, listings.price_max),
+                price_display = COALESCE(excluded.price_display, listings.price_display)
             """,
             (
                 listing.source.value,
@@ -378,6 +442,9 @@ class SQLiteListingRepository(ListingRepository):
                 listing.product_condition,
                 seen_at,
                 seen_at,
+                _optional_decimal_to_text(listing.price_min),
+                _optional_decimal_to_text(listing.price_max),
+                listing.formatted_amount,
             ),
         )
         row = connection.execute(
@@ -436,9 +503,9 @@ class SQLiteListingRepository(ListingRepository):
                 collection_run_id, listing_id, price, currency,
                 usd_amount, usd_exchange_rate, usd_exchange_rate_source,
                 usd_exchange_rate_at, usd_normalization_status, usd_evidence,
-                original_formatted
+                original_formatted, price_min, price_max
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (collection_run_id, listing_id) DO NOTHING
             """,
             (
@@ -453,6 +520,8 @@ class SQLiteListingRepository(ListingRepository):
                 listing.usd_normalization_status,
                 evidence,
                 listing.formatted_amount,
+                _optional_decimal_to_text(listing.price_min),
+                _optional_decimal_to_text(listing.price_max),
             ),
         )
         row = connection.execute(
@@ -472,6 +541,8 @@ class SQLiteListingRepository(ListingRepository):
             source = MarketplaceSource(str(row["source"]))
         except ValueError as exc:
             raise PersistenceError("stored listing source is invalid") from exc
+        is_active_raw = row["is_active"]
+        is_active = True if is_active_raw is None else bool(int(is_active_raw))
         return StoredListing(
             id=int(row["id"]),
             key=ListingKey(source=source, external_id=str(row["external_id"])),
@@ -482,6 +553,10 @@ class SQLiteListingRepository(ListingRepository):
             product_condition=self._optional_stored_text(row["product_condition"]),
             first_seen_at=_datetime_from_text(row["first_seen_at"]),
             last_seen_at=_datetime_from_text(row["last_seen_at"]),
+            is_active=is_active,
+            price_min=_optional_decimal_from_text(row["price_min"]),
+            price_max=_optional_decimal_from_text(row["price_max"]),
+            price_display=self._optional_stored_text(row["price_display"]),
         )
 
     @staticmethod

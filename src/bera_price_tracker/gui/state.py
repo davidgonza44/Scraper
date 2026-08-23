@@ -87,6 +87,19 @@ class DetailItem(rx.Base):
     value: str = ""
 
 
+class AlibabaTrackedRow(rx.Base):
+    product_id: str = ""
+    title: str = ""
+    supplier_name: str = ""
+    current_price: str = ""
+    first_price: str = ""
+    last_updated: str = ""
+    variation: str = ""
+    history: str = ""
+    url: str = ""
+    snapshot_count: str = ""
+
+
 class AlibabaResultRow(rx.Base):
     title: str = ""
     price: str = ""
@@ -95,7 +108,12 @@ class AlibabaResultRow(rx.Base):
     supplier_country: str = ""
     url: str = ""
     image_url: str = ""
+    product_id: str = ""
+    price_min: str = ""
+    price_max: str = ""
+    currency: str = ""
     representative: str = ""
+    is_followed: bool = False
     is_outlier: bool = False
     score_value: int = 0
     score: str = ""
@@ -155,6 +173,8 @@ class TrackerState(rx.State):
     alibaba_ui_status: str = UI_INITIAL
     alibaba_warning: str = ""
     alibaba_stats_raw: dict[str, str] = {}
+    alibaba_tracked_rows: list[AlibabaTrackedRow] = []
+    alibaba_tracking_error: str = ""
     alibaba_sort: str = analysis.SORT_ORIGINAL
     alibaba_price_min: str = ""
     alibaba_price_max: str = ""
@@ -241,6 +261,7 @@ class TrackerState(rx.State):
 
     def show_alibaba_tab(self) -> None:
         self.marketplace_tab = "alibaba"
+        self.refresh_alibaba_tracking()
 
     def set_alibaba_query(self, value: str) -> None:
         self.alibaba_query = value
@@ -305,6 +326,10 @@ class TrackerState(rx.State):
                 url=str(item.get("url", "")),
                 image_url=str(item.get("image_url", "")),
                 representative=str(item.get("representative", "")),
+                product_id=str(item.get("product_id", "")),
+                price_min=str(item.get("price_min", "")),
+                price_max=str(item.get("price_max", "")),
+                currency=str(item.get("currency", "")),
                 is_outlier=bool(item.get("is_outlier", False)),
                 score_value=int(item.get("score_value", 0) or 0),
                 score=str(item.get("score", "")),
@@ -413,6 +438,76 @@ class TrackerState(rx.State):
         self._set_ranking_weights(DEFAULT_WEIGHTS)
         self.alibaba_chart_scope = analysis.CHART_SCOPE_ALL
 
+    def _apply_tracked_payload(self, rows: list[dict[str, str]]) -> None:
+        self.alibaba_tracked_rows = [
+            AlibabaTrackedRow(
+                product_id=str(item.get("product_id", "")),
+                title=str(item.get("title", "")),
+                supplier_name=str(item.get("supplier_name", "")),
+                current_price=str(item.get("current_price", "")),
+                first_price=str(item.get("first_price", "")),
+                last_updated=str(item.get("last_updated", "")),
+                variation=str(item.get("variation", "")),
+                history=str(item.get("history", "")),
+                url=str(item.get("url", "")),
+                snapshot_count=str(item.get("snapshot_count", "")),
+            )
+            for item in rows
+        ]
+
+    def refresh_alibaba_tracking(self) -> None:
+        try:
+            rows = services.list_alibaba_tracked()
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            self.alibaba_tracking_error = services.sanitize_alibaba_error(exc)
+            return
+        self.alibaba_tracking_error = ""
+        self._apply_tracked_payload(rows)
+
+    def follow_alibaba_product(self, product_id: str) -> None:
+        row = next((item for item in self.alibaba_results if item.product_id == product_id), None)
+        if row is None:
+            self.alibaba_tracking_error = "No se encontró el producto cargado."
+            return
+        payload = {
+            "product_id": row.product_id,
+            "title": row.title,
+            "url": row.url,
+            "representative": row.representative,
+            "price": row.price,
+            "price_min": row.price_min,
+            "price_max": row.price_max,
+            "currency": row.currency,
+            "supplier_name": row.supplier_name,
+            "supplier_country": row.supplier_country,
+        }
+        try:
+            services.follow_alibaba_price(payload, self.alibaba_query)
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            message = str(exc).strip() or services.sanitize_alibaba_error(exc)
+            self.alibaba_tracking_error = message
+            return
+        self.alibaba_tracking_error = ""
+        self.refresh_alibaba_tracking()
+
+    def unfollow_alibaba_product(self, product_id: str) -> None:
+        try:
+            services.unfollow_alibaba_price(product_id)
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            message = str(exc).strip() or services.sanitize_alibaba_error(exc)
+            self.alibaba_tracking_error = message
+            return
+        self.alibaba_tracking_error = ""
+        self.refresh_alibaba_tracking()
+
+    @rx.var
+    def alibaba_followed_ids(self) -> list[str]:
+        return [row.product_id for row in self.alibaba_tracked_rows if row.product_id]
+
+    @rx.var
+    def alibaba_has_tracked_rows(self) -> bool:
+        return len(self.alibaba_tracked_rows) > 0
+
     @rx.var
     def alibaba_sort_label(self) -> str:
         return ALIBABA_SORT_LABELS.get(self.alibaba_sort, "Relevancia original")
@@ -458,6 +553,18 @@ class TrackerState(rx.State):
                 reputation=self.alibaba_applied_reputation_weight,
             ),
         )
+
+    @rx.var
+    def alibaba_table_rows(self) -> list[AlibabaResultRow]:
+        followed = set(self.alibaba_followed_ids)
+        rows: list[AlibabaResultRow] = []
+        for row in self.alibaba_visible_rows:
+            is_followed = bool(row.product_id) and row.product_id in followed
+            if row.is_followed == is_followed:
+                rows.append(row)
+                continue
+            rows.append(row.copy(update={"is_followed": is_followed}))
+        return rows
 
     @rx.var
     def alibaba_counter(self) -> str:

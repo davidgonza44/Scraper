@@ -5,19 +5,26 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from bera_price_tracker.application import (
+    AlibabaFollowObservation,
+    AlibabaTrackedProduct,
     CollectionClock,
     CollectListings,
     DatabaseDiagnosticsRepository,
     DiagnoseEnvironment,
     DiagnosticReport,
+    FollowAlibabaPrice,
     GetListingHistory,
     GetListingStatistics,
     HybridProductClassifier,
     InspectLatestCollection,
+    ListAlibabaTracked,
     MarketplaceProvider,
+    RecordAlibabaPriceSnapshot,
     SearchAlibabaProducts,
+    UnfollowAlibabaPrice,
 )
 from bera_price_tracker.config import Settings
 from bera_price_tracker.domain import (
@@ -222,6 +229,70 @@ class ApplicationComposition:
                 else ()
             ),
         )
+
+    def follow_alibaba_price(
+        self,
+        observation: AlibabaFollowObservation,
+        *,
+        clock: CollectionClock | None = None,
+    ) -> AlibabaTrackedProduct:
+        """Persist one already-loaded Alibaba product. No marketplace HTTP."""
+
+        _logger.info(
+            "command=follow_alibaba product_id=%s database=%s started",
+            observation.product_id,
+            self.settings.database_path,
+        )
+        with self.repository_factory(self.settings) as repository:
+            service = FollowAlibabaPrice(
+                repository=repository,
+                clock=clock or self.collection_clock or (lambda: datetime.now(UTC)),
+            )
+            tracked = service.execute(observation)
+        _logger.info(
+            "command=follow_alibaba product_id=%s snapshots=%d completed",
+            tracked.product_id,
+            tracked.variation.snapshot_count,
+        )
+        return tracked
+
+    def record_alibaba_price_snapshot(
+        self,
+        observation: AlibabaFollowObservation,
+        *,
+        clock: CollectionClock | None = None,
+    ) -> AlibabaTrackedProduct:
+        """Append a later Alibaba snapshot from already-loaded data."""
+
+        with self.repository_factory(self.settings) as repository:
+            service = RecordAlibabaPriceSnapshot(
+                repository=repository,
+                clock=clock or self.collection_clock or (lambda: datetime.now(UTC)),
+            )
+            return service.execute(observation)
+
+    def unfollow_alibaba_price(self, product_id: str) -> AlibabaTrackedProduct:
+        """Deactivate Alibaba tracking without deleting history."""
+
+        _logger.info(
+            "command=unfollow_alibaba product_id=%s database=%s started",
+            product_id,
+            self.settings.database_path,
+        )
+        with self.repository_factory(self.settings) as repository:
+            tracked = UnfollowAlibabaPrice(repository=repository).execute(product_id)
+        _logger.info(
+            "command=unfollow_alibaba product_id=%s active=%s completed",
+            tracked.product_id,
+            tracked.is_active,
+        )
+        return tracked
+
+    def list_alibaba_tracked(self, *, active_only: bool = True) -> list[AlibabaTrackedProduct]:
+        """Read followed Alibaba products from local SQLite."""
+
+        with self.repository_factory(self.settings) as repository:
+            return ListAlibabaTracked(repository=repository).execute(active_only=active_only)
 
     def history(self, key: ListingKey) -> ListingHistory | None:
         """Read local SQLite history without constructing a marketplace provider."""

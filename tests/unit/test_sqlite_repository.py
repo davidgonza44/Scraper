@@ -77,7 +77,7 @@ def test_creates_parent_database_and_initial_schema(tmp_path: Path) -> None:
     with SQLiteListingRepository(database_path) as repository:
         assert database_path.is_file()
         assert repository.database_path == str(database_path)
-        assert repository.schema_version() == 2
+        assert repository.schema_version() == 3
 
     with sqlite3.connect(database_path) as connection:
         tables = {
@@ -105,10 +105,10 @@ def test_running_migrations_twice_is_idempotent(tmp_path: Path) -> None:
 
     SQLiteListingRepository(database_path).close()
     with SQLiteListingRepository(database_path) as repository:
-        assert repository.schema_version() == 2
+        assert repository.schema_version() == 3
 
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone() == (2,)
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone() == (3,)
 
 
 def test_migration_error_rolls_back_the_whole_pending_version(
@@ -118,8 +118,8 @@ def test_migration_error_rolls_back_the_whole_pending_version(
     database_path = tmp_path / "migration-rollback.db"
     SQLiteListingRepository(database_path).close()
     broken_migration = Migration(
-        version=3,
-        name="003_broken_for_test",
+        version=4,
+        name="004_broken_for_test",
         statements=("CREATE TABLE must_be_rolled_back (id INTEGER)", "NOT VALID SQL"),
     )
     monkeypatch.setattr(sqlite_repository, "MIGRATIONS", (*MIGRATIONS, broken_migration))
@@ -128,7 +128,7 @@ def test_migration_error_rolls_back_the_whole_pending_version(
         SQLiteListingRepository(database_path)
 
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone() == (2,)
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone() == (3,)
         assert connection.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE name = 'must_be_rolled_back'"
         ).fetchone() == (0,)
