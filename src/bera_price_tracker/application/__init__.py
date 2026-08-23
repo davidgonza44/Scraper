@@ -2,10 +2,12 @@
 
 from bera_price_tracker.application.alibaba_ranking import (
     AlibabaRanking,
+    RankingWeights,
     calculate_alibaba_ranking,
-    clamp_relevance_weight,
+    clamp_weight,
     format_ranking_display,
     format_ranking_tooltip,
+    validate_ranking_weights,
 )
 from bera_price_tracker.application.alibaba_relevance import (
     AlibabaListingRelevance,
@@ -98,6 +100,7 @@ __all__ = [
     "AlibabaListingRelevance",
     "AlibabaListingScore",
     "AlibabaRanking",
+    "RankingWeights",
     "SupplierReputationScore",
     "calculate_supplier_reputation",
     "format_reputation_display",
@@ -105,9 +108,10 @@ __all__ = [
     "calculate_alibaba_ranking",
     "calculate_listing_relevance",
     "calculate_listing_score",
-    "clamp_relevance_weight",
+    "clamp_weight",
     "format_ranking_display",
     "format_ranking_tooltip",
+    "validate_ranking_weights",
     "format_relevance_display",
     "relevance_label",
     "score_alibaba_relevance",

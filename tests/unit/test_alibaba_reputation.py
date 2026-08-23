@@ -237,7 +237,7 @@ def test_reputation_filter_hides_insufficient() -> None:
     assert [row["title"] for row in everyone] == ["ok", "low", "none"]
 
 
-def test_top_three_adds_reputation_without_reordering() -> None:
+def test_top_three_uses_general_ranking_and_shows_reputation() -> None:
     rows = analysis.apply_table_view(
         [
             {
@@ -259,9 +259,13 @@ def test_top_three_adds_reputation_without_reordering() -> None:
         ]
     )
     cards = analysis.top_result_cards(rows)
+    # first: 100*0.50 + 80*0.30 + 70*0.20 = 88.
+    # second (sin reputación, renormalizado): (80*50 + 90*30) / 80 = 83.75 -> 84.
     assert cards[0]["title"] == "first"
+    assert cards[0]["ranking"] == "Ranking 88"
+    assert cards[1]["ranking"] == "Ranking 84"
     assert cards[0]["reputation"] == "Reputación 70"
-    assert cards[1]["reputation"] == "Reputación —"
+    assert cards[1]["reputation"] == "Reputación: Datos insuficientes"
 
 
 def test_module_uses_decimal_and_avoids_trust_language() -> None:

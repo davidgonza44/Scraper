@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal, InvalidOperation
 
 import reflex as rx
 
 from bera_price_tracker.application.alibaba_ranking import (
+    DEFAULT_OPPORTUNITY_WEIGHT,
     DEFAULT_RELEVANCE_WEIGHT,
+    DEFAULT_REPUTATION_WEIGHT,
+    DEFAULT_WEIGHTS,
     PRESET_BALANCED,
     PRESET_MORE_OPPORTUNITY,
     PRESET_MORE_RELEVANT,
-    clamp_relevance_weight,
-    format_ranking_tooltip,
+    PRESET_MORE_REPUTATION,
+    RankingWeights,
+    clamp_weight,
+    validate_ranking_weights,
 )
 from bera_price_tracker.application.services import alibaba_credit_warning
 from bera_price_tracker.gui import analysis, services
@@ -50,7 +56,22 @@ ALIBABA_RANKING_PRESETS = {
     "Equilibrado": PRESET_BALANCED,
     "Más relevante": PRESET_MORE_RELEVANT,
     "Mejor oportunidad": PRESET_MORE_OPPORTUNITY,
+    "Más reputación": PRESET_MORE_REPUTATION,
 }
+
+
+def parse_weight_input(value: object, default: int) -> int:
+    """Local parsing for slider/input events. Falls back to ``default``."""
+
+    raw: object = value[0] if isinstance(value, list) and value else value
+    if isinstance(raw, str):
+        try:
+            raw = Decimal(raw.strip())
+        except (InvalidOperation, ValueError):
+            raw = default
+    elif isinstance(raw, float):
+        raw = Decimal(str(raw))
+    return clamp_weight(raw, default)
 
 
 def clamp_limit(value: int | str) -> int:
@@ -90,6 +111,8 @@ class AlibabaResultRow(rx.Base):
     ranking_value: int = 0
     ranking: str = ""
     ranking_low_match: bool = False
+    ranking_tooltip: str = ""
+    ranking_reputation_used: bool = False
     reputation_available: bool = False
     reputation_value: int = 0
     reputation: str = "—"
@@ -139,6 +162,11 @@ class TrackerState(rx.State):
     alibaba_min_relevance: int = 0
     alibaba_min_reputation: int = 0
     alibaba_relevance_weight: int = DEFAULT_RELEVANCE_WEIGHT
+    alibaba_opportunity_weight: int = DEFAULT_OPPORTUNITY_WEIGHT
+    alibaba_reputation_weight: int = DEFAULT_REPUTATION_WEIGHT
+    alibaba_applied_relevance_weight: int = DEFAULT_RELEVANCE_WEIGHT
+    alibaba_applied_opportunity_weight: int = DEFAULT_OPPORTUNITY_WEIGHT
+    alibaba_applied_reputation_weight: int = DEFAULT_REPUTATION_WEIGHT
     alibaba_chart_scope: str = analysis.CHART_SCOPE_ALL
     marketplace_tab: str = "facebook"
 
@@ -331,30 +359,49 @@ class TrackerState(rx.State):
     def set_alibaba_min_reputation(self, value: str) -> None:
         self.alibaba_min_reputation = ALIBABA_MIN_REPUTATION_BY_LABEL.get(value, 0)
 
-    def set_alibaba_relevance_weight(self, value: object) -> None:
-        from decimal import Decimal, InvalidOperation
+    def _apply_weights_if_valid(self) -> None:
+        error = validate_ranking_weights(
+            self.alibaba_relevance_weight,
+            self.alibaba_opportunity_weight,
+            self.alibaba_reputation_weight,
+        )
+        if not error:
+            self.alibaba_applied_relevance_weight = self.alibaba_relevance_weight
+            self.alibaba_applied_opportunity_weight = self.alibaba_opportunity_weight
+            self.alibaba_applied_reputation_weight = self.alibaba_reputation_weight
 
-        raw: object = value[0] if isinstance(value, list) and value else value
-        if isinstance(raw, str):
-            try:
-                raw = Decimal(raw.strip())
-            except (InvalidOperation, ValueError):
-                raw = DEFAULT_RELEVANCE_WEIGHT
-        elif isinstance(raw, float):
-            raw = Decimal(str(raw))
-        self.alibaba_relevance_weight = clamp_relevance_weight(raw)
+    def _set_ranking_weights(self, weights: RankingWeights) -> None:
+        self.alibaba_relevance_weight = weights.relevance
+        self.alibaba_opportunity_weight = weights.opportunity
+        self.alibaba_reputation_weight = weights.reputation
+        self._apply_weights_if_valid()
+
+    def set_alibaba_relevance_weight(self, value: object) -> None:
+        self.alibaba_relevance_weight = parse_weight_input(value, DEFAULT_RELEVANCE_WEIGHT)
+        self._apply_weights_if_valid()
+
+    def set_alibaba_opportunity_weight(self, value: object) -> None:
+        self.alibaba_opportunity_weight = parse_weight_input(value, DEFAULT_OPPORTUNITY_WEIGHT)
+        self._apply_weights_if_valid()
+
+    def set_alibaba_reputation_weight(self, value: object) -> None:
+        self.alibaba_reputation_weight = parse_weight_input(value, DEFAULT_REPUTATION_WEIGHT)
+        self._apply_weights_if_valid()
 
     def set_alibaba_ranking_preset(self, value: str) -> None:
-        self.alibaba_relevance_weight = ALIBABA_RANKING_PRESETS.get(value, DEFAULT_RELEVANCE_WEIGHT)
+        self._set_ranking_weights(ALIBABA_RANKING_PRESETS.get(value, DEFAULT_WEIGHTS))
 
     def apply_ranking_preset_balanced(self) -> None:
-        self.alibaba_relevance_weight = PRESET_BALANCED
+        self._set_ranking_weights(PRESET_BALANCED)
 
     def apply_ranking_preset_more_relevant(self) -> None:
-        self.alibaba_relevance_weight = PRESET_MORE_RELEVANT
+        self._set_ranking_weights(PRESET_MORE_RELEVANT)
 
     def apply_ranking_preset_more_opportunity(self) -> None:
-        self.alibaba_relevance_weight = PRESET_MORE_OPPORTUNITY
+        self._set_ranking_weights(PRESET_MORE_OPPORTUNITY)
+
+    def apply_ranking_preset_more_reputation(self) -> None:
+        self._set_ranking_weights(PRESET_MORE_REPUTATION)
 
     def clear_alibaba_filters(self) -> None:
         self.alibaba_sort = analysis.SORT_ORIGINAL
@@ -363,7 +410,7 @@ class TrackerState(rx.State):
         self.alibaba_hide_outliers = False
         self.alibaba_min_relevance = 0
         self.alibaba_min_reputation = 0
-        self.alibaba_relevance_weight = DEFAULT_RELEVANCE_WEIGHT
+        self._set_ranking_weights(DEFAULT_WEIGHTS)
         self.alibaba_chart_scope = analysis.CHART_SCOPE_ALL
 
     @rx.var
@@ -405,7 +452,11 @@ class TrackerState(rx.State):
             hide_outliers=self.alibaba_hide_outliers,
             min_relevance=self.alibaba_min_relevance,
             min_reputation=self.alibaba_min_reputation,
-            relevance_weight=self.alibaba_relevance_weight,
+            weights=RankingWeights(
+                relevance=self.alibaba_applied_relevance_weight,
+                opportunity=self.alibaba_applied_opportunity_weight,
+                reputation=self.alibaba_applied_reputation_weight,
+            ),
         )
 
     @rx.var
@@ -413,12 +464,24 @@ class TrackerState(rx.State):
         return analysis.showing_counter(len(self.alibaba_visible_rows), len(self.alibaba_results))
 
     @rx.var
-    def alibaba_opportunity_weight(self) -> int:
-        return 100 - clamp_relevance_weight(self.alibaba_relevance_weight)
+    def alibaba_weights_total(self) -> int:
+        return (
+            self.alibaba_relevance_weight
+            + self.alibaba_opportunity_weight
+            + self.alibaba_reputation_weight
+        )
 
     @rx.var
-    def alibaba_ranking_tooltip(self) -> str:
-        return format_ranking_tooltip(self.alibaba_relevance_weight)
+    def alibaba_weights_error(self) -> str:
+        return validate_ranking_weights(
+            self.alibaba_relevance_weight,
+            self.alibaba_opportunity_weight,
+            self.alibaba_reputation_weight,
+        )
+
+    @rx.var
+    def alibaba_weights_valid(self) -> bool:
+        return self.alibaba_weights_error == ""
 
     @rx.var
     def alibaba_top_results(self) -> list[dict[str, str]]:

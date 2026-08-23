@@ -167,7 +167,9 @@ def test_clear_filters_resets_state() -> None:
     assert state.alibaba_price_max == ""
     assert state.alibaba_hide_outliers is False
     assert state.alibaba_chart_scope == analysis.CHART_SCOPE_ALL
-    assert state.alibaba_relevance_weight == 60
+    assert state.alibaba_relevance_weight == 50
+    assert state.alibaba_opportunity_weight == 30
+    assert state.alibaba_reputation_weight == 20
 
 
 def test_showing_counter_text() -> None:

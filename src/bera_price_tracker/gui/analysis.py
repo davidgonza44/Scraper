@@ -8,11 +8,14 @@ from math import isqrt
 from typing import cast
 
 from bera_price_tracker.application.alibaba_ranking import (
-    DEFAULT_RELEVANCE_WEIGHT,
+    DEFAULT_WEIGHTS,
+    RankingWeights,
     calculate_alibaba_ranking,
     format_ranking_display,
+    format_ranking_tooltip,
     is_low_match,
 )
+from bera_price_tracker.application.alibaba_reputation import LABEL_INSUFFICIENT
 
 SORT_ORIGINAL = "original"
 SORT_PRICE_ASC = "price_asc"
@@ -153,13 +156,22 @@ def _copy_with_fields[RowT](row: RowT, fields: dict[str, object]) -> RowT:
 
 
 def annotate_ranking[RowT](
-    rows: Sequence[RowT], relevance_weight: int = DEFAULT_RELEVANCE_WEIGHT
+    rows: Sequence[RowT], weights: RankingWeights = DEFAULT_WEIGHTS
 ) -> list[RowT]:
-    """Attach ranking fields to copies. The original sequence is never mutated."""
+    """Attach ranking fields to copies. The original sequence is never mutated.
+
+    Reputation joins the blend only when the row has a valid reputation score;
+    otherwise its weight is redistributed (absence is not a score of 0).
+    """
 
     annotated: list[RowT] = []
     for row in rows:
-        result = calculate_alibaba_ranking(row_score(row), row_relevance(row), relevance_weight)
+        result = calculate_alibaba_ranking(
+            row_score(row),
+            row_relevance(row),
+            row_reputation(row),
+            weights,
+        )
         annotated.append(
             _copy_with_fields(
                 row,
@@ -167,6 +179,8 @@ def annotate_ranking[RowT](
                     "ranking_value": result.ranking_score,
                     "ranking": format_ranking_display(result.ranking_score),
                     "ranking_low_match": is_low_match(row_relevance(row)),
+                    "ranking_tooltip": format_ranking_tooltip(result),
+                    "ranking_reputation_used": result.reputation_used,
                 },
             )
         )
@@ -191,7 +205,7 @@ def top_result_cards(rows: Sequence[object], *, limit: int = 3) -> list[dict[str
                 "reputation": (
                     f"Reputación {row_reputation(row)}"
                     if row_reputation(row) is not None
-                    else "Reputación —"
+                    else f"Reputación: {LABEL_INSUFFICIENT}"
                 ),
             }
         )
@@ -216,11 +230,11 @@ def apply_table_view[RowT](
     hide_outliers: bool = False,
     min_relevance: int = 0,
     min_reputation: int = 0,
-    relevance_weight: int = DEFAULT_RELEVANCE_WEIGHT,
+    weights: RankingWeights = DEFAULT_WEIGHTS,
 ) -> list[RowT]:
     """Derive the visible table rows. The original sequence is never mutated."""
 
-    visible = annotate_ranking(rows, relevance_weight)
+    visible = annotate_ranking(rows, weights)
     if min_relevance > 0:
         visible = [row for row in visible if row_relevance(row) >= min_relevance]
     if min_reputation > 0:

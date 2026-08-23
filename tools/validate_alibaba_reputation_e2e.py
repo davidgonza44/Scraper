@@ -641,13 +641,17 @@ def main() -> int:  # noqa: PLR0915
         reverse=True,
     )
     check(
-        "Top 3 ordenado por Ranking General (no reputación)",
+        "Top 3 ordenado por el Ranking General (con reputación renormalizada)",
         rankings_in_cards == all_rankings[: len(rankings_in_cards)]
         and any(value > 0 for value in all_rankings),
     )
     check(
-        "cards muestran 'Reputación NN' o 'Reputación —'",
-        all(card["reputation"].startswith("Reputación ") for card in cards),
+        "cards muestran 'Reputación NN' o 'Reputación: Datos insuficientes'",
+        all(
+            card["reputation"].startswith("Reputación ")
+            or card["reputation"] == "Reputación: Datos insuficientes"
+            for card in cards
+        ),
     )
 
     print("\n=== 15. SCORES EXISTENTES INTACTOS ===")
@@ -663,12 +667,13 @@ def main() -> int:  # noqa: PLR0915
         score_v = int(cast(int, row_field(row, "score_value")) or 0)
         relevance_v = int(cast(int, row_field(row, "relevance_value")) or 0)
         ranking_v = int(cast(int, row_field(row, "ranking_value")) or 0)
-        expected = calculate_alibaba_ranking(score_v, relevance_v, 60).ranking_score
+        reputation_v = row_reputation_or_none(row)
+        expected = calculate_alibaba_ranking(score_v, relevance_v, reputation_v).ranking_score
         if ranking_v != expected:
             ranking_check = False
     check("opportunity_score presente y en rango", scores_ok)
     check("relevance_score presente y en rango", relevance_ok)
-    check("ranking = 60% relevancia + 40% oportunidad", ranking_check)
+    check("ranking = 50/30/20 (renormalizado si falta reputación)", ranking_check)
 
     print("\n=== 16. SEGURIDAD ===")
     leaked = [

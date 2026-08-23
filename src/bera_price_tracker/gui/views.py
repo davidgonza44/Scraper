@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import reflex as rx
 
 from bera_price_tracker.gui import styles
@@ -701,9 +703,12 @@ RELEVANCE_NOTE = (
 )
 
 RANKING_NOTE = (
-    "El ranking combina relevancia y oportunidad usando los pesos seleccionados. "
-    "No representa una evaluación de reputación o confiabilidad del proveedor."
+    "El ranking combina relevancia, oportunidad y reputación utilizando los pesos "
+    "seleccionados. Si no hay suficientes datos de reputación, sus pesos se "
+    "redistribuyen entre las métricas disponibles."
 )
+
+WEIGHTS_TOTAL_NOTE = "Los pesos se aplican cuando el total es 100%."
 
 REPUTATION_NOTE = (
     "Puntaje experimental basado en antigüedad y señales públicas de servicio "
@@ -777,37 +782,37 @@ def _alibaba_score_cell(row: rx.Var) -> rx.Component:
     )
 
 
+def _alibaba_weight_slider(label: str, value: rx.Var, on_change: rx.EventHandler) -> rx.Component:
+    return rx.vstack(
+        rx.text(
+            label + ": " + value.to_string() + "%",
+            size="2",
+            color=styles.TEXT_PRIMARY,
+        ),
+        rx.slider(
+            min=0,
+            max=100,
+            step=1,
+            value=cast("list[int]", [value]),
+            on_change=on_change,
+            width="100%",
+            max_width="300px",
+        ),
+        spacing="1",
+        align_items="start",
+        min_width="220px",
+        flex="1",
+    )
+
+
 def _alibaba_ranking_weights() -> rx.Component:
     return rx.box(
         rx.vstack(
             rx.text(
-                "Prioridad de relevancia",
+                "Pesos del ranking",
                 size="1",
                 color=styles.TEXT_SECONDARY,
                 weight="medium",
-            ),
-            rx.hstack(
-                rx.text(
-                    "Relevancia: " + TrackerState.alibaba_relevance_weight.to_string() + "%",
-                    size="2",
-                    color=styles.TEXT_PRIMARY,
-                ),
-                rx.text(
-                    "Oportunidad: " + TrackerState.alibaba_opportunity_weight.to_string() + "%",
-                    size="2",
-                    color=styles.TEXT_PRIMARY,
-                ),
-                spacing="4",
-                wrap="wrap",
-            ),
-            rx.slider(
-                min=0,
-                max=100,
-                step=1,
-                value=[TrackerState.alibaba_relevance_weight],
-                on_change=TrackerState.set_alibaba_relevance_weight,
-                width="100%",
-                max_width="360px",
             ),
             rx.hstack(
                 rx.button(
@@ -828,9 +833,51 @@ def _alibaba_ranking_weights() -> rx.Component:
                     size="1",
                     variant="outline",
                 ),
+                rx.button(
+                    "Más reputación",
+                    on_click=TrackerState.apply_ranking_preset_more_reputation,
+                    size="1",
+                    variant="outline",
+                ),
                 spacing="2",
                 wrap="wrap",
             ),
+            rx.hstack(
+                _alibaba_weight_slider(
+                    "Relevancia",
+                    TrackerState.alibaba_relevance_weight,
+                    TrackerState.set_alibaba_relevance_weight,
+                ),
+                _alibaba_weight_slider(
+                    "Oportunidad",
+                    TrackerState.alibaba_opportunity_weight,
+                    TrackerState.set_alibaba_opportunity_weight,
+                ),
+                _alibaba_weight_slider(
+                    "Reputación",
+                    TrackerState.alibaba_reputation_weight,
+                    TrackerState.set_alibaba_reputation_weight,
+                ),
+                spacing="4",
+                width="100%",
+                wrap="wrap",
+            ),
+            rx.text(
+                "Total: " + TrackerState.alibaba_weights_total.to_string() + "%",
+                size="2",
+                weight="medium",
+                color=rx.cond(TrackerState.alibaba_weights_valid, GREEN, BRICK),
+            ),
+            rx.cond(
+                TrackerState.alibaba_weights_error != "",
+                rx.text(
+                    TrackerState.alibaba_weights_error
+                    + " Se mantiene la última combinación válida.",
+                    size="1",
+                    color=BRICK,
+                ),
+            ),
+            rx.text(WEIGHTS_TOTAL_NOTE, size="1", color=MUTED),
             spacing="2",
             width="100%",
             align_items="start",
@@ -902,7 +949,7 @@ def _alibaba_ranking_cell(row: rx.Var) -> rx.Component:
             spacing="1",
             align_items="start",
         ),
-        content=TrackerState.alibaba_ranking_tooltip,
+        content=row["ranking_tooltip"],
     )
 
 
