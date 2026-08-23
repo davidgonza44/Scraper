@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from decimal import Decimal, InvalidOperation
 
 import reflex as rx
@@ -98,6 +99,7 @@ class AlibabaTrackedRow(rx.Base):
     history: str = ""
     url: str = ""
     snapshot_count: str = ""
+    selected: bool = False
 
 
 class AlibabaResultRow(rx.Base):
@@ -175,6 +177,14 @@ class TrackerState(rx.State):
     alibaba_stats_raw: dict[str, str] = {}
     alibaba_tracked_rows: list[AlibabaTrackedRow] = []
     alibaba_tracking_error: str = ""
+    alibaba_refresh_selected_ids: list[str] = []
+    alibaba_refresh_pending_ids: list[str] = []
+    alibaba_refresh_operation_id: str = ""
+    alibaba_refresh_confirm_open: bool = False
+    alibaba_refresh_confirm_intro: str = ""
+    alibaba_refresh_confirm_count: str = ""
+    alibaba_refresh_is_loading: bool = False
+    alibaba_refresh_summary: dict[str, str] = {}
     alibaba_sort: str = analysis.SORT_ORIGINAL
     alibaba_price_min: str = ""
     alibaba_price_max: str = ""
@@ -499,6 +509,89 @@ class TrackerState(rx.State):
             return
         self.alibaba_tracking_error = ""
         self.refresh_alibaba_tracking()
+
+    def toggle_alibaba_refresh_selection(self, product_id: str) -> None:
+        selected = services.clamp_alibaba_refresh_selection(self.alibaba_refresh_selected_ids)
+        if product_id in selected:
+            selected = [item for item in selected if item != product_id]
+        else:
+            selected = services.clamp_alibaba_refresh_selection([*selected, product_id])
+        self.alibaba_refresh_selected_ids = selected
+
+    def select_visible_alibaba_tracked(self) -> None:
+        visible = [row.product_id for row in self.alibaba_tracked_rows if row.product_id]
+        self.alibaba_refresh_selected_ids = services.clamp_alibaba_refresh_selection(visible)
+
+    def _open_alibaba_refresh_confirm(self, product_ids: list[str]) -> None:
+        selected = services.clamp_alibaba_refresh_selection(product_ids)
+        if not selected:
+            self.alibaba_tracking_error = services.ALIBABA_REFRESH_EMPTY_SELECTION
+            return
+        try:
+            confirmation = services.alibaba_refresh_confirmation(len(selected))
+        except ValueError as error:
+            self.alibaba_tracking_error = str(error)
+            return
+        self.alibaba_tracking_error = ""
+        self.alibaba_refresh_pending_ids = selected
+        self.alibaba_refresh_operation_id = uuid.uuid4().hex
+        self.alibaba_refresh_confirm_intro = confirmation["intro"]
+        self.alibaba_refresh_confirm_count = confirmation["selected"]
+        self.alibaba_refresh_confirm_open = True
+
+    def request_alibaba_refresh_selected(self) -> None:
+        self._open_alibaba_refresh_confirm(list(self.alibaba_refresh_selected_ids))
+
+    def request_alibaba_refresh_one(self, product_id: str) -> None:
+        self._open_alibaba_refresh_confirm([product_id])
+
+    def cancel_alibaba_refresh(self) -> None:
+        self.alibaba_refresh_confirm_open = False
+        self.alibaba_refresh_pending_ids = []
+
+    @rx.event(background=True)
+    async def confirm_alibaba_refresh(self) -> None:
+        async with self:
+            if self.alibaba_refresh_is_loading:
+                return
+            product_ids = list(self.alibaba_refresh_pending_ids)
+            operation_id = self.alibaba_refresh_operation_id
+            self.alibaba_refresh_is_loading = True
+            self.alibaba_refresh_confirm_open = False
+            self.alibaba_tracking_error = ""
+        try:
+            summary = await asyncio.to_thread(
+                services.refresh_alibaba_tracked,
+                product_ids,
+                operation_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            message = str(exc).strip() or services.sanitize_alibaba_error(exc)
+            async with self:
+                self.alibaba_refresh_is_loading = False
+                self.alibaba_tracking_error = message
+            return
+        async with self:
+            self.alibaba_refresh_is_loading = False
+            self.alibaba_refresh_summary = dict(summary)
+            self.alibaba_refresh_pending_ids = []
+            self.refresh_alibaba_tracking()
+
+    @rx.var
+    def alibaba_tracked_view_rows(self) -> list[AlibabaTrackedRow]:
+        selected = set(self.alibaba_refresh_selected_ids)
+        rows: list[AlibabaTrackedRow] = []
+        for row in self.alibaba_tracked_rows:
+            is_selected = bool(row.product_id) and row.product_id in selected
+            if row.selected == is_selected:
+                rows.append(row)
+                continue
+            rows.append(row.copy(update={"selected": is_selected}))
+        return rows
+
+    @rx.var
+    def alibaba_refresh_has_summary(self) -> bool:
+        return bool(self.alibaba_refresh_summary)
 
     @rx.var
     def alibaba_followed_ids(self) -> list[str]:

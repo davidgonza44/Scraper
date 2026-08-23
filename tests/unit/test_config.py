@@ -65,6 +65,9 @@ def test_settings_are_read_from_a_mapping_without_loading_files() -> None:
     assert settings.facebook_city == "caracas"
     assert settings.facebook_record_limit == 4
     assert settings.apify_api_token == "apify-secret"
+    assert settings.apify_alibaba_refresh_actor == "xtracto/alibaba-product-scraper"
+    assert settings.apify_alibaba_refresh_retries == 1
+    assert settings.apify_alibaba_refresh_concurrency == 3
     assert "bright-secret" not in repr(settings)
     assert "apify-secret" not in repr(settings)
 

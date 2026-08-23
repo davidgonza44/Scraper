@@ -1067,11 +1067,113 @@ def _alibaba_tracking() -> rx.Component:
             ),
         ),
         rx.cond(
+            TrackerState.alibaba_refresh_confirm_open,
+            rx.box(
+                rx.text(
+                    TrackerState.alibaba_refresh_confirm_intro,
+                    size="2",
+                    color=styles.TEXT_PRIMARY,
+                ),
+                rx.text(
+                    "Productos seleccionados: " + TrackerState.alibaba_refresh_confirm_count,
+                    size="2",
+                    color=styles.TEXT_PRIMARY,
+                    padding_top="6px",
+                ),
+                rx.text("Actor runs previstos: 1", size="2", color=styles.TEXT_PRIMARY),
+                rx.hstack(
+                    rx.button(
+                        "Cancelar",
+                        on_click=TrackerState.cancel_alibaba_refresh,
+                        size="1",
+                        variant="outline",
+                    ),
+                    rx.button(
+                        "Actualizar",
+                        on_click=TrackerState.confirm_alibaba_refresh,
+                        size="1",
+                    ),
+                    spacing="2",
+                    padding_top="8px",
+                ),
+                padding="12px 14px",
+                margin_top="10px",
+                background_color=PAPER,
+                border=f"1px solid {RULE}",
+                width="100%",
+            ),
+        ),
+        rx.cond(
+            TrackerState.alibaba_refresh_has_summary,
+            rx.box(
+                rx.text("Resultado de la actualización", size="2", weight="medium"),
+                rx.text(
+                    "Solicitados: " + TrackerState.alibaba_refresh_summary["requested"],
+                    size="1",
+                    color=MUTED,
+                ),
+                rx.text(
+                    "Precio cambió: " + TrackerState.alibaba_refresh_summary["updated"],
+                    size="1",
+                    color=MUTED,
+                ),
+                rx.text(
+                    "Sin cambio: " + TrackerState.alibaba_refresh_summary["unchanged"],
+                    size="1",
+                    color=MUTED,
+                ),
+                rx.text(
+                    "No encontrados: " + TrackerState.alibaba_refresh_summary["not_found"],
+                    size="1",
+                    color=MUTED,
+                ),
+                rx.text(
+                    "Identity mismatch: "
+                    + TrackerState.alibaba_refresh_summary["identity_mismatch"],
+                    size="1",
+                    color=MUTED,
+                ),
+                rx.text(
+                    "Precio inválido: " + TrackerState.alibaba_refresh_summary["invalid_price"],
+                    size="1",
+                    color=MUTED,
+                ),
+                rx.text(
+                    "Errores: " + TrackerState.alibaba_refresh_summary["failed"],
+                    size="1",
+                    color=MUTED,
+                ),
+                padding_top="10px",
+            ),
+        ),
+        rx.cond(
             TrackerState.alibaba_has_tracked_rows,
             rx.vstack(
+                rx.hstack(
+                    rx.button(
+                        "Seleccionar todos visibles",
+                        on_click=TrackerState.select_visible_alibaba_tracked,
+                        size="1",
+                        variant="outline",
+                    ),
+                    rx.button(
+                        "Actualizar seleccionados",
+                        on_click=TrackerState.request_alibaba_refresh_selected,
+                        size="1",
+                        variant="outline",
+                    ),
+                    spacing="2",
+                    padding_top="8px",
+                ),
                 rx.foreach(
-                    TrackerState.alibaba_tracked_rows,
+                    TrackerState.alibaba_tracked_view_rows,
                     lambda item: rx.box(
+                        rx.checkbox(
+                            checked=item["selected"],
+                            on_change=lambda _checked: (
+                                TrackerState.toggle_alibaba_refresh_selection(item["product_id"])
+                            ),
+                        ),
                         rx.text(
                             item["title"], size="2", weight="medium", color=styles.TEXT_PRIMARY
                         ),
@@ -1097,11 +1199,22 @@ def _alibaba_tracking() -> rx.Component:
                         ),
                         rx.text("Historial", size="1", weight="medium", color=styles.TEXT_PRIMARY),
                         rx.text(item["history"], size="1", color=MUTED, white_space="pre-line"),
-                        rx.button(
-                            "Dejar de seguir",
-                            on_click=TrackerState.unfollow_alibaba_product(item["product_id"]),
-                            size="1",
-                            variant="outline",
+                        rx.hstack(
+                            rx.button(
+                                "Actualizar",
+                                on_click=TrackerState.request_alibaba_refresh_one(
+                                    item["product_id"]
+                                ),
+                                size="1",
+                                variant="outline",
+                            ),
+                            rx.button(
+                                "Dejar de seguir",
+                                on_click=TrackerState.unfollow_alibaba_product(item["product_id"]),
+                                size="1",
+                                variant="outline",
+                            ),
+                            spacing="2",
                         ),
                         padding="12px 14px",
                         background_color=CARD,

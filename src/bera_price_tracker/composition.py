@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from bera_price_tracker.application import (
     AlibabaFollowObservation,
+    AlibabaProductRefreshProvider,
+    AlibabaRefreshSummary,
     AlibabaTrackedProduct,
     CollectionClock,
     CollectListings,
@@ -23,6 +25,7 @@ from bera_price_tracker.application import (
     ListAlibabaTracked,
     MarketplaceProvider,
     RecordAlibabaPriceSnapshot,
+    RefreshTrackedAlibabaProducts,
     SearchAlibabaProducts,
     UnfollowAlibabaPrice,
 )
@@ -52,6 +55,9 @@ from bera_price_tracker.infrastructure.providers import (
     MercadoLibreProvider,
 )
 from bera_price_tracker.infrastructure.providers.alibaba import ApifyAlibabaClient
+from bera_price_tracker.infrastructure.providers.alibaba_refresh import (
+    ApifyAlibabaProductRefreshClient,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -122,6 +128,15 @@ def _facebook_marketplace_provider(settings: Settings) -> MarketplaceProvider:
         classifier=classifier,
         city=settings.facebook_city,
         record_limit=settings.facebook_record_limit,
+    )
+
+
+def _alibaba_refresh_provider(settings: Settings) -> AlibabaProductRefreshProvider:
+    return ApifyAlibabaProductRefreshClient(
+        _api_token=settings.apify_api_token,
+        actor_id=settings.apify_alibaba_refresh_actor,
+        max_request_retries=settings.apify_alibaba_refresh_retries,
+        max_concurrency=settings.apify_alibaba_refresh_concurrency,
     )
 
 
@@ -293,6 +308,36 @@ class ApplicationComposition:
 
         with self.repository_factory(self.settings) as repository:
             return ListAlibabaTracked(repository=repository).execute(active_only=active_only)
+
+    def refresh_alibaba_products(
+        self,
+        product_ids: Sequence[str],
+        *,
+        operation_id: str,
+        clock: CollectionClock | None = None,
+        refresh_provider: AlibabaProductRefreshProvider | None = None,
+    ) -> AlibabaRefreshSummary:
+        """Refresh selected followed products in one product-detail batch."""
+
+        provider = refresh_provider or _alibaba_refresh_provider(self.settings)
+        _logger.info(
+            "command=refresh_alibaba count=%d database=%s started",
+            len(product_ids),
+            self.settings.database_path,
+        )
+        with self.repository_factory(self.settings) as repository:
+            summary = RefreshTrackedAlibabaProducts(
+                repository=repository,
+                provider=provider,
+                clock=clock or self.collection_clock or (lambda: datetime.now(UTC)),
+            ).execute(product_ids, operation_id=operation_id)
+        _logger.info(
+            "command=refresh_alibaba requested=%d updated=%d unchanged=%d completed",
+            summary.requested,
+            summary.updated,
+            summary.unchanged,
+        )
+        return summary
 
     def history(self, key: ListingKey) -> ListingHistory | None:
         """Read local SQLite history without constructing a marketplace provider."""

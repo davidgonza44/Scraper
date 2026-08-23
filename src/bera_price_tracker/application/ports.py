@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from bera_price_tracker.domain import (
     CollectionBatch,
@@ -55,6 +56,16 @@ class AlibabaSearchProvider(Protocol):
 
     def search(self, query: str, limit: int) -> list[AlibabaProduct]:
         """Return mapped Alibaba products for one query."""
+
+        ...
+
+
+@runtime_checkable
+class AlibabaProductRefreshProvider(Protocol):
+    """Product-detail refresh. Must not reuse keyword search."""
+
+    def refresh_products(self, products: Sequence[Any]) -> Any:
+        """Refresh the given tracked products in one batch."""
 
         ...
 

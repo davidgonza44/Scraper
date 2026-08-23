@@ -28,6 +28,11 @@ DEFAULT_BRIGHTDATA_POLL_TIMEOUT_SECONDS = 900.0
 DEFAULT_FACEBOOK_CITY = "caracas"
 DEFAULT_FACEBOOK_BACKEND = "apify"
 DEFAULT_APIFY_ALIBABA_ACTOR = "scraper-engine/alibaba-scraper"
+DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR = "xtracto/alibaba-product-scraper"
+DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES = 1
+DEFAULT_APIFY_ALIBABA_REFRESH_CONCURRENCY = 3
+MAX_APIFY_ALIBABA_REFRESH_RETRIES = 5
+MAX_APIFY_ALIBABA_REFRESH_CONCURRENCY = 3
 DEFAULT_FACEBOOK_RECORD_LIMIT = 5
 MAX_FACEBOOK_RECORD_LIMIT = 5
 
@@ -181,6 +186,9 @@ class Settings:
     facebook_backend: str = DEFAULT_FACEBOOK_BACKEND
     apify_api_token: str | None = field(default=None, repr=False)
     apify_alibaba_actor: str = DEFAULT_APIFY_ALIBABA_ACTOR
+    apify_alibaba_refresh_actor: str = DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR
+    apify_alibaba_refresh_retries: int = DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES
+    apify_alibaba_refresh_concurrency: int = DEFAULT_APIFY_ALIBABA_REFRESH_CONCURRENCY
 
     def __post_init__(self) -> None:
         level = self.log_level.strip().upper()
@@ -285,6 +293,28 @@ class Settings:
         if not actor:
             raise ValueError("apify_alibaba_actor must not be blank")
         object.__setattr__(self, "apify_alibaba_actor", actor)
+        refresh_actor = self.apify_alibaba_refresh_actor.strip()
+        if not refresh_actor:
+            raise ValueError("apify_alibaba_refresh_actor must not be blank")
+        object.__setattr__(self, "apify_alibaba_refresh_actor", refresh_actor)
+        if isinstance(self.apify_alibaba_refresh_retries, bool) or not isinstance(
+            self.apify_alibaba_refresh_retries, int
+        ):
+            raise TypeError("apify_alibaba_refresh_retries must be an integer")
+        if not 0 <= self.apify_alibaba_refresh_retries <= MAX_APIFY_ALIBABA_REFRESH_RETRIES:
+            raise ValueError(
+                "apify_alibaba_refresh_retries must be between 0 and "
+                f"{MAX_APIFY_ALIBABA_REFRESH_RETRIES}"
+            )
+        if isinstance(self.apify_alibaba_refresh_concurrency, bool) or not isinstance(
+            self.apify_alibaba_refresh_concurrency, int
+        ):
+            raise TypeError("apify_alibaba_refresh_concurrency must be an integer")
+        if not 1 <= self.apify_alibaba_refresh_concurrency <= MAX_APIFY_ALIBABA_REFRESH_CONCURRENCY:
+            raise ValueError(
+                "apify_alibaba_refresh_concurrency must be between 1 and "
+                f"{MAX_APIFY_ALIBABA_REFRESH_CONCURRENCY}"
+            )
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -363,5 +393,19 @@ class Settings:
             apify_alibaba_actor=values.get(
                 "BERA_TRACKER_APIFY_ALIBABA_ACTOR",
                 DEFAULT_APIFY_ALIBABA_ACTOR,
+            ),
+            apify_alibaba_refresh_actor=values.get(
+                "BERA_TRACKER_APIFY_ALIBABA_REFRESH_ACTOR",
+                DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR,
+            ),
+            apify_alibaba_refresh_retries=_integer_value(
+                values,
+                "BERA_TRACKER_APIFY_ALIBABA_REFRESH_RETRIES",
+                DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES,
+            ),
+            apify_alibaba_refresh_concurrency=_integer_value(
+                values,
+                "BERA_TRACKER_APIFY_ALIBABA_REFRESH_CONCURRENCY",
+                DEFAULT_APIFY_ALIBABA_REFRESH_CONCURRENCY,
             ),
         )

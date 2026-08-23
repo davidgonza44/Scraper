@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
 from typing import Any
@@ -541,3 +541,79 @@ def list_alibaba_tracked(
         tracked_product_to_row(item)
         for item in service.list_alibaba_tracked(active_only=active_only)
     ]
+
+
+ALIBABA_REFRESH_CONFIRM_INTRO = (
+    "Vas a consultar {count} productos en Alibaba mediante Apify. Esto puede consumir créditos."
+)
+ALIBABA_REFRESH_EMPTY_SELECTION = "Selecciona al menos un producto para actualizar."
+
+
+def clamp_alibaba_refresh_selection(
+    product_ids: Sequence[str],
+    *,
+    limit: int = 50,
+) -> list[str]:
+    from bera_price_tracker.application.alibaba_refresh import MAX_ALIBABA_REFRESH_BATCH
+
+    cap = MAX_ALIBABA_REFRESH_BATCH if limit > MAX_ALIBABA_REFRESH_BATCH else limit
+    unique: list[str] = []
+    seen: set[str] = set()
+    for raw in product_ids:
+        if not isinstance(raw, str):
+            continue
+        product_id = raw.strip()
+        if not product_id or product_id in seen:
+            continue
+        unique.append(product_id)
+        seen.add(product_id)
+        if len(unique) >= cap:
+            break
+    return unique
+
+
+def alibaba_refresh_confirmation(count: int) -> dict[str, str]:
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        raise ValueError(ALIBABA_REFRESH_EMPTY_SELECTION)
+    from bera_price_tracker.application.alibaba_refresh import MAX_ALIBABA_REFRESH_BATCH
+
+    if count > MAX_ALIBABA_REFRESH_BATCH:
+        raise ValueError("No se pueden actualizar más de 50 productos en una sola operación.")
+    return {
+        "intro": ALIBABA_REFRESH_CONFIRM_INTRO.format(count=count),
+        "selected": str(count),
+        "predicted_runs": "1",
+    }
+
+
+def refresh_summary_to_row(summary: Any) -> dict[str, str]:
+    return {
+        "requested": str(getattr(summary, "requested", 0)),
+        "updated": str(getattr(summary, "updated", 0)),
+        "unchanged": str(getattr(summary, "unchanged", 0)),
+        "not_found": str(getattr(summary, "not_found", 0)),
+        "identity_mismatch": str(getattr(summary, "identity_mismatch", 0)),
+        "invalid_price": str(getattr(summary, "invalid_price", 0)),
+        "failed": str(getattr(summary, "failed", 0)),
+        "predicted_runs": str(getattr(summary, "predicted_runs", 1)),
+    }
+
+
+def refresh_alibaba_tracked(
+    product_ids: Sequence[str],
+    operation_id: str,
+    *,
+    settings: Settings | None = None,
+    clock: Any | None = None,
+    composition: Any | None = None,
+    refresh_provider: Any | None = None,
+) -> dict[str, str]:
+    resolved = settings if settings is not None else Settings.from_env()
+    service = composition if composition is not None else build_composition(resolved)
+    summary = service.refresh_alibaba_products(
+        product_ids,
+        operation_id=operation_id,
+        clock=clock,
+        refresh_provider=refresh_provider,
+    )
+    return refresh_summary_to_row(summary)
