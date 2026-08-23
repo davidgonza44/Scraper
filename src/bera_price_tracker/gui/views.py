@@ -1183,15 +1183,40 @@ def _alibaba_tracking() -> rx.Component:
                             color=MUTED,
                         ),
                         rx.text(
-                            "Precio actual conocido: " + item["current_price"],
+                            "Último precio: " + item["last_price"],
                             size="2",
                             color=BRICK,
                             weight="medium",
                         ),
-                        rx.text(
-                            "Precio observado al seguir: " + item["first_price"],
-                            size="1",
-                            color=MUTED,
+                        rx.cond(
+                            item["published_range"] != "",
+                            rx.text(
+                                "Rango publicado: " + item["published_range"],
+                                size="1",
+                                color=MUTED,
+                            ),
+                        ),
+                        rx.cond(
+                            item["first_price_tag"] != "",
+                            rx.tooltip(
+                                rx.text(
+                                    "Precio observado al seguir: "
+                                    + item["first_price"]
+                                    + " · Discovery",
+                                    size="1",
+                                    color=MUTED,
+                                ),
+                                content=(
+                                    "Este precio proviene de la búsqueda inicial y puede "
+                                    "representar un rango. Las variaciones comienzan cuando se "
+                                    "obtiene un precio comparable mediante seguimiento."
+                                ),
+                            ),
+                            rx.text(
+                                "Precio observado al seguir: " + item["first_price"],
+                                size="1",
+                                color=MUTED,
+                            ),
                         ),
                         rx.text(
                             "Baseline de seguimiento: " + item["baseline"],
@@ -1203,10 +1228,27 @@ def _alibaba_tracking() -> rx.Component:
                             size="1",
                             color=MUTED,
                         ),
-                        rx.text(
-                            "Variación: " + item["variation"], size="1", color=styles.TEXT_PRIMARY
+                        rx.cond(
+                            item["variation"] == "—",
+                            rx.tooltip(
+                                rx.text("Variación: —", size="1", color=styles.TEXT_PRIMARY),
+                                content=(
+                                    "Se necesita una segunda comprobación comparable para "
+                                    "calcular la variación."
+                                ),
+                            ),
+                            rx.text(
+                                "Variación: " + item["variation"],
+                                size="1",
+                                color=styles.TEXT_PRIMARY,
+                            ),
                         ),
-                        rx.text("Historial", size="1", weight="medium", color=styles.TEXT_PRIMARY),
+                        rx.text(
+                            "Historial (" + item["snapshot_count"] + " snapshots)",
+                            size="1",
+                            weight="medium",
+                            color=styles.TEXT_PRIMARY,
+                        ),
                         rx.text(item["history"], size="1", color=MUTED, white_space="pre-line"),
                         rx.hstack(
                             rx.button(

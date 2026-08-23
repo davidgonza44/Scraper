@@ -732,6 +732,54 @@ def test_gui_refresh_uses_application_service(tmp_path: Path) -> None:
     assert row["predicted_runs"] == "1"
 
 
+def test_gui_row_shows_baseline_range_and_provenance_tags(tmp_path: Path) -> None:
+    """The Seguimiento card separates tracking price, published range, the
+    provisional discovery price and the canonical baseline."""
+
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(
+        _follow_observation(
+            product_id="1601769395876",
+            price=Decimal("98.70"),
+            minimum=Decimal("89.20"),
+            maximum=Decimal("108.20"),
+            display="$89.20 - $108.20",
+        ),
+        clock=_clock(BASE),
+    )
+    provider = FakeAlibabaProductRefreshProvider(
+        [_record(product_id="1601769395876", prices=(Decimal("108.20"), Decimal("89.20")))]
+    )
+    composition.refresh_alibaba_products(
+        ["1601769395876"],
+        operation_id="op-gui-row",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    row = services.tracked_product_to_row(composition.list_alibaba_tracked()[0])
+    assert row["last_price"] == "$108.20"
+    assert row["published_range"] == "$89.20–$108.20"
+    assert row["first_price"] == "$98.70"
+    assert row["first_price_tag"] == "Discovery"
+    assert row["baseline"] == "$108.20"
+    assert row["variation"] == "—"
+    history_lines = row["history"].splitlines()
+    assert len(history_lines) == 2
+    assert history_lines[0].endswith("· Discovery")
+    assert history_lines[1].endswith("· Seguimiento")
+
+
+def test_gui_row_simple_follow_has_no_discovery_tag(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
+    row = services.tracked_product_to_row(composition.list_alibaba_tracked()[0])
+    assert row["first_price_tag"] == ""
+    assert row["published_range"] == ""
+    assert row["baseline"] == "$15.25"
+    assert row["variation"] == "—"
+    assert "Discovery" not in row["history"]
+
+
 def test_refresh_does_not_touch_scores_or_facebook() -> None:
     text = (SRC / "bera_price_tracker" / "application" / "alibaba_refresh.py").read_text(
         encoding="utf-8"

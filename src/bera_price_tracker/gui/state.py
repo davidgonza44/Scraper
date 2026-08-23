@@ -93,7 +93,10 @@ class AlibabaTrackedRow(rx.Base):
     title: str = ""
     supplier_name: str = ""
     current_price: str = ""
+    last_price: str = ""
+    published_range: str = ""
     first_price: str = ""
+    first_price_tag: str = ""
     baseline: str = ""
     last_updated: str = ""
     variation: str = ""
@@ -456,7 +459,10 @@ class TrackerState(rx.State):
                 title=str(item.get("title", "")),
                 supplier_name=str(item.get("supplier_name", "")),
                 current_price=str(item.get("current_price", "")),
+                last_price=str(item.get("last_price", "")),
+                published_range=str(item.get("published_range", "")),
                 first_price=str(item.get("first_price", "")),
+                first_price_tag=str(item.get("first_price_tag", "")),
                 baseline=str(item.get("baseline", "")),
                 last_updated=str(item.get("last_updated", "")),
                 variation=str(item.get("variation", "")),

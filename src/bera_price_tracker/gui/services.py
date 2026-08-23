@@ -478,22 +478,50 @@ def _format_tracked_variation(tracked: Any) -> str:
     return f"{absolute} ({percent}%)"
 
 
+def _tracked_observation_tag(observation: Any) -> str:
+    from bera_price_tracker.application.alibaba_tracking import (
+        REFRESH_QUERY_PREFIX,
+        is_canonical_tracking_observation,
+    )
+
+    if observation.query.text.startswith(REFRESH_QUERY_PREFIX):
+        return " · Seguimiento"
+    if not is_canonical_tracking_observation(observation):
+        return " · Discovery"
+    return ""
+
+
 def tracked_product_to_row(tracked: Any) -> dict[str, str]:
     from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
     from bera_price_tracker.application.alibaba_tracking import is_canonical_tracking_observation
 
     history_lines = [
         f"{_format_tracked_utc(item.collected_at)} · {format_alibaba_money(item.price)}"
-        + ("" if is_canonical_tracking_observation(item) else " · discovery")
+        + _tracked_observation_tag(item)
         for item in tracked.history
     ]
     baseline = tracked.variation.baseline_price
+    published_range = ""
+    if (
+        tracked.price_min is not None
+        and tracked.price_max is not None
+        and tracked.price_min != tracked.price_max
+    ):
+        published_range = (
+            f"{format_alibaba_money(tracked.price_min)}–{format_alibaba_money(tracked.price_max)}"
+        )
+    first_is_provisional = bool(tracked.history) and not is_canonical_tracking_observation(
+        tracked.history[0]
+    )
     return {
         "product_id": tracked.product_id,
         "title": tracked.title,
         "supplier_name": tracked.supplier_name or "",
         "current_price": tracked.current_price_display,
+        "last_price": format_alibaba_money(tracked.variation.last_price),
+        "published_range": published_range,
         "first_price": format_alibaba_money(tracked.variation.first_price),
+        "first_price_tag": "Discovery" if first_is_provisional else "",
         "baseline": "—" if baseline is None else format_alibaba_money(baseline),
         "last_updated": _format_tracked_utc(tracked.last_updated),
         "variation": _format_tracked_variation(tracked),
