@@ -47,9 +47,11 @@ testpaths = ["tests"]
 source_paths = ["src"]
 only_mutate = [
     "src/bera_price_tracker/application/landed_cost.py",
+    "src/bera_price_tracker/application/import_aware_negotiation.py",
 ]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_landed_cost.py",
+    "tests/unit/test_import_aware_negotiation.py",
 ]
 use_git_change_detection = false
 debug = false

@@ -97,6 +97,8 @@ def test_without_landed_cost_matches_previous_plan() -> None:
     assert composed.applied is False
     assert composed.effective_ceiling == Decimal("4.30")
     assert composed.profitability_note == MISSING_PROFITABILITY_CEILING
+    assert composed.provenance is None
+    assert composed.rate_status is None
 
 
 def test_lower_landed_ceiling_reduces_ceiling() -> None:
@@ -1110,3 +1112,22 @@ def test_execute_forwards_analysis_and_explicit_kwargs() -> None:
     )
     assert blocked.applied is False
     assert blocked.profitability_note == PROFITABILITY_CURRENCY_MISMATCH
+
+
+def test_missing_profitability_still_keeps_rate_provenance() -> None:
+    """Rate provenance is kept even when the ceiling cannot be applied yet.
+
+    Remaining mutmut survivors in this module are equivalent or defensive:
+    Spanish note punctuation, TypeError/ValueError wrapping, the unreachable
+    incoherent-bounds raise, ``profitability_ceiling <= 0`` vs ``< 0`` (zero
+    already clamps the ceiling to ``MONEY_QUANTUM``), and rewriting the
+    placeholder ``explanation=""`` before ``build_negotiation_explanation``.
+    """
+    composed = apply_profitability_ceiling(
+        _base_plan(),
+        rate_status=ShippingRateStatus.ESTIMATE,
+    )
+    assert composed.applied is False
+    assert composed.profitability_note == MISSING_PROFITABILITY_CEILING
+    assert composed.rate_status is ShippingRateStatus.ESTIMATE
+    assert composed.provenance == ESTIMATE_PROVENANCE
