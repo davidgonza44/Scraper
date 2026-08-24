@@ -1543,7 +1543,7 @@ def test_quantity_one_is_valid_on_simple_public_price() -> None:
 
 def test_boolean_quantity_is_rejected() -> None:
     payload = AlibabaNegotiationInput(
-        desired_quantity=True,  # type: ignore[arg-type]
+        desired_quantity=True,
         title="Wireless Mouse",
         tiers=(),
         public_unit_price=Decimal("4.30"),
