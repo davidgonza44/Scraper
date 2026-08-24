@@ -40,6 +40,7 @@ def _product(**overrides: Any) -> AlibabaProduct:
     raw: dict[str, Any] = {
         "title": "Wireless mouse",
         "price": "$5.00",
+        "currency": "USD",
         "moq": "Min. order: 10 pieces",
         "companyName": "Acme Trading",
         "countryCode": "CN",
@@ -70,7 +71,7 @@ def test_total_score_always_between_0_and_100() -> None:
         _product(title=f"p{index}", price=price) for index, price in enumerate(OUTLIER_PRICES)
     ]
     products.append(_product(title="sin precio", price=None, moq=None))
-    products.append(_product(title="eur", price="EUR 100"))
+    products.append(_product(title="eur", price="EUR 100", currency=None))
     products.append(
         _product(
             title="minimo",
@@ -176,7 +177,7 @@ def test_usd_range_price_clarity() -> None:
 
 
 def test_non_usd_price_clarity_is_partial() -> None:
-    scores = _scores([_product(price="EUR 100")])
+    scores = _scores([_product(price="EUR 100", currency=None)])
     assert scores[0].price_clarity_score == 4
 
 

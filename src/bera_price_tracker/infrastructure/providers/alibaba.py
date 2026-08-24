@@ -10,6 +10,7 @@ from typing import Protocol, cast
 from urllib.parse import quote_plus
 
 from bera_price_tracker.application import MarketplaceSourceUnavailable
+from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
 from bera_price_tracker.application.services import validate_alibaba_search
 from bera_price_tracker.domain.alibaba import AlibabaProduct
 from bera_price_tracker.infrastructure.providers.apify import (
@@ -103,9 +104,7 @@ def parse_alibaba_price(
     currency = None
     currency_match = _ISO_CURRENCY.search(display)
     if currency_match is not None:
-        currency = currency_match.group(1)
-    elif "$" in display:
-        currency = "USD"
+        currency = explicit_alibaba_currency(currency_match.group(1))
     return display, min_price, max_price, currency
 
 
@@ -119,6 +118,9 @@ def map_alibaba_item(raw: object) -> AlibabaProduct | None:
     if title is None:
         return None
     price_display, min_price, max_price, currency = parse_alibaba_price(record.get("price"))
+    explicit = explicit_alibaba_currency(record.get("currency"))
+    if explicit is not None:
+        currency = explicit
     return AlibabaProduct(
         title=title,
         product_id=_scalar_text(record.get("productId")),

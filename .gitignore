@@ -13,6 +13,12 @@ __pycache__/
 .venv/
 venv/
 
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage-*.json
+
 # Packaging output
 build/
 dist/

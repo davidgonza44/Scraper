@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
+from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
 from bera_price_tracker.application.statistics import calculate_listing_statistics
 from bera_price_tracker.domain import (
     CollectionBatch,
@@ -32,6 +33,7 @@ MISSING_PRODUCT_ID = "Este producto no tiene un identificador estable."
 MISSING_PRICE = "Este producto no tiene un precio utilizable."
 MISSING_URL = "Este producto no tiene un enlace público."
 MISSING_TITLE = "Este producto no tiene título."
+MISSING_CURRENCY = "No se puede seguir un producto Alibaba sin una moneda explícita."
 UNKNOWN_LISTING = "Este producto no está en el seguimiento."
 PERCENT_UNAVAILABLE = "unavailable"
 
@@ -167,7 +169,9 @@ def observation_from_loaded_row(row: Mapping[str, object], query: str) -> Alibab
     url = _optional_text(row.get("url"))
     if url is None:
         raise AlibabaFollowError(MISSING_URL)
-    currency = _optional_text(row.get("currency")) or "USD"
+    currency = explicit_alibaba_currency(row.get("currency"))
+    if currency is None:
+        raise AlibabaFollowError(MISSING_CURRENCY)
     query_text = query.strip() if isinstance(query, str) and query.strip() else "alibaba"
     return AlibabaFollowObservation(
         product_id=_required_product_id(row.get("product_id")),
@@ -431,6 +435,7 @@ class ListAlibabaTracked:
 
 __all__ = [
     "FOLLOW_SOURCE",
+    "MISSING_CURRENCY",
     "MISSING_PRICE",
     "MISSING_PRODUCT_ID",
     "MISSING_TITLE",

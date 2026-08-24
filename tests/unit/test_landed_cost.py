@@ -8,6 +8,13 @@ from pathlib import Path
 import pytest
 
 from bera_price_tracker.application.landed_cost import (
+    INVALID_BATTERY_MULTIPLIER,
+    INVALID_CARGO_RATE,
+    INVALID_IMPORT_COST,
+    INVALID_LANDED_MARGIN,
+    INVALID_SALE_PRICE,
+    INVALID_SUPPLIER_PRICE,
+    INVALID_SURCHARGE,
     MISSING_CARTON_COUNT,
     MISSING_CARTON_DIMENSIONS,
     MISSING_GROSS_WEIGHT,
@@ -278,6 +285,8 @@ def test_gui_service_returns_display_row() -> None:
     assert row["max_supplier_price"] == "$4.60"
     assert row["rate_label"] == services.ALIBABA_LANDED_ESTIMATE_LABEL
     assert row["unattractive"] == "0"
+    assert row["currency"] == "USD"
+    assert row["landed_cost_per_unit_raw"] == "6.43"
 
 
 def test_gui_service_battery_and_confirmed_quote() -> None:
@@ -326,3 +335,223 @@ def test_estimate_label_is_visible_not_definitive() -> None:
     assert services.ALIBABA_LANDED_ESTIMATE_LABEL == "ESTIMACIÓN LOGÍSTICA"
     gui_views = (SRC / "bera_price_tracker" / "gui" / "views.py").read_text(encoding="utf-8")
     assert "Costo DTD definitivo" not in gui_views
+
+
+def test_capped_ceiling_rejects_non_decimal_types() -> None:
+    with pytest.raises(TypeError, match="current_ceiling"):
+        capped_negotiation_ceiling(4.30, Decimal("4.10"))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="maximum_supplier_unit_price"):
+        capped_negotiation_ceiling(Decimal("4.30"), 4.10)  # type: ignore[arg-type]
+
+
+def test_payload_must_be_landed_cost_input() -> None:
+    with pytest.raises(TypeError, match="LandedCostInput"):
+        calculate_landed_cost("payload")  # type: ignore[arg-type]
+
+
+def test_boolean_quantity_is_rejected() -> None:
+    with pytest.raises(LandedCostError, match="cantidad"):
+        calculate_landed_cost(_input(quantity=True))
+
+
+def test_gui_landed_row_can_carry_explicit_cny_iso() -> None:
+    row = services.calculate_alibaba_landed_cost(
+        quantity="40",
+        supplier_unit_price="4.03",
+        cartons="2",
+        units_per_carton="20",
+        carton_length_cm="50",
+        carton_width_cm="40",
+        carton_height_cm="30",
+        gross_weight_kg_per_carton="8",
+        rate_usd_per_cbm="800",
+        expected_sale_price="10.00",
+        target_margin_percent="30",
+        currency="CNY",
+    )
+    assert row["currency"] == "CNY"
+    assert row["max_supplier_raw"] == "4.60"
+    assert row["max_supplier_price"] == "CNY 4.60"
+    assert "$" not in row["max_supplier_price"]
+    assert "$" not in row["landed_cost_per_unit"]
+
+
+def test_string_and_int_money_inputs_match_decimal_formula() -> None:
+    packaging = CargoPackagingInput(
+        cartons=2,
+        units_per_carton=20,
+        carton_length_cm="50",  # type: ignore[arg-type]
+        carton_width_cm=40,  # type: ignore[arg-type]
+        carton_height_cm=Decimal("30"),
+        gross_weight_kg_per_carton="8",  # type: ignore[arg-type]
+    )
+    analysis = calculate_landed_cost(
+        LandedCostInput(
+            quantity=40,
+            supplier_unit_price="4.03",  # type: ignore[arg-type]
+            packaging=packaging,
+            rate=ShippingRateProfile(rate_usd_per_cbm="800"),  # type: ignore[arg-type]
+        )
+    )
+    assert analysis.carton_cbm == Decimal("0.060000")
+    assert analysis.freight_base == Decimal("96.00")
+    assert analysis.merchandise_cost == Decimal("161.20")
+    assert analysis.total_landed_cost == Decimal("257.20")
+    assert analysis.landed_cost_per_unit == Decimal("6.43")
+
+
+def test_boolean_money_and_packaging_are_rejected() -> None:
+    with pytest.raises(LandedCostError, match=INVALID_SUPPLIER_PRICE):
+        calculate_landed_cost(_input(price=True))  # type: ignore[arg-type]
+    with pytest.raises(LandedCostError, match="empaque"):
+        CargoPackagingInput(cartons=True)
+    with pytest.raises(LandedCostError, match="empaque"):
+        CargoPackagingInput(cartons="2")  # type: ignore[arg-type]
+
+
+def test_invalid_nan_and_infinity_money_are_rejected() -> None:
+    with pytest.raises(LandedCostError, match=INVALID_SUPPLIER_PRICE):
+        calculate_landed_cost(_input(price="not-a-price"))  # type: ignore[arg-type]
+    with pytest.raises(LandedCostError, match=INVALID_SUPPLIER_PRICE):
+        calculate_landed_cost(_input(price=Decimal("NaN")))
+    with pytest.raises(LandedCostError, match=INVALID_SUPPLIER_PRICE):
+        calculate_landed_cost(_input(price=Decimal("Infinity")))
+    with pytest.raises(LandedCostError, match=INVALID_SUPPLIER_PRICE):
+        calculate_landed_cost(_input(price=["4.03"]))  # type: ignore[arg-type]
+
+
+def test_zero_and_negative_quantity_and_dimensions_are_rejected() -> None:
+    with pytest.raises(LandedCostError, match="cantidad"):
+        calculate_landed_cost(_input(quantity=-1))
+    with pytest.raises(LandedCostError, match="empaque"):
+        CargoPackagingInput(cartons=0)
+    with pytest.raises(LandedCostError, match="empaque"):
+        CargoPackagingInput(cartons=-3)
+    with pytest.raises(LandedCostError, match="empaque"):
+        CargoPackagingInput(carton_length_cm=Decimal("0"))
+    with pytest.raises(LandedCostError, match="empaque"):
+        CargoPackagingInput(carton_width_cm=Decimal("-10"))
+
+
+def test_zero_and_none_rate_and_invalid_status_are_rejected() -> None:
+    with pytest.raises(LandedCostError, match=INVALID_CARGO_RATE):
+        ShippingRateProfile(rate_usd_per_cbm=Decimal("0"))
+    with pytest.raises(LandedCostError, match=INVALID_CARGO_RATE):
+        ShippingRateProfile(rate_usd_per_cbm=None)  # type: ignore[arg-type]
+    with pytest.raises(LandedCostError, match="estado de la tarifa"):
+        ShippingRateProfile(rate_usd_per_cbm=TEST_RATE, status="manual")  # type: ignore[arg-type]
+
+
+def test_zero_battery_multiplier_and_negative_surcharges_are_rejected() -> None:
+    with pytest.raises(LandedCostError, match=INVALID_BATTERY_MULTIPLIER):
+        ShippingSurcharges(battery_multiplier=Decimal("0"))
+    with pytest.raises(LandedCostError, match=INVALID_BATTERY_MULTIPLIER):
+        ShippingSurcharges(battery_multiplier=None)  # type: ignore[arg-type]
+    with pytest.raises(LandedCostError, match=INVALID_SURCHARGE):
+        ShippingSurcharges(insurance=Decimal("-1"))
+    with pytest.raises(LandedCostError, match=INVALID_IMPORT_COST):
+        ImportOtherCosts(bank_fees=Decimal("-0.01"))
+
+
+def test_missing_sale_price_skips_profitability_and_keeps_landed_math() -> None:
+    analysis = calculate_landed_cost(_input(sale=None, margin=Decimal("30")))
+    assert analysis.total_landed_cost == Decimal("257.20")
+    assert analysis.revenue is None
+    assert analysis.margin_percent is None
+    assert analysis.maximum_supplier_unit_price is None
+    assert analysis.viability is None
+
+
+def test_sale_without_margin_computes_profit_but_not_max_supplier() -> None:
+    analysis = calculate_landed_cost(_input(sale=Decimal("10.00"), margin=None))
+    assert analysis.revenue == Decimal("400.00")
+    assert analysis.gross_profit == Decimal("142.80")
+    assert analysis.margin_percent == Decimal("35.70")
+    assert analysis.maximum_supplier_unit_price is None
+    assert analysis.viability is None
+
+
+def test_invalid_sale_and_margin_bounds_are_rejected() -> None:
+    with pytest.raises(LandedCostError, match=INVALID_SALE_PRICE):
+        calculate_landed_cost(_input(sale=Decimal("0")))
+    with pytest.raises(LandedCostError, match=INVALID_LANDED_MARGIN):
+        calculate_landed_cost(_input(sale=Decimal("10.00"), margin=Decimal("-1")))
+    with pytest.raises(LandedCostError, match=INVALID_LANDED_MARGIN):
+        calculate_landed_cost(_input(sale=Decimal("10.00"), margin=Decimal("100.01")))
+    with pytest.raises(LandedCostError, match=INVALID_LANDED_MARGIN):
+        calculate_landed_cost(_input(sale=Decimal("10.00"), margin="abc"))  # type: ignore[arg-type]
+
+
+def test_zero_margin_max_supplier_equals_sale_minus_non_product() -> None:
+    analysis = calculate_landed_cost(_input(sale=Decimal("10.00"), margin=Decimal("0")))
+    assert analysis.max_total_unit_cost == Decimal("10.00")
+    assert analysis.non_product_cost_per_unit == Decimal("2.40")
+    assert analysis.maximum_supplier_unit_price == Decimal("7.60")
+    assert analysis.viability is LandedCostViability.ATTRACTIVE
+
+
+def test_full_margin_makes_supplier_price_non_positive() -> None:
+    analysis = calculate_landed_cost(_input(sale=Decimal("10.00"), margin=Decimal("100")))
+    assert analysis.max_total_unit_cost == Decimal("0.00")
+    assert analysis.maximum_supplier_unit_price == Decimal("-2.40")
+    assert analysis.viability is LandedCostViability.ECONOMICALLY_UNATTRACTIVE
+
+
+def test_missing_supplier_price_is_rejected() -> None:
+    with pytest.raises(LandedCostError, match=INVALID_SUPPLIER_PRICE):
+        calculate_landed_cost(
+            LandedCostInput(
+                quantity=40,
+                supplier_unit_price=None,  # type: ignore[arg-type]
+                packaging=_packaging(),
+                rate=ShippingRateProfile(rate_usd_per_cbm=TEST_RATE),
+            )
+        )
+
+
+def test_gui_rejects_negative_surcharge_and_invalid_battery_multiplier() -> None:
+    with pytest.raises(LandedCostError, match=INVALID_SURCHARGE):
+        services.calculate_alibaba_landed_cost(
+            quantity="40",
+            supplier_unit_price="4.03",
+            cartons="2",
+            units_per_carton="20",
+            carton_length_cm="50",
+            carton_width_cm="40",
+            carton_height_cm="30",
+            gross_weight_kg_per_carton="8",
+            rate_usd_per_cbm="800",
+            insurance="-1",
+        )
+    with pytest.raises(LandedCostError, match=INVALID_BATTERY_MULTIPLIER):
+        services.calculate_alibaba_landed_cost(
+            quantity="40",
+            supplier_unit_price="4.03",
+            cartons="2",
+            units_per_carton="20",
+            carton_length_cm="50",
+            carton_width_cm="40",
+            carton_height_cm="30",
+            gross_weight_kg_per_carton="8",
+            rate_usd_per_cbm="800",
+            has_battery=True,
+            battery_multiplier="",
+        )
+
+
+def test_sale_price_validation_guarantees_positive_revenue() -> None:
+    """``if revenue > 0`` in calculate_landed_cost is defensive.
+
+    ``expected_sale_price_per_unit`` is rejected unless it is a positive finite
+    Decimal, and ``quantity`` is a positive int, so ``revenue = sale * quantity``
+    cannot be 0 or negative after those checks. Do not change production just
+    to force the False branch.
+    """
+
+    analysis = calculate_landed_cost(_input(sale=Decimal("0.01"), quantity=1))
+    assert analysis.revenue == Decimal("0.01")
+    assert analysis.revenue is not None and analysis.revenue > Decimal("0")
+    with pytest.raises(LandedCostError, match=INVALID_SALE_PRICE):
+        calculate_landed_cost(_input(sale=Decimal("0")))
+    with pytest.raises(LandedCostError, match=INVALID_SALE_PRICE):
+        calculate_landed_cost(_input(sale=Decimal("-1")))

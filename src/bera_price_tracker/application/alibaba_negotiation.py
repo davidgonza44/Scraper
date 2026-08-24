@@ -6,7 +6,6 @@ against those authorized numbers. This module never talks to Alibaba or Apify.
 
 from __future__ import annotations
 
-import json
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
@@ -15,6 +14,10 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Protocol
 
+from bera_price_tracker.application.alibaba_statistics import (
+    explicit_alibaba_currency,
+    format_alibaba_currency,
+)
 from bera_price_tracker.domain.money import MONEY_QUANTUM, quantize_money
 
 DEFAULT_NEGOTIATION_AGGRESSIVENESS = 50
@@ -33,6 +36,8 @@ MISSING_PUBLIC_PRICE = (
     "Este producto no tiene un precio comparable para esa cantidad. "
     "Usa un precio simple, un producto ya actualizado, o tramos de precio."
 )
+MISSING_LISTING_CURRENCY = "No se puede negociar un producto Alibaba sin una moneda explícita."
+DRAFT_CURRENCY_MISMATCH = "La moneda del borrador no coincide con la moneda del producto."
 QUANTITY_BELOW_TIERS = "La cantidad es inferior al tramo publicado más bajo."
 INVALID_AGGRESSIVENESS = "La agresividad debe estar entre 0 y 100."
 INVALID_MARGIN = "El margen objetivo debe estar entre 0 y 100."
@@ -60,23 +65,48 @@ _SHIPPING_PATTERN = re.compile(
 )
 DEFAULT_DRAFT_LANGUAGE = "English"
 DEFAULT_DRAFT_CURRENCY = "USD"
-_FORBIDDEN_CONTEXT_TOKENS = (
-    "apify",
-    "apitoken",
-    "api_token",
-    "chattoken",
-    "contactsupplier",
-    "authorization",
-    "bearer ",
-    "score_price",
-    "score_clarity",
-    "target_price",
-    "ceiling_price",
-    "negotiable_reference",
-    "aggressiveness",
-    "ladder",
-    "max_product",
-    "margin",
+_ALLOWED_DRAFT_PAYLOAD_KEYS = frozenset({"draft_instructions", "untrusted_supplier_reply"})
+_ALLOWED_DRAFT_INSTRUCTION_KEYS = frozenset(
+    {
+        "product_title",
+        "public_supplier_name",
+        "desired_quantity",
+        "currency",
+        "stage",
+        "language",
+        "min_order_quantity",
+        "authorized_offer",
+        "authorized_counter_offer",
+        "authorized_final_offer",
+        "instruction",
+        "decision",
+        "supplier_quoted_price",
+        "ask_lead_time",
+        "ask_packaging",
+    }
+)
+_FORBIDDEN_DRAFT_INSTRUCTION_KEYS = frozenset(
+    {
+        "target_price",
+        "ceiling_price",
+        "negotiable_reference",
+        "aggressiveness",
+        "ladder",
+        "tiers",
+        "margin",
+        "max_product",
+        "score_price",
+        "score_clarity",
+        "profitability",
+        "profit_per_unit",
+        "margin_percent",
+        "apify",
+        "apitoken",
+        "api_token",
+        "chattoken",
+        "contactsupplier",
+        "authorization",
+    }
 )
 _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
@@ -159,6 +189,7 @@ class AlibabaNegotiationInput:
     duties_per_unit: Decimal | None = None
     other_costs_per_unit: Decimal | None = None
     negotiation_aggressiveness: int = DEFAULT_NEGOTIATION_AGGRESSIVENESS
+    currency: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +228,7 @@ class AlibabaNegotiationPlan:
     ladder_summary: str
     warnings: tuple[NegotiationWarning, ...]
     bounds: NegotiationPriceBounds
+    currency: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -318,6 +350,27 @@ def _parse_optional_cost(value: object, name: str) -> Decimal:
         raise AlibabaNegotiationError(INVALID_COST)
     del name
     return quantize_money(parsed)
+
+
+def _explicit_listing_currency(value: object) -> str:
+    """Return an explicit ISO code or fail before monetary planning."""
+
+    currency = explicit_alibaba_currency(value)
+    if currency is None:
+        raise AlibabaNegotiationError(MISSING_LISTING_CURRENCY)
+    return currency
+
+
+def _resolve_draft_currency(plan_currency: object, requested_currency: object = None) -> str:
+    """Require the plan ISO and reject any draft-time currency substitution."""
+
+    currency = _explicit_listing_currency(plan_currency)
+    if requested_currency is None:
+        return currency
+    requested = _explicit_listing_currency(requested_currency)
+    if requested != currency:
+        raise AlibabaNegotiationError(DRAFT_CURRENCY_MISMATCH)
+    return currency
 
 
 def _optional_text(value: object) -> str | None:
@@ -540,33 +593,38 @@ def calculate_price_bounds(
     return bounds, tuple(warnings)
 
 
-def _ladder_summary(tiers: Sequence[NegotiationTier]) -> str:
+def _ladder_summary(tiers: Sequence[NegotiationTier], currency: str) -> str:
     if not tiers:
         return ""
     parts: list[str] = []
     for tier in sorted(tiers, key=lambda item: item.min_quantity):
         maximum = "" if tier.max_quantity is None else f"–{tier.max_quantity}"
-        parts.append(f"{tier.min_quantity}{maximum}: ${tier.unit_price}")
+        parts.append(
+            f"{tier.min_quantity}{maximum}: {format_alibaba_currency(tier.unit_price, currency)}"
+        )
     return "; ".join(parts)[:MAX_NEGOTIATION_LADDER_SUMMARY_LENGTH]
 
 
 def build_negotiation_explanation(plan_like: AlibabaNegotiationPlan) -> str:
     """Short human explanation. Never claims the supplier will accept a price."""
 
+    public = format_alibaba_currency(plan_like.public_unit_price, plan_like.currency)
     if plan_like.next_tier_min_quantity is None or plan_like.next_tier_price is None:
         text = (
             f"No hay un tramo posterior con mejor precio. El precio publicado "
-            f"para {plan_like.desired_quantity} unidades es ${plan_like.public_unit_price}. "
+            f"para {plan_like.desired_quantity} unidades es {public}. "
             f"La referencia de negociación coincide con ese precio."
         )
     else:
         percent = (plan_like.tier_proximity or Decimal("0")) * Decimal("100")
         shown = percent.quantize(Decimal("1"))
+        next_tier = format_alibaba_currency(plan_like.next_tier_price, plan_like.currency)
+        reference = format_alibaba_currency(plan_like.negotiable_reference, plan_like.currency)
         text = (
             f"Tu cantidad está al {shown}% del siguiente tramo de precio. "
             f"El siguiente tramo comienza en {plan_like.next_tier_min_quantity} "
-            f"unidades a ${plan_like.next_tier_price}. "
-            f"La referencia matemática de negociación es ${plan_like.negotiable_reference}."
+            f"unidades a {next_tier}. "
+            f"La referencia matemática de negociación es {reference}."
         )
     if plan_like.attractiveness is DealAttractiveness.ECONOMICALLY_UNATTRACTIVE:
         text += " Con el margen y los costos indicados, el trato no es económicamente atractivo."
@@ -604,6 +662,7 @@ def calculate_alibaba_negotiation_plan(
         or payload.desired_quantity <= 0
     ):
         raise AlibabaNegotiationError(MISSING_QUANTITY)
+    currency = _explicit_listing_currency(payload.currency)
     public, selected, nxt, proximity = _resolve_public_from_input(payload)
     max_product: Decimal | None = None
     if payload.expected_resale_price is not None or payload.target_margin_percent is not None:
@@ -657,9 +716,10 @@ def calculate_alibaba_negotiation_plan(
         aggressiveness=payload.negotiation_aggressiveness,
         attractiveness=attractiveness,
         explanation="",
-        ladder_summary=_ladder_summary(payload.tiers),
+        ladder_summary=_ladder_summary(payload.tiers, currency),
         warnings=tuple(warnings),
         bounds=bounds,
+        currency=currency,
     )
     return AlibabaNegotiationPlan(
         title=plan.title,
@@ -683,6 +743,7 @@ def calculate_alibaba_negotiation_plan(
         ladder_summary=plan.ladder_summary,
         warnings=plan.warnings,
         bounds=plan.bounds,
+        currency=plan.currency,
     )
 
 
@@ -839,7 +900,7 @@ def draft_context_from_plan(
     recommendation: NegotiationRecommendation | None = None,
     supplier: SupplierCounterOffer | None = None,
     language: str = DEFAULT_DRAFT_LANGUAGE,
-    currency: str = DEFAULT_DRAFT_CURRENCY,
+    currency: str | None = None,
 ) -> NegotiationDraftContext:
     """Build the only payload MiniMax may see. The full plan stays in Python."""
 
@@ -886,7 +947,7 @@ def draft_context_from_plan(
         product_title=title,
         public_supplier_name=supplier_name,
         desired_quantity=plan.desired_quantity,
-        currency=currency,
+        currency=_resolve_draft_currency(plan.currency, currency),
         stage=resolved_stage,
         language=language,
         authorized_offer=authorized_offer,
@@ -993,14 +1054,28 @@ def draft_context_payload(
     return payload
 
 
+def assert_draft_payload_has_no_secrets(payload: Mapping[str, object]) -> None:
+    """Reject unexpected or internal keys. Public title/supplier text is allowed."""
+
+    if set(payload) - _ALLOWED_DRAFT_PAYLOAD_KEYS:
+        raise AlibabaNegotiationError("El contexto de negociación contiene datos prohibidos.")
+    instructions = payload.get("draft_instructions")
+    if not isinstance(instructions, Mapping):
+        raise AlibabaNegotiationError("El contexto de negociación contiene datos prohibidos.")
+    keys = set(instructions)
+    if keys - _ALLOWED_DRAFT_INSTRUCTION_KEYS or keys & _FORBIDDEN_DRAFT_INSTRUCTION_KEYS:
+        raise AlibabaNegotiationError("El contexto de negociación contiene datos prohibidos.")
+    reply = payload.get("untrusted_supplier_reply")
+    if reply is None:
+        return
+    if not isinstance(reply, Mapping) or set(reply) - {"text"}:
+        raise AlibabaNegotiationError("El contexto de negociación contiene datos prohibidos.")
+
+
 def assert_context_has_no_secrets(context: NegotiationDraftContext) -> None:
     """Reject accidental leakage of tokens, raw items, or scoring internals."""
 
-    payload = draft_context_payload(context)
-    blob = json.dumps(payload.get("draft_instructions"), ensure_ascii=False).lower()
-    for token in _FORBIDDEN_CONTEXT_TOKENS:
-        if token in blob:
-            raise AlibabaNegotiationError("El contexto de negociación contiene datos prohibidos.")
+    assert_draft_payload_has_no_secrets(draft_context_payload(context))
 
 
 def authorized_money_set(context: NegotiationDraftContext) -> frozenset[Decimal]:
@@ -1136,8 +1211,14 @@ class GenerateNegotiationReply:
 
 
 def public_price_from_catalog_row(row: Mapping[str, object]) -> Decimal | None:
-    """Use a simple or canonical price. Never a discovery range midpoint."""
+    """Use a simple or canonical price. Never a discovery range midpoint.
 
+    Numeric bounds without an explicit ISO currency are not usable. ``$``
+    alone is not USD.
+    """
+
+    if explicit_alibaba_currency(row.get("currency")) is None:
+        return None
     last_price = _parse_money(row.get("last_price") or row.get("public_price"))
     minimum = _parse_money(row.get("price_min"))
     maximum = _parse_money(row.get("price_max"))
@@ -1163,11 +1244,14 @@ __all__ = [
     "INVALID_AGGRESSIVENESS",
     "MAX_NEGOTIATION_AGGRESSIVENESS",
     "MIN_NEGOTIATION_AGGRESSIVENESS",
+    "MISSING_LISTING_CURRENCY",
     "MISSING_PUBLIC_PRICE",
     "MISSING_QUANTITY",
     "NO_TIER_MAX_DISCOUNT",
     "OPENING_BENCHMARK_RATIO",
     "UNAUTHORIZED_DRAFT_PRICE",
+    "assert_context_has_no_secrets",
+    "assert_draft_payload_has_no_secrets",
     "AlibabaNegotiationDrafter",
     "AlibabaNegotiationError",
     "AlibabaNegotiationInput",

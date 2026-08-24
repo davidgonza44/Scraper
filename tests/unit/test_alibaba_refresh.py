@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -19,10 +20,13 @@ from bera_price_tracker.application.alibaba_refresh import (
     LadderTier,
     ProductRefreshBatch,
     ProductRefreshRecord,
+    ProductRefreshStatus,
     RefreshTrackedAlibabaProducts,
     TrackedAlibabaProduct,
+    _replay_item,
     is_alibaba_product_detail_url,
     normalize_refresh_price,
+    refresh_operation_query,
     select_moq_tier,
 )
 from bera_price_tracker.application.alibaba_tracking import AlibabaFollowObservation
@@ -34,7 +38,7 @@ from bera_price_tracker.config import (
     DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES,
     Settings,
 )
-from bera_price_tracker.domain import ListingKey, MarketplaceSource
+from bera_price_tracker.domain import ListingKey, MarketplaceSource, SearchQuery
 from bera_price_tracker.gui import services
 from bera_price_tracker.infrastructure.persistence import SQLiteListingRepository
 from bera_price_tracker.infrastructure.providers.alibaba_refresh import (
@@ -42,6 +46,7 @@ from bera_price_tracker.infrastructure.providers.alibaba_refresh import (
     build_alibaba_refresh_run_input,
     map_xtracto_item,
 )
+from bera_price_tracker.infrastructure.providers.apify import ApifyConfigurationError
 
 BASE = datetime(2026, 8, 23, 15, 0, 0, tzinfo=UTC)
 SRC = Path(__file__).resolve().parents[2] / "src"
@@ -916,3 +921,722 @@ def test_gui_modules_still_avoid_sqlite() -> None:
         assert "sqlite3" not in text
         assert "SQLiteListingRepository" not in text
         assert "ApifyAlibabaProductRefreshClient" not in text
+
+
+def test_empty_selection_and_non_sequence_ids_are_rejected(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    with pytest.raises(AlibabaRefreshError, match="al menos un producto"):
+        composition.refresh_alibaba_products([], operation_id="op-empty")
+    with SQLiteListingRepository(":memory:") as repository:
+        with pytest.raises(TypeError, match="sequence"):
+            RefreshTrackedAlibabaProducts(
+                repository=repository,
+                provider=FakeAlibabaProductRefreshProvider(),
+            ).execute("1600000000000", operation_id="op-str")
+
+
+def test_blank_operation_id_is_rejected() -> None:
+    with pytest.raises(AlibabaRefreshError, match="identificador"):
+        refresh_operation_query("  ")
+    with pytest.raises(AlibabaRefreshError, match="identificador"):
+        refresh_operation_query(None)  # type: ignore[arg-type]
+
+
+def test_product_detail_url_rejects_non_http_and_non_strings() -> None:
+    assert is_alibaba_product_detail_url(None) is False
+    assert is_alibaba_product_detail_url("  ") is False
+    assert is_alibaba_product_detail_url("ftp://www.alibaba.com/product-detail/x.html") is False
+    assert is_alibaba_product_detail_url("https://www.alibaba.com/trade/search?x=1") is False
+    assert is_alibaba_product_detail_url(
+        "https://www.alibaba.com/product-detail/1600000000000.html"
+    )
+
+
+def test_mapper_skips_non_mapping_and_keeps_int_product_id() -> None:
+    assert map_xtracto_item("raw") is None
+    mapped = map_xtracto_item(
+        {
+            "productId": 1600000000000,
+            "url": "https://www.alibaba.com/product-detail/1600000000000.html",
+            "currency": "USD",
+            "priceFormatted": "$4.30",
+            "ladderPrices": "not-a-list",
+            "scrapedAt": "not-a-date",
+        }
+    )
+    assert mapped is not None
+    assert mapped.product_id == "1600000000000"
+    assert mapped.ladder_prices == ()
+    naive = map_xtracto_item(
+        {
+            "productId": "1600000000000",
+            "currency": "USD",
+            "scrapedAt": "2026-08-23T15:00:00",
+        }
+    )
+    assert naive is not None
+    assert naive.scraped_at is None
+
+
+def test_malformed_tier_and_string_quantities_are_tolerated() -> None:
+    mapped = map_xtracto_item(
+        {
+            "productId": "1600000000000",
+            "currency": "USD",
+            "ladderPrices": [
+                "skip-me",
+                {
+                    "minQuantity": "10",
+                    "maxQuantity": "49",
+                    "price": "4.30",
+                    "pricePerUnitUSD": "0",
+                },
+                {"minQty": 50, "price": Decimal("NaN")},
+            ],
+        }
+    )
+    assert mapped is not None
+    assert mapped.ladder_prices[0].min_quantity == 10
+    assert mapped.ladder_prices[0].max_quantity == 49
+    assert mapped.ladder_prices[0].price == Decimal("4.30")
+    assert mapped.ladder_prices[0].price_usd is None
+    assert mapped.ladder_prices[1].price is None
+
+
+def test_select_moq_open_ended_and_uncovered_moq() -> None:
+    open_ended = LadderTier(
+        min_quantity=1000,
+        max_quantity=None,
+        price=Decimal("3.50"),
+        price_formatted=None,
+    )
+    first = LadderTier(
+        min_quantity=1,
+        max_quantity=49,
+        price=Decimal("4.30"),
+        price_formatted=None,
+    )
+    selected = select_moq_tier((first, open_ended), 1500, use_usd=False)
+    assert selected is open_ended
+    assert select_moq_tier((first,), 200, use_usd=False) is None
+    unpriced = LadderTier(min_quantity=1, max_quantity=10, price=None, price_formatted=None)
+    assert select_moq_tier((unpriced,), 1, use_usd=False) is None
+    no_mins = LadderTier(
+        min_quantity=None, max_quantity=None, price=Decimal("4.30"), price_formatted=None
+    )
+    assert select_moq_tier((no_mins,), None, use_usd=False) is None
+
+
+def test_normalize_iso_simple_formatted_price_without_ladder() -> None:
+    record = ProductRefreshRecord(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/1600000000000.html",
+        price_formatted="USD 4.30",
+        currency="EUR",
+        ladder_prices=(),
+        min_order_quantity=None,
+        scraped_at=BASE,
+    )
+    normalized = normalize_refresh_price(record)
+    assert normalized is not None
+    assert normalized.currency == "EUR"
+    assert normalized.currency_evidence == CURRENCY_EVIDENCE_ISO
+    assert normalized.tracking_price == Decimal("4.30")
+    assert normalized.price_min == normalized.price_max == Decimal("4.30")
+
+
+def test_normalize_rejects_missing_currency_and_ambiguous_display() -> None:
+    missing = ProductRefreshRecord(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/x.html",
+        price_formatted="$4.30",
+        currency="$",
+        ladder_prices=(),
+        min_order_quantity=1,
+        scraped_at=None,
+    )
+    assert normalize_refresh_price(missing) is None
+    ambiguous = ProductRefreshRecord(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/x.html",
+        price_formatted="$3.50-$4.30",
+        currency="USD",
+        ladder_prices=(),
+        min_order_quantity=1,
+        scraped_at=None,
+    )
+    assert normalize_refresh_price(ambiguous) is None
+
+
+def test_duplicate_dataset_id_associates_first_match(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    composition = ApplicationComposition(settings=settings)
+    composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
+    duplicate = _record(product_id="1600000000000", prices=[Decimal("15.25")])
+    extra = _record(
+        product_id="other",
+        product_url="https://www.alibaba.com/product-detail/1600000000000.html",
+        prices=[Decimal("99.00")],
+    )
+    provider = FakeAlibabaProductRefreshProvider([duplicate, extra])
+    summary = composition.refresh_alibaba_products(
+        ["1600000000000"],
+        operation_id="op-dup",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    assert summary.unchanged == 1
+    assert provider.calls[0][0].product_id == "1600000000000"
+
+
+def test_invalid_tracked_url_is_failed_without_provider_call(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    composition = ApplicationComposition(settings=settings)
+    bad = AlibabaFollowObservation(
+        product_id="1600000000000",
+        title="Mouse",
+        url="https://example.com/not-alibaba",
+        representative_price=Decimal("15.25"),
+        currency="USD",
+        query="mouse",
+        price_display="$15.25",
+        min_price=Decimal("15.25"),
+        max_price=Decimal("15.25"),
+    )
+    composition.follow_alibaba_price(bad, clock=_clock(BASE))
+    provider = FakeAlibabaProductRefreshProvider([_record()])
+    summary = composition.refresh_alibaba_products(
+        ["1600000000000"],
+        operation_id="op-bad-url",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    assert summary.failed == 1
+    assert summary.items[0].status is ProductRefreshStatus.FAILED
+    assert provider.calls == []
+
+
+def test_refresh_client_rejects_blank_actor_and_non_product_sequence() -> None:
+    with pytest.raises(ApifyConfigurationError, match="actor id"):
+        ApifyAlibabaProductRefreshClient(_api_token="token", actor_id="  ")
+    client = ApifyAlibabaProductRefreshClient(
+        _api_token="token",
+        client_factory=lambda _token: (_ for _ in ()).throw(AssertionError("no call")),
+    )
+    with pytest.raises(TypeError, match="sequence"):
+        client.refresh_products("https://www.alibaba.com/product-detail/x.html")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="TrackedAlibabaProduct"):
+        client.refresh_products(["https://www.alibaba.com/product-detail/x.html"])  # type: ignore[list-item]
+    empty = client.refresh_products([])
+    assert empty.records == ()
+
+
+class _StatusFakeApify:
+    def __init__(
+        self,
+        run: object,
+        items: list[object] | None = None,
+        error: Exception | None = None,
+        dataset_error: Exception | None = None,
+    ) -> None:
+        self.run = run
+        self.items = items or []
+        self.error = error
+        self.dataset_error = dataset_error
+        self.calls: list[dict[str, object]] = []
+
+    def actor(self, actor_id: str) -> _StatusActor:
+        del actor_id
+        return _StatusActor(self)
+
+    def dataset(self, dataset_id: str) -> _StatusDataset:
+        del dataset_id
+        return _StatusDataset(self)
+
+
+class _StatusActor:
+    def __init__(self, owner: _StatusFakeApify) -> None:
+        self.owner = owner
+
+    def call(self, *, run_input: dict[str, object]) -> Any:
+        self.owner.calls.append(run_input)
+        if self.owner.error is not None:
+            raise self.owner.error
+        return self.owner.run
+
+
+class _StatusPage:
+    def __init__(self, items: list[object]) -> None:
+        self.items = items
+
+
+class _StatusDataset:
+    def __init__(self, owner: _StatusFakeApify) -> None:
+        self.owner = owner
+
+    def list_items(self, *, limit: int) -> _StatusPage:
+        if self.owner.dataset_error is not None:
+            raise self.owner.dataset_error
+        return _StatusPage(self.owner.items[:limit])
+
+
+def test_refresh_client_maps_failed_run_and_missing_dataset() -> None:
+    product = TrackedAlibabaProduct(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/1600000000000.html",
+    )
+    failed = _StatusFakeApify({"status": "FAILED", "defaultDatasetId": "ds1"})
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=cast(Any, lambda _token: failed),
+        ).refresh_products([product])
+    missing = _StatusFakeApify({"status": "SUCCEEDED"})
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=cast(Any, lambda _token: missing),
+        ).refresh_products([product])
+    not_mapping = _StatusFakeApify("SUCCEEDED")
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=cast(Any, lambda _token: not_mapping),
+        ).refresh_products([product])
+    boom = _StatusFakeApify(
+        {"status": "SUCCEEDED", "defaultDatasetId": "ds1"}, error=RuntimeError("net")
+    )
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=cast(Any, lambda _token: boom),
+        ).refresh_products([product])
+    dataset_boom = _StatusFakeApify(
+        {"status": "SUCCEEDED", "defaultDatasetId": "ds1"},
+        dataset_error=RuntimeError("dataset"),
+    )
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=cast(Any, lambda _token: dataset_boom),
+        ).refresh_products([product])
+    assert failed.calls[0]["productUrls"] == [{"url": product.product_url}]
+
+
+class _ReplayRepository:
+    def get_listing(self, key: ListingKey) -> None:
+        del key
+        return None
+
+    def get_price_history(self, key: ListingKey) -> list[object]:
+        del key
+        return []
+
+
+def test_replay_blank_listing_key_is_failed() -> None:
+    result = _replay_item(
+        _ReplayRepository(),  # type: ignore[arg-type]
+        "   ",
+        SearchQuery("alibaba-refresh:op-blank"),
+    )
+    assert result.status is ProductRefreshStatus.FAILED
+    assert "identificador" in result.message
+
+
+def test_missing_tracked_product_is_failed_without_provider_call(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    provider = FakeAlibabaProductRefreshProvider([_record()])
+    summary = composition.refresh_alibaba_products(
+        ["1600999999999"],
+        operation_id="op-missing",
+        clock=_clock(BASE),
+        refresh_provider=provider,
+    )
+    assert summary.failed == 1
+    assert summary.items[0].status is ProductRefreshStatus.FAILED
+    assert summary.items[0].message == "Producto no encontrado."
+    assert provider.calls == []
+
+
+def test_replay_not_found_when_peer_was_never_followed(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
+    provider = FakeAlibabaProductRefreshProvider([_record(prices=(Decimal("15.25"),))])
+    first = composition.refresh_alibaba_products(
+        ["1600000000000"],
+        operation_id="op-ghost",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    assert first.unchanged == 1
+    replay = composition.refresh_alibaba_products(
+        ["1600000000000", "1600000000002"],
+        operation_id="op-ghost",
+        clock=_clock(BASE + timedelta(hours=2)),
+        refresh_provider=provider,
+    )
+    assert len(provider.calls) == 1
+    by_id = {item.product_id: item for item in replay.items}
+    assert by_id["1600000000000"].status is ProductRefreshStatus.UNCHANGED
+    assert by_id["1600000000002"].status is ProductRefreshStatus.NOT_FOUND
+
+
+def test_replay_not_found_when_peer_has_no_matching_operation(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
+    composition.follow_alibaba_price(
+        _follow_observation(product_id="1600000000002"),
+        clock=_clock(BASE),
+    )
+    provider = FakeAlibabaProductRefreshProvider([_record(prices=(Decimal("15.25"),))])
+    composition.refresh_alibaba_products(
+        ["1600000000000"],
+        operation_id="op-peer",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    replay = composition.refresh_alibaba_products(
+        ["1600000000000", "1600000000002"],
+        operation_id="op-peer",
+        clock=_clock(BASE + timedelta(hours=2)),
+        refresh_provider=provider,
+    )
+    assert len(provider.calls) == 1
+    by_id = {item.product_id: item for item in replay.items}
+    assert by_id["1600000000000"].status is ProductRefreshStatus.UNCHANGED
+    assert by_id["1600000000002"].status is ProductRefreshStatus.NOT_FOUND
+
+
+def test_replay_unchanged_when_canonical_price_matches(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
+    provider = FakeAlibabaProductRefreshProvider([_record(prices=(Decimal("15.25"),))])
+    first = composition.refresh_alibaba_products(
+        ["1600000000000"],
+        operation_id="op-same-price",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    second = composition.refresh_alibaba_products(
+        ["1600000000000"],
+        operation_id="op-same-price",
+        clock=_clock(BASE + timedelta(hours=2)),
+        refresh_provider=provider,
+    )
+    assert first.unchanged == 1
+    assert second.unchanged == 1
+    assert len(provider.calls) == 1
+
+
+def test_url_association_with_mismatched_id_is_identity_mismatch(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
+    url = "https://www.alibaba.com/product-detail/1600000000000.html"
+    provider = FakeAlibabaProductRefreshProvider(
+        [_record(product_id="not-the-tracked-id", product_url=url, prices=(Decimal("15.25"),))]
+    )
+    summary = composition.refresh_alibaba_products(
+        ["1600000000000"],
+        operation_id="op-url-assoc",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    assert summary.identity_mismatch == 1
+    assert summary.items[0].status is ProductRefreshStatus.IDENTITY_MISMATCH
+    assert provider.calls != []
+
+
+def test_optional_text_bool_and_int_currency_are_not_iso() -> None:
+    bool_record = ProductRefreshRecord(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/1600000000000.html",
+        price_formatted=True,  # type: ignore[arg-type]
+        currency=True,  # type: ignore[arg-type]
+        ladder_prices=(),
+        min_order_quantity=1,
+        scraped_at=None,
+    )
+    assert normalize_refresh_price(bool_record) is None
+    int_currency = ProductRefreshRecord(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/1600000000000.html",
+        price_formatted="USD 4.30",
+        currency=840,  # type: ignore[arg-type]
+        ladder_prices=(),
+        min_order_quantity=1,
+        scraped_at=None,
+    )
+    assert normalize_refresh_price(int_currency) is None
+
+
+def test_malformed_nan_infinity_and_invalid_decimals_are_unusable() -> None:
+    nan_tier = LadderTier(
+        min_quantity=1,
+        max_quantity=49,
+        price=Decimal("NaN"),
+        price_formatted=None,
+    )
+    inf_tier = LadderTier(
+        min_quantity=1,
+        max_quantity=49,
+        price=Decimal("Infinity"),
+        price_formatted=None,
+    )
+    bool_tier = LadderTier(
+        min_quantity=1,
+        max_quantity=49,
+        price=True,  # type: ignore[arg-type]
+        price_formatted=None,
+    )
+    garbage_tier = LadderTier(
+        min_quantity=1,
+        max_quantity=49,
+        price="not-a-number",  # type: ignore[arg-type]
+        price_formatted=None,
+    )
+    int_tier = LadderTier(
+        min_quantity=1,
+        max_quantity=49,
+        price=4,  # type: ignore[arg-type]
+        price_formatted=None,
+    )
+    usd = "https://www.alibaba.com/product-detail/1600000000000.html"
+    for unusable in (nan_tier, inf_tier, bool_tier, garbage_tier):
+        record = ProductRefreshRecord(
+            product_id="1600000000000",
+            product_url=usd,
+            price_formatted=None,
+            currency="USD",
+            ladder_prices=(unusable,),
+            min_order_quantity=1,
+            scraped_at=None,
+        )
+        assert normalize_refresh_price(record) is None
+    usable = ProductRefreshRecord(
+        product_id="1600000000000",
+        product_url=usd,
+        price_formatted="USD 4.00",
+        currency="USD",
+        ladder_prices=(int_tier,),
+        min_order_quantity=1,
+        scraped_at=None,
+    )
+    normalized = normalize_refresh_price(usable)
+    assert normalized is not None
+    assert normalized.tracking_price == Decimal("4")
+
+
+def test_zero_in_formatted_price_is_skipped_and_single_positive_kept() -> None:
+    record = ProductRefreshRecord(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/1600000000000.html",
+        price_formatted="USD 0 4.30",
+        currency="USD",
+        ladder_prices=(),
+        min_order_quantity=1,
+        scraped_at=None,
+    )
+    normalized = normalize_refresh_price(record)
+    assert normalized is not None
+    assert normalized.tracking_price == Decimal("4.30")
+    only_zero = ProductRefreshRecord(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/1600000000000.html",
+        price_formatted="USD 0",
+        currency="USD",
+        ladder_prices=(),
+        min_order_quantity=1,
+        scraped_at=None,
+    )
+    assert normalize_refresh_price(only_zero) is None
+
+
+def test_moq_below_all_mins_and_missing_moq_uses_lowest_min() -> None:
+    high = LadderTier(
+        min_quantity=100,
+        max_quantity=200,
+        price=Decimal("3.80"),
+        price_formatted=None,
+    )
+    first = LadderTier(
+        min_quantity=1,
+        max_quantity=49,
+        price=Decimal("4.30"),
+        price_formatted=None,
+    )
+    assert select_moq_tier((high,), 1, use_usd=False) is None
+    selected = select_moq_tier((high, first), None, use_usd=False)
+    assert selected is first
+    selected_zero = select_moq_tier((first,), 0, use_usd=False)
+    assert selected_zero is first
+    uncovered = ProductRefreshRecord(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/1600000000000.html",
+        price_formatted="$4.30",
+        currency="USD",
+        ladder_prices=(first,),
+        min_order_quantity=5000,
+        scraped_at=None,
+    )
+    assert normalize_refresh_price(uncovered) is None
+
+
+def test_bytes_product_ids_are_rejected_as_non_sequence(tmp_path: Path) -> None:
+    with SQLiteListingRepository(":memory:") as repository:
+        with pytest.raises(TypeError, match="sequence"):
+            RefreshTrackedAlibabaProducts(
+                repository=repository,
+                provider=FakeAlibabaProductRefreshProvider(),
+            ).execute(b"1600000000000", operation_id="op-bytes")  # type: ignore[arg-type]
+
+
+def test_refresh_client_bool_optional_text_and_decimal_are_dropped() -> None:
+    mapped = map_xtracto_item(
+        {
+            "productId": True,
+            "productUrl": False,
+            "currency": True,
+            "priceFormatted": True,
+            "minOrderQuantity": True,
+            "ladderPrices": [
+                {
+                    "minQuantity": True,
+                    "price": True,
+                    "pricePerUnitUSD": True,
+                },
+                {
+                    "minQuantity": 10,
+                    "price": 4.3,
+                    "pricePerUnitUSD": "not-a-number",
+                },
+            ],
+        }
+    )
+    assert mapped is not None
+    assert mapped.product_id is None
+    assert mapped.product_url is None
+    assert mapped.currency is None
+    assert mapped.min_order_quantity is None
+    assert mapped.ladder_prices[0].price is None
+    assert mapped.ladder_prices[1].price == Decimal("4.3")
+    assert mapped.ladder_prices[1].price_usd is None
+
+
+def test_refresh_client_empty_status_invalid_url_and_error_propagation() -> None:
+    product = TrackedAlibabaProduct(
+        product_id="1600000000000",
+        product_url="https://www.alibaba.com/product-detail/1600000000000.html",
+    )
+    empty_status = _StatusFakeApify({"status": "  ", "defaultDatasetId": "ds1"})
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=cast(Any, lambda _token: empty_status),
+        ).refresh_products([product])
+    non_string_status = _StatusFakeApify({"status": 0, "defaultDatasetId": "ds1"})
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=cast(Any, lambda _token: non_string_status),
+        ).refresh_products([product])
+
+    def boom_config(_token: str) -> object:
+        raise ApifyConfigurationError("refresh token invalid")
+
+    with pytest.raises(ApifyConfigurationError, match="refresh token invalid"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=cast(Any, boom_config),
+        ).refresh_products([product])
+
+    def boom_unavailable(_token: str) -> object:
+        raise MarketplaceSourceUnavailable("Alibaba source is unavailable")
+
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=cast(Any, boom_unavailable),
+        ).refresh_products([product])
+
+    bad_url = TrackedAlibabaProduct(
+        product_id="1600000000000",
+        product_url="https://example.com/product-detail/1600000000000.html",
+    )
+    with pytest.raises(ApifyConfigurationError, match="product-detail"):
+        ApifyAlibabaProductRefreshClient(
+            _api_token="token",
+            client_factory=lambda _token: (_ for _ in ()).throw(AssertionError("no call")),
+        ).refresh_products([bad_url])
+
+    second = TrackedAlibabaProduct(
+        product_id="1600000000001",
+        product_url="https://www.alibaba.com/product-detail/1600000000001.html",
+    )
+    mixed = _StatusFakeApify(
+        {"status": "SUCCEEDED", "defaultDatasetId": "ds1"},
+        items=["skip", {"productId": "1600000000000", "currency": "USD"}],
+    )
+    batch = ApifyAlibabaProductRefreshClient(
+        _api_token="token",
+        client_factory=cast(Any, lambda _token: mixed),
+    ).refresh_products([product, second])
+    assert len(batch.records) == 1
+    assert batch.records[0].product_id == "1600000000000"
+
+
+def test_gui_refresh_selection_skips_blank_duplicates_and_rejects_bad_counts() -> None:
+    assert services.clamp_alibaba_refresh_selection(
+        ["  ", "a", "a", "b", 3],  # type: ignore[list-item]
+        limit=1,
+    ) == ["a"]
+    with pytest.raises(ValueError, match="al menos un producto"):
+        services.alibaba_refresh_confirmation(0)
+    with pytest.raises(ValueError, match="al menos un producto"):
+        services.alibaba_refresh_confirmation(True)
+    with pytest.raises(ValueError, match="50"):
+        services.alibaba_refresh_confirmation(51)
+
+
+def test_gui_unfollow_and_tracked_row_currency_without_history(tmp_path: Path) -> None:
+    from bera_price_tracker.application.alibaba_tracking import (
+        AlibabaTrackedProduct,
+        AlibabaTrackingVariation,
+    )
+
+    settings = _settings(tmp_path)
+    composition = ApplicationComposition(settings=settings)
+    composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
+    row = services.unfollow_alibaba_price(
+        "1600000000000",
+        settings=settings,
+        composition=composition,
+    )
+    assert row["is_active"] == "0"
+    assert row["currency"] == "USD"
+    empty = AlibabaTrackedProduct(
+        product_id="1600000000001",
+        title="Ghost",
+        supplier_name=None,
+        url="https://www.alibaba.com/product-detail/1600000000001.html",
+        is_active=True,
+        current_price_display="4.30",
+        price_min=None,
+        price_max=None,
+        last_updated=BASE,
+        variation=AlibabaTrackingVariation(
+            first_price=Decimal("4.30"),
+            last_price=Decimal("4.40"),
+            historical_minimum=Decimal("4.30"),
+            historical_maximum=Decimal("4.40"),
+            snapshot_count=2,
+            absolute_change=Decimal("0.10"),
+            percentage_change=None,
+            baseline_price=Decimal("4.30"),
+        ),
+        history=(),
+    )
+    formatted = services.tracked_product_to_row(empty)
+    assert formatted["currency"] == ""
+    assert formatted["variation"] == "unavailable (unavailable)"

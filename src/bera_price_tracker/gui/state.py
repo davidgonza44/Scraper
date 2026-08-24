@@ -139,6 +139,7 @@ class AlibabaTrackedRow(rx.Base):
     snapshot_count: str = ""
     price_min: str = ""
     price_max: str = ""
+    currency: str = ""
     selected: bool = False
 
 
@@ -463,6 +464,7 @@ class TrackerState(rx.State):
                 "last_price": row.last_price,
                 "price_min": row.price_min,
                 "price_max": row.price_max,
+                "currency": row.currency,
             }
             for row in self.alibaba_tracked_rows
         ]
@@ -475,6 +477,7 @@ class TrackerState(rx.State):
                 "price_max": row.price_max,
                 "moq": row.moq,
                 "representative": row.representative,
+                "currency": row.currency,
             }
             for row in self.alibaba_results
         ]
@@ -779,12 +782,11 @@ class TrackerState(rx.State):
         except Exception as exc:  # noqa: BLE001 - sanitized before display
             message = services.sanitize_alibaba_error(exc)
             async with self:
-                self.alibaba_is_loading = False
-                self.alibaba_error = message
-                self.alibaba_results = []
-                self.alibaba_summary = {}
-                self.alibaba_stats_raw = {}
-                self.alibaba_ui_status = UI_ERROR
+                self._finalize_alibaba_search(
+                    request_query=query,
+                    request_limit=limit,
+                    error_message=message,
+                )
             return
 
         rows = [
@@ -827,12 +829,14 @@ class TrackerState(rx.State):
             for item in payload.get("results") or []
         ]
         async with self:
-            self.alibaba_is_loading = False
-            self.alibaba_error = ""
-            self.alibaba_results = rows
-            self.alibaba_summary = dict(payload.get("summary") or {})
-            self.alibaba_stats_raw = dict(payload.get("stats_raw") or {})
-            self.alibaba_ui_status = str(payload.get("ui_status") or UI_EMPTY)
+            self._finalize_alibaba_search(
+                request_query=query,
+                request_limit=limit,
+                rows=rows,
+                summary=dict(payload.get("summary") or {}),
+                stats_raw=dict(payload.get("stats_raw") or {}),
+                ui_status=str(payload.get("ui_status") or UI_EMPTY),
+            )
 
     def set_alibaba_sort(self, value: str) -> None:
         self.alibaba_sort = ALIBABA_SORT_BY_LABEL.get(value, analysis.SORT_ORIGINAL)
@@ -909,6 +913,41 @@ class TrackerState(rx.State):
         self._set_ranking_weights(DEFAULT_WEIGHTS)
         self.alibaba_chart_scope = analysis.CHART_SCOPE_ALL
 
+    def _finalize_alibaba_search(
+        self,
+        *,
+        request_query: str,
+        request_limit: int,
+        rows: list[AlibabaResultRow] | None = None,
+        summary: dict[str, str] | None = None,
+        stats_raw: dict[str, str] | None = None,
+        ui_status: str = "",
+        error_message: str | None = None,
+    ) -> None:
+        # A second search cannot start while alibaba_is_loading is True, so this
+        # in-flight request still owns the loading flag when query/limit changed.
+        if (
+            request_query.strip() != self.alibaba_query.strip()
+            or request_limit != self.alibaba_limit
+        ):
+            self.alibaba_is_loading = False
+            if self.alibaba_ui_status == UI_LOADING:
+                self.alibaba_ui_status = UI_INITIAL
+            return
+        self.alibaba_is_loading = False
+        if error_message is not None:
+            self.alibaba_error = error_message
+            self.alibaba_results = []
+            self.alibaba_summary = {}
+            self.alibaba_stats_raw = {}
+            self.alibaba_ui_status = UI_ERROR
+            return
+        self.alibaba_error = ""
+        self.alibaba_results = list(rows or [])
+        self.alibaba_summary = dict(summary or {})
+        self.alibaba_stats_raw = dict(stats_raw or {})
+        self.alibaba_ui_status = ui_status or UI_EMPTY
+
     def set_ml_query(self, value: str) -> None:
         self.ml_query = value
         if value.strip() != self.ml_last_search_query.strip():
@@ -937,7 +976,7 @@ class TrackerState(rx.State):
             title=row.title,
             supplier=row.supplier_name,
             supplier_price=row.current_price or row.last_price,
-            currency="",
+            currency=row.currency,
         )
 
     def _prepare_ml_comparables(
@@ -953,7 +992,7 @@ class TrackerState(rx.State):
         if not stable_external_id:
             return
         previous_id = self.ml_alibaba_context.get("external_id", "")
-        landed = self._landed_for_ml_product(stable_external_id)
+        landed = self._landed_for_ml_product_currency(stable_external_id, currency)
         context = services.build_alibaba_ml_context(
             external_id=stable_external_id,
             title=title,
@@ -1025,6 +1064,22 @@ class TrackerState(rx.State):
         if not self.alibaba_landed_has_result:
             return None
         return self.alibaba_landed_result
+
+    def _landed_for_ml_product_currency(
+        self, external_id: str, currency: object
+    ) -> dict[str, str] | None:
+        from bera_price_tracker.application.alibaba_statistics import (
+            explicit_alibaba_currency,
+        )
+
+        explicit = explicit_alibaba_currency(currency)
+        if explicit is None:
+            return None
+        landed = self._landed_for_ml_product(external_id)
+        if landed is None:
+            return None
+        landed_currency = explicit_alibaba_currency(landed.get("currency"))
+        return landed if landed_currency == explicit else None
 
     def _ml_benchmark_row_maps(self) -> list[dict[str, object]]:
         return [
@@ -1155,7 +1210,9 @@ class TrackerState(rx.State):
     def compare_ml_with_landed_cost(self) -> None:
         if self.ml_has_alibaba_context:
             selected_id = self.ml_alibaba_context.get("external_id", "")
-            landed = self._landed_for_ml_product(selected_id)
+            landed = self._landed_for_ml_product_currency(
+                selected_id, self.ml_alibaba_context.get("currency")
+            )
         else:
             landed = self.alibaba_landed_result if self.alibaba_landed_has_result else None
         row = services.compare_mercadolibre_with_landed_cost(
@@ -1185,6 +1242,7 @@ class TrackerState(rx.State):
                 snapshot_count=str(item.get("snapshot_count", "")),
                 price_min=str(item.get("price_min", "")),
                 price_max=str(item.get("price_max", "")),
+                currency=str(item.get("currency", "")),
             )
             for item in rows
         ]
@@ -1528,7 +1586,9 @@ class TrackerState(rx.State):
         if not self.ml_show_alibaba_association:
             return services.empty_alibaba_ml_association()
         selected_id = self.ml_alibaba_context.get("external_id", "")
-        landed = self._landed_for_ml_product(selected_id)
+        landed = self._landed_for_ml_product_currency(
+            selected_id, self.ml_alibaba_context.get("currency")
+        )
         context = services.build_alibaba_ml_context(
             external_id=selected_id,
             title=self.ml_alibaba_context.get("title", ""),

@@ -26,12 +26,14 @@ class FakeAlibabaProvider:
         return list(self.products)
 
 
-def _product(title: str, price: str | None = None) -> AlibabaProduct:
+def _product(title: str, price: str | None = None, currency: str | None = "USD") -> AlibabaProduct:
     from bera_price_tracker.infrastructure.providers.alibaba import map_alibaba_item
 
     raw: dict[str, Any] = {"title": title, "url": "https://www.alibaba.com/p"}
     if price is not None:
         raw["price"] = price
+    if currency is not None:
+        raw["currency"] = currency
     product = map_alibaba_item(raw)
     assert product is not None
     return product
@@ -83,7 +85,7 @@ def test_range_rows_sort_by_representative_and_keep_display() -> None:
     assert rows[0]["representative"] == "1.45"
     view = analysis.apply_table_view(rows, sort=analysis.SORT_PRICE_ASC)
     assert _titles(view) == ["Low", "Range"]
-    assert view[1]["price"] == "$1.30-1.60"
+    assert view[1]["price"] == "$1.30–$1.60"
 
 
 def test_minimum_filter() -> None:
@@ -105,7 +107,7 @@ def test_minimum_and_maximum_filter() -> None:
 
 
 def test_non_usd_rows_excluded_when_filtering() -> None:
-    rows = _rows([("EUR", "EUR 100"), ("USD", "$5")])
+    rows = _payload([_product("EUR", "EUR 100", currency=None), _product("USD", "$5")])["results"]
     assert rows[0]["representative"] == ""
     view = analysis.apply_table_view(rows, minimum=Decimal("1"))
     assert _titles(view) == ["USD"]

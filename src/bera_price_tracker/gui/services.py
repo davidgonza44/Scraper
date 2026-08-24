@@ -305,13 +305,14 @@ def sanitize_alibaba_error(exc: BaseException) -> str:
 
 
 def alibaba_product_to_row(product: object) -> dict[str, Any]:
-    price_display = getattr(product, "price_display", None)
-    price = str(price_display).strip() if price_display else ""
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_listing_price
+
     min_price = getattr(product, "min_price", None)
     max_price = getattr(product, "max_price", None)
+    currency = getattr(product, "currency", None)
     return {
         "title": str(getattr(product, "title", "") or ""),
-        "price": price,
+        "price": format_alibaba_listing_price(min_price, max_price, currency),
         "moq": str(getattr(product, "moq", "") or ""),
         "supplier_name": str(getattr(product, "supplier_name", "") or ""),
         "supplier_country": str(getattr(product, "supplier_country", "") or ""),
@@ -320,7 +321,7 @@ def alibaba_product_to_row(product: object) -> dict[str, Any]:
         "product_id": str(getattr(product, "product_id", "") or ""),
         "price_min": "" if min_price is None else str(min_price),
         "price_max": "" if max_price is None else str(max_price),
-        "currency": str(getattr(product, "currency", "") or ""),
+        "currency": str(currency or ""),
     }
 
 
@@ -465,13 +466,15 @@ def _format_tracked_utc(value: datetime) -> str:
 
 
 def _format_tracked_variation(tracked: Any) -> str:
-    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_currency
     from bera_price_tracker.application.alibaba_tracking import PERCENT_UNAVAILABLE
 
     variation = tracked.variation
     if variation.absolute_change is None:
         return "—"
-    absolute = format_alibaba_money(variation.absolute_change)
+    absolute = format_alibaba_currency(
+        variation.absolute_change, _tracked_listing_currency(tracked)
+    )
     if variation.percentage_change is None:
         return f"{absolute} ({PERCENT_UNAVAILABLE})"
     percent = variation.percentage_change.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
@@ -491,15 +494,28 @@ def _tracked_observation_tag(observation: Any) -> str:
     return ""
 
 
+def _tracked_listing_currency(tracked: Any) -> str:
+    from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
+
+    history = getattr(tracked, "history", ()) or ()
+    if not history:
+        return ""
+    return explicit_alibaba_currency(getattr(history[-1], "currency", None)) or ""
+
+
 def tracked_product_to_row(tracked: Any) -> dict[str, str]:
-    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.alibaba_statistics import (
+        format_alibaba_currency,
+        format_alibaba_listing_price,
+    )
     from bera_price_tracker.application.alibaba_tracking import is_canonical_tracking_observation
 
     history_lines = [
-        f"{_format_tracked_utc(item.collected_at)} · {format_alibaba_money(item.price)}"
-        + _tracked_observation_tag(item)
+        f"{_format_tracked_utc(item.collected_at)} · "
+        f"{format_alibaba_currency(item.price, item.currency)}" + _tracked_observation_tag(item)
         for item in tracked.history
     ]
+    currency = _tracked_listing_currency(tracked)
     baseline = tracked.variation.baseline_price
     published_range = ""
     if (
@@ -507,8 +523,8 @@ def tracked_product_to_row(tracked: Any) -> dict[str, str]:
         and tracked.price_max is not None
         and tracked.price_min != tracked.price_max
     ):
-        published_range = (
-            f"{format_alibaba_money(tracked.price_min)}–{format_alibaba_money(tracked.price_max)}"
+        published_range = format_alibaba_listing_price(
+            tracked.price_min, tracked.price_max, currency
         )
     first_is_provisional = bool(tracked.history) and not is_canonical_tracking_observation(
         tracked.history[0]
@@ -517,12 +533,12 @@ def tracked_product_to_row(tracked: Any) -> dict[str, str]:
         "product_id": tracked.product_id,
         "title": tracked.title,
         "supplier_name": tracked.supplier_name or "",
-        "current_price": tracked.current_price_display,
-        "last_price": format_alibaba_money(tracked.variation.last_price),
+        "current_price": format_alibaba_currency(tracked.variation.last_price, currency),
+        "last_price": format_alibaba_currency(tracked.variation.last_price, currency),
         "published_range": published_range,
-        "first_price": format_alibaba_money(tracked.variation.first_price),
+        "first_price": format_alibaba_currency(tracked.variation.first_price, currency),
         "first_price_tag": "Discovery" if first_is_provisional else "",
-        "baseline": "—" if baseline is None else format_alibaba_money(baseline),
+        "baseline": ("—" if baseline is None else format_alibaba_currency(baseline, currency)),
         "last_updated": _format_tracked_utc(tracked.last_updated),
         "variation": _format_tracked_variation(tracked),
         "history": "\n".join(history_lines),
@@ -531,6 +547,7 @@ def tracked_product_to_row(tracked: Any) -> dict[str, str]:
         "snapshot_count": str(tracked.variation.snapshot_count),
         "price_min": "" if tracked.price_min is None else str(tracked.price_min),
         "price_max": "" if tracked.price_max is None else str(tracked.price_max),
+        "currency": currency,
     }
 
 
@@ -730,6 +747,7 @@ def build_alibaba_negotiation_catalog(
                 "price_max": str(row.get("price_max") or ""),
                 "moq": "",
                 "representative": "",
+                "currency": str(row.get("currency") or ""),
             }
         )
     for row in result_rows:
@@ -751,29 +769,31 @@ def build_alibaba_negotiation_catalog(
                 "price_max": str(row.get("price_max") or ""),
                 "moq": str(row.get("moq") or ""),
                 "representative": str(row.get("representative") or ""),
+                "currency": str(row.get("currency") or ""),
             }
         )
     return catalog
 
 
 def negotiation_plan_to_row(plan: Any) -> dict[str, str]:
-    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_currency
 
     next_qty = plan.next_tier_min_quantity
     proximity = plan.tier_proximity
+    currency = plan.currency
     return {
         "title": plan.title,
         "supplier_name": plan.supplier_name or "",
         "desired_quantity": str(plan.desired_quantity),
-        "public_unit_price": format_alibaba_money(plan.public_unit_price),
-        "opening_offer": format_alibaba_money(plan.opening_offer),
-        "target_price": format_alibaba_money(plan.target_price),
-        "ceiling_price": format_alibaba_money(plan.ceiling_price),
-        "negotiable_reference": format_alibaba_money(plan.negotiable_reference),
+        "public_unit_price": format_alibaba_currency(plan.public_unit_price, currency),
+        "opening_offer": format_alibaba_currency(plan.opening_offer, currency),
+        "target_price": format_alibaba_currency(plan.target_price, currency),
+        "ceiling_price": format_alibaba_currency(plan.ceiling_price, currency),
+        "negotiable_reference": format_alibaba_currency(plan.negotiable_reference, currency),
         "next_tier": (
             "—"
             if next_qty is None or plan.next_tier_price is None
-            else f"{next_qty} u · {format_alibaba_money(plan.next_tier_price)}"
+            else f"{next_qty} u · {format_alibaba_currency(plan.next_tier_price, currency)}"
         ),
         "tier_proximity": (
             "—" if proximity is None else f"{(proximity * Decimal('100')).quantize(Decimal('1'))}%"
@@ -793,6 +813,7 @@ def negotiation_plan_to_row(plan: Any) -> dict[str, str]:
         "ceiling_provenance": "",
         "profitability_note": "",
         "rate_status": "",
+        "currency": currency,
     }
 
 
@@ -809,6 +830,7 @@ def calculate_alibaba_negotiation(
     ladder_text: object = "",
 ) -> dict[str, str]:
     from bera_price_tracker.application.alibaba_negotiation import (
+        MISSING_LISTING_CURRENCY,
         AlibabaNegotiationError,
         AlibabaNegotiationInput,
         calculate_alibaba_negotiation_plan,
@@ -816,9 +838,13 @@ def calculate_alibaba_negotiation(
         public_price_from_catalog_row,
     )
     from bera_price_tracker.application.alibaba_score import extract_moq_quantity
+    from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
 
     if catalog_row is None:
         raise AlibabaNegotiationError(ALIBABA_NEGOTIATION_PRODUCT_ERROR)
+    currency = explicit_alibaba_currency(catalog_row.get("currency"))
+    if currency is None:
+        raise AlibabaNegotiationError(MISSING_LISTING_CURRENCY)
     quantity = _optional_form_int(desired_quantity)
     if quantity is None:
         raise AlibabaNegotiationError("Indica una cantidad deseada mayor que cero.")
@@ -840,6 +866,7 @@ def calculate_alibaba_negotiation(
             duties_per_unit=_optional_form_money(duties_per_unit),
             other_costs_per_unit=_optional_form_money(other_costs_per_unit),
             negotiation_aggressiveness=aggressiveness,
+            currency=currency,
         )
     )
     row = negotiation_plan_to_row(plan)
@@ -876,18 +903,23 @@ def calculate_alibaba_negotiation(
 
 def _plan_from_row(row: Mapping[str, object]) -> Any:
     from bera_price_tracker.application.alibaba_negotiation import (
+        MISSING_LISTING_CURRENCY,
         AlibabaNegotiationError,
         AlibabaNegotiationInput,
         calculate_alibaba_negotiation_plan,
         parse_ladder_text,
     )
+    from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
     from bera_price_tracker.application.import_aware_negotiation import apply_profitability_ceiling
     from bera_price_tracker.application.landed_cost import ShippingRateStatus
 
     quantity = _optional_form_int(row.get("desired_quantity"))
     public = _optional_form_money(str(row.get("public_raw") or ""))
+    currency = explicit_alibaba_currency(row.get("currency"))
     if quantity is None or public is None:
         raise AlibabaNegotiationError("Calcula la estrategia antes de generar un mensaje.")
+    if currency is None:
+        raise AlibabaNegotiationError(MISSING_LISTING_CURRENCY)
     plan = calculate_alibaba_negotiation_plan(
         AlibabaNegotiationInput(
             desired_quantity=quantity,
@@ -902,6 +934,7 @@ def _plan_from_row(row: Mapping[str, object]) -> Any:
             duties_per_unit=_optional_form_money(row.get("duties_per_unit")),
             other_costs_per_unit=_optional_form_money(row.get("other_costs_per_unit")),
             negotiation_aggressiveness=_parse_aggressiveness(row.get("aggressiveness")),
+            currency=currency,
         )
     )
     if str(row.get("profitability_applied") or "") != "1":
@@ -919,6 +952,7 @@ def _plan_from_row(row: Mapping[str, object]) -> Any:
         plan,
         maximum_supplier_unit_price=max_supplier,
         rate_status=status,
+        landed_currency=explicit_alibaba_currency(row.get("landed_currency")) or currency,
     ).plan
 
 
@@ -949,22 +983,20 @@ def analyze_alibaba_supplier_reply(
         AlibabaNegotiationDrafter,
         AnalyzeSupplierResponse,
     )
-    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_currency
     from bera_price_tracker.composition import build_alibaba_negotiation_drafter
 
     resolved: AlibabaNegotiationDrafter = (
         drafter if drafter is not None else build_alibaba_negotiation_drafter()
     )
-    parsed, recommendation = AnalyzeSupplierResponse(resolved).execute(
-        _plan_from_row(plan_row),
-        supplier_text,
-    )
+    plan = _plan_from_row(plan_row)
+    parsed, recommendation = AnalyzeSupplierResponse(resolved).execute(plan, supplier_text)
     return {
         "response_summary": parsed.response_summary,
         "quoted_unit_price": (
             "—"
             if parsed.quoted_unit_price is None
-            else format_alibaba_money(parsed.quoted_unit_price)
+            else format_alibaba_currency(parsed.quoted_unit_price, plan.currency)
         ),
         "quoted_quantity": "—" if parsed.quoted_quantity is None else str(parsed.quoted_quantity),
         "quoted_moq": "—" if parsed.quoted_moq is None else str(parsed.quoted_moq),
@@ -973,7 +1005,7 @@ def analyze_alibaba_supplier_reply(
         "authorized_price": (
             "—"
             if recommendation.authorized_price is None
-            else format_alibaba_money(recommendation.authorized_price)
+            else format_alibaba_currency(recommendation.authorized_price, plan.currency)
         ),
         "notes": recommendation.notes,
         "needs_review": "1" if parsed.needs_human_review else "0",
@@ -1055,11 +1087,16 @@ def calculate_alibaba_landed_cost(
     expected_sale_price: object = "",
     target_margin_percent: object = "",
     product_title: str = "",
+    currency: object = "",
 ) -> dict[str, str]:
     """Parse GUI form strings and return a display row. Formulas live in application."""
 
-    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.alibaba_statistics import (
+        explicit_alibaba_currency,
+        format_alibaba_currency,
+    )
     from bera_price_tracker.application.landed_cost import (
+        DEFAULT_LANDED_CURRENCY,
         INVALID_BATTERY_MULTIPLIER,
         INVALID_CARGO_RATE,
         INVALID_IMPORT_COST,
@@ -1093,10 +1130,12 @@ def calculate_alibaba_landed_cost(
         if parsed_multiplier is None:
             raise LandedCostError(INVALID_BATTERY_MULTIPLIER)
         multiplier = parsed_multiplier
+    landed_iso = explicit_alibaba_currency(currency) or DEFAULT_LANDED_CURRENCY
     analysis = calculate_landed_cost(
         LandedCostInput(
             quantity=parsed_quantity,
             supplier_unit_price=parsed_price,
+            currency=landed_iso,
             packaging=CargoPackagingInput(
                 cartons=_optional_form_int(cartons),
                 units_per_carton=_optional_form_int(units_per_carton),
@@ -1127,21 +1166,22 @@ def calculate_alibaba_landed_cost(
             target_margin_percent=_optional_form_money(target_margin_percent),
         )
     )
+    money = analysis.currency
     return {
         "product_title": product_title,
         "quantity": str(analysis.quantity),
-        "merchandise_cost": format_alibaba_money(analysis.merchandise_cost),
+        "merchandise_cost": format_alibaba_currency(analysis.merchandise_cost, money),
         "carton_cbm": f"{analysis.carton_cbm.normalize():f} CBM",
         "total_cbm": f"{analysis.total_cbm.normalize():f} CBM",
         "total_weight": f"{analysis.total_weight_kg.normalize():f} kg",
-        "freight_base": format_alibaba_money(analysis.freight_base),
-        "freight_adjusted": format_alibaba_money(analysis.freight_adjusted),
-        "shipping_surcharges": format_alibaba_money(analysis.shipping_surcharges),
-        "shipping_total": format_alibaba_money(analysis.shipping_total),
-        "other_import_costs": format_alibaba_money(analysis.other_import_costs),
-        "total_landed_cost": format_alibaba_money(analysis.total_landed_cost),
-        "landed_cost_per_unit": format_alibaba_money(analysis.landed_cost_per_unit),
-        "break_even": format_alibaba_money(analysis.break_even_sale_price),
+        "freight_base": format_alibaba_currency(analysis.freight_base, money),
+        "freight_adjusted": format_alibaba_currency(analysis.freight_adjusted, money),
+        "shipping_surcharges": format_alibaba_currency(analysis.shipping_surcharges, money),
+        "shipping_total": format_alibaba_currency(analysis.shipping_total, money),
+        "other_import_costs": format_alibaba_currency(analysis.other_import_costs, money),
+        "total_landed_cost": format_alibaba_currency(analysis.total_landed_cost, money),
+        "landed_cost_per_unit": format_alibaba_currency(analysis.landed_cost_per_unit, money),
+        "break_even": format_alibaba_currency(analysis.break_even_sale_price, money),
         "rate_label": (
             ALIBABA_LANDED_CONFIRMED_LABEL
             if analysis.rate_status is ShippingRateStatus.CONFIRMED_QUOTE
@@ -1149,15 +1189,21 @@ def calculate_alibaba_landed_cost(
         ),
         "rate_display": f"{analysis.rate_usd_per_cbm.normalize():f} USD/CBM · "
         f"{analysis.provider} · {analysis.service} · {analysis.destination_country}",
-        "expected_sale_price": ("" if parsed_sale is None else format_alibaba_money(parsed_sale)),
-        "revenue": "" if analysis.revenue is None else format_alibaba_money(analysis.revenue),
+        "expected_sale_price": (
+            "" if parsed_sale is None else format_alibaba_currency(parsed_sale, money)
+        ),
+        "revenue": (
+            "" if analysis.revenue is None else format_alibaba_currency(analysis.revenue, money)
+        ),
         "gross_profit": (
-            "" if analysis.gross_profit is None else format_alibaba_money(analysis.gross_profit)
+            ""
+            if analysis.gross_profit is None
+            else format_alibaba_currency(analysis.gross_profit, money)
         ),
         "gross_profit_per_unit": (
             ""
             if analysis.gross_profit_per_unit is None
-            else format_alibaba_money(analysis.gross_profit_per_unit)
+            else format_alibaba_currency(analysis.gross_profit_per_unit, money)
         ),
         "margin_percent": (
             "" if analysis.margin_percent is None else f"{analysis.margin_percent}%"
@@ -1165,7 +1211,7 @@ def calculate_alibaba_landed_cost(
         "max_supplier_price": (
             ""
             if analysis.maximum_supplier_unit_price is None
-            else format_alibaba_money(analysis.maximum_supplier_unit_price)
+            else format_alibaba_currency(analysis.maximum_supplier_unit_price, money)
         ),
         "max_supplier_raw": (
             ""
@@ -1173,6 +1219,8 @@ def calculate_alibaba_landed_cost(
             else f"{analysis.maximum_supplier_unit_price:f}"
         ),
         "rate_status": analysis.rate_status.value,
+        "currency": analysis.currency,
+        "landed_cost_per_unit_raw": f"{analysis.landed_cost_per_unit:f}",
         "unattractive": (
             "1" if analysis.viability is LandedCostViability.ECONOMICALLY_UNATTRACTIVE else "0"
         ),
@@ -1186,39 +1234,53 @@ def apply_alibaba_profitability_ceiling(
     """Apply a completed landed-cost ceiling to an existing negotiation row."""
 
     from bera_price_tracker.application.alibaba_negotiation import AlibabaNegotiationError
-    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.alibaba_statistics import (
+        alibaba_iso_currencies_match,
+        explicit_alibaba_currency,
+        format_alibaba_currency,
+    )
     from bera_price_tracker.application.import_aware_negotiation import (
         MISSING_PROFITABILITY_CEILING,
+        PROFITABILITY_CURRENCY_MISMATCH,
         apply_profitability_ceiling,
     )
     from bera_price_tracker.application.landed_cost import LandedCostError, ShippingRateStatus
 
     if not plan_row:
         raise AlibabaNegotiationError("Calcula la estrategia antes de aplicar rentabilidad.")
-    raw = "" if landed_row is None else str(landed_row.get("max_supplier_raw") or "").strip()
+    if landed_row is None:
+        raise LandedCostError(MISSING_PROFITABILITY_CEILING)
+    if not alibaba_iso_currencies_match(plan_row.get("currency"), landed_row.get("currency")):
+        raise LandedCostError(PROFITABILITY_CURRENCY_MISMATCH)
+    raw = str(landed_row.get("max_supplier_raw") or "").strip()
     if not raw:
         raise LandedCostError(MISSING_PROFITABILITY_CEILING)
     try:
         max_supplier = Decimal(raw)
     except InvalidOperation:
         raise LandedCostError(MISSING_PROFITABILITY_CEILING) from None
-    status_text = "" if landed_row is None else str(landed_row.get("rate_status") or "").strip()
+    status_text = str(landed_row.get("rate_status") or "").strip()
     status = (
         ShippingRateStatus(status_text)
         if status_text in {item.value for item in ShippingRateStatus}
         else ShippingRateStatus.ESTIMATE
     )
     base = {str(key): str(value) for key, value in plan_row.items()}
+    landed_iso = explicit_alibaba_currency(landed_row.get("currency"))
     composed = apply_profitability_ceiling(
         _plan_from_row({**base, "profitability_applied": "0"}),
         maximum_supplier_unit_price=max_supplier,
         rate_status=status,
+        landed_currency=landed_iso,
     )
     row = {**base, **negotiation_plan_to_row(composed.plan)}
+    currency = composed.plan.currency
     row.update(
         {
-            "original_ceiling": format_alibaba_money(composed.original_ceiling),
-            "profitability_ceiling": format_alibaba_money(composed.profitability_ceiling)
+            "original_ceiling": format_alibaba_currency(composed.original_ceiling, currency),
+            "profitability_ceiling": format_alibaba_currency(
+                composed.profitability_ceiling, currency
+            )
             if composed.profitability_ceiling is not None
             else "",
             "profitability_ceiling_raw": (
@@ -1226,11 +1288,12 @@ def apply_alibaba_profitability_ceiling(
                 if composed.profitability_ceiling is None
                 else f"{composed.profitability_ceiling:f}"
             ),
-            "effective_ceiling": format_alibaba_money(composed.effective_ceiling),
+            "effective_ceiling": format_alibaba_currency(composed.effective_ceiling, currency),
             "profitability_applied": "1" if composed.applied else "0",
             "ceiling_provenance": composed.provenance or "",
             "profitability_note": composed.profitability_note,
             "rate_status": "" if composed.rate_status is None else composed.rate_status.value,
+            "landed_currency": landed_iso or "",
         }
     )
     return row
@@ -1618,12 +1681,18 @@ def build_alibaba_ml_context(
 ) -> dict[str, str]:
     """Public Alibaba fields plus current landed unit cost. No raw provider payload."""
 
+    from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
     from bera_price_tracker.application.mercadolibre_statistics import format_mercadolibre_money
 
     product_id = str(external_id or "").strip()
     landed, landed_currency = parse_landed_unit_from_display_row(landed_row)
-    has_landed = landed is not None
-    currency_text = str(currency or "").strip().upper()
+    explicit_currency = explicit_alibaba_currency(currency)
+    currency_text = explicit_currency or ""
+    has_landed = (
+        landed is not None
+        and explicit_currency is not None
+        and landed_currency == explicit_currency
+    )
     return {
         "external_id": product_id,
         "title": str(title or "").strip() or "Sin título",
@@ -1632,8 +1701,8 @@ def build_alibaba_ml_context(
         "currency": currency_text,
         "desired_quantity": str(desired_quantity or "").strip(),
         "has_landed": "1" if has_landed else "0",
-        "landed": format_mercadolibre_money(landed, landed_currency) if has_landed else "",
-        "landed_raw": f"{landed:f}" if has_landed else "",
+        "landed": (format_mercadolibre_money(landed, landed_currency) if has_landed else ""),
+        "landed_raw": f"{landed:f}" if has_landed and landed is not None else "",
         "landed_currency": landed_currency if has_landed else "",
     }
 
@@ -1712,7 +1781,7 @@ def build_alibaba_ml_association(
             "min": str(summary.get("minimo") or ""),
             "max": str(summary.get("maximo") or ""),
             "comparable_count": str(comparable_count),
-            "has_profitability": "1" if comparable else "0",
+            "has_profitability": "1" if has_landed and comparable else "0",
             "sparse": "1" if comparable_count < 3 else "0",
             "sparse_message": MERCADOLIBRE_SPARSE_BENCHMARK if comparable_count < 3 else "",
             "missing_landed_message": ("" if has_landed else MERCADOLIBRE_NEED_LANDED_FOR_PROFIT),

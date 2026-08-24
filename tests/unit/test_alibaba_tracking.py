@@ -12,18 +12,26 @@ import pytest
 
 from bera_price_tracker.application.alibaba_tracking import (
     FOLLOW_SOURCE,
+    MISSING_CURRENCY,
+    MISSING_PRICE,
     MISSING_PRODUCT_ID,
+    MISSING_TITLE,
+    MISSING_URL,
     REFRESH_QUERY_PREFIX,
+    UNKNOWN_LISTING,
     AlibabaFollowError,
     AlibabaFollowObservation,
     FollowAlibabaPrice,
     ListAlibabaTracked,
     RecordAlibabaPriceSnapshot,
     UnfollowAlibabaPrice,
+    alibaba_listing_key,
     calculate_alibaba_tracking_variation,
+    history_from_repository,
     is_canonical_tracking_observation,
     observation_from_loaded_row,
     percentage_change,
+    tracked_product_from_repository,
 )
 from bera_price_tracker.composition import ApplicationComposition
 from bera_price_tracker.config import Settings
@@ -35,8 +43,13 @@ from bera_price_tracker.domain import (
     PriceObservation,
     SearchQuery,
 )
+from bera_price_tracker.domain.models import PriceSnapshot
 from bera_price_tracker.gui import services
-from bera_price_tracker.infrastructure.persistence import SQLiteListingRepository
+from bera_price_tracker.infrastructure.persistence import (
+    SQLiteListingRepository,
+    StoredListing,
+    StoredPriceObservation,
+)
 
 BASE = datetime(2026, 8, 23, 12, 0, 0, tzinfo=UTC)
 SRC = Path(__file__).resolve().parents[2] / "src"
@@ -123,9 +136,45 @@ def test_follow_without_product_id_is_rejected() -> None:
                 "title": "Mouse",
                 "url": "https://www.alibaba.com/product-detail/x.html",
                 "representative": "1.45",
+                "currency": "USD",
             },
             "mouse",
         )
+
+
+def test_follow_without_currency_is_rejected(tmp_path: Path) -> None:
+    row = {
+        "product_id": "1600000000000",
+        "title": "Mouse",
+        "url": "https://www.alibaba.com/product-detail/1600000000000.html",
+        "representative": "1.45",
+        "price": "$1.45",
+    }
+    with pytest.raises(AlibabaFollowError, match=MISSING_CURRENCY):
+        observation_from_loaded_row(row, "mouse")
+    settings = _settings(tmp_path)
+    composition = ApplicationComposition(settings=settings)
+    with pytest.raises(AlibabaFollowError, match=MISSING_CURRENCY):
+        services.follow_alibaba_price(row, "mouse", settings=settings, composition=composition)
+    with SQLiteListingRepository(settings.database_path) as repository:
+        assert repository.count_listings() == 0
+        assert repository.count_price_snapshots() == 0
+
+
+def test_follow_with_explicit_usd_still_works() -> None:
+    observation = observation_from_loaded_row(
+        {
+            "product_id": "1600000000000",
+            "title": "Mouse",
+            "url": "https://www.alibaba.com/product-detail/1600000000000.html",
+            "representative": "1.45",
+            "price": "$1.45",
+            "currency": "USD",
+        },
+        "mouse",
+    )
+    assert observation.currency == "USD"
+    assert observation.representative_price == Decimal("1.45")
 
 
 def test_range_uses_representative_for_history_and_keeps_bounds(tmp_path: Path) -> None:
@@ -476,3 +525,229 @@ def test_range_follow_has_no_baseline_yet(tmp_path: Path) -> None:
     tracked = composition.follow_alibaba_price(_observation(), clock=_clock(BASE))
     assert tracked.variation.baseline_price is None
     assert tracked.variation.first_price == Decimal("1.45")
+
+
+def test_follow_rejects_missing_title_url_and_unusable_price() -> None:
+    base = {
+        "product_id": "1600000000000",
+        "title": "Mouse",
+        "url": "https://www.alibaba.com/product-detail/1600000000000.html",
+        "representative": "1.45",
+        "currency": "USD",
+    }
+    with pytest.raises(AlibabaFollowError, match=MISSING_TITLE):
+        observation_from_loaded_row({**base, "title": "  "}, "mouse")
+    with pytest.raises(AlibabaFollowError, match=MISSING_URL):
+        observation_from_loaded_row({**base, "url": ""}, "mouse")
+    with pytest.raises(AlibabaFollowError, match=MISSING_PRICE):
+        observation_from_loaded_row({**base, "representative": "not-a-price"}, "mouse")
+    with pytest.raises(AlibabaFollowError, match=MISSING_PRICE):
+        observation_from_loaded_row({**base, "representative": "0"}, "mouse")
+    with pytest.raises(AlibabaFollowError, match=MISSING_PRICE):
+        observation_from_loaded_row({**base, "representative": True}, "mouse")
+    with pytest.raises(AlibabaFollowError, match=MISSING_PRICE):
+        observation_from_loaded_row({**base, "representative": 145}, "mouse")
+    with pytest.raises(AlibabaFollowError, match=MISSING_CURRENCY):
+        observation_from_loaded_row({**base, "currency": "$"}, "mouse")
+    with pytest.raises(AlibabaFollowError, match=MISSING_PRODUCT_ID):
+        alibaba_listing_key("  ")
+
+
+def test_follow_and_record_reject_non_observation() -> None:
+    with pytest.raises(TypeError, match="AlibabaFollowObservation"):
+        FollowAlibabaPrice(repository=_EmptyRepo()).execute("obs")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="AlibabaFollowObservation"):
+        RecordAlibabaPriceSnapshot(repository=_EmptyRepo()).execute("obs")  # type: ignore[arg-type]
+
+
+def test_empty_history_and_non_decimal_variation_are_rejected() -> None:
+    with pytest.raises(AlibabaFollowError, match="snapshots"):
+        calculate_alibaba_tracking_variation([])
+    with pytest.raises(TypeError, match="Decimal"):
+        percentage_change(0.15, Decimal("1.45"))  # type: ignore[arg-type]
+
+
+def test_simple_follow_without_display_falls_back_to_last_price(tmp_path: Path) -> None:
+    observation = AlibabaFollowObservation(
+        product_id="1600000000000",
+        title="Wireless Mouse",
+        url="https://www.alibaba.com/product-detail/1600000000000.html",
+        representative_price=Decimal("4.30"),
+        currency="EUR",
+        query="wireless mouse",
+        price_display=None,
+        min_price=Decimal("4.30"),
+        max_price=Decimal("4.30"),
+    )
+    tracked = ApplicationComposition(settings=_settings(tmp_path)).follow_alibaba_price(
+        observation,
+        clock=_clock(BASE),
+    )
+    assert tracked.current_price_display == "4.30"
+    assert tracked.variation.last_price == Decimal("4.30")
+    assert tracked.history[0].currency == "EUR"
+
+
+def test_repeated_unfollow_keeps_history_and_unknown_id_fails(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(_observation(), clock=_clock(BASE))
+    first = composition.unfollow_alibaba_price("1600000000000")
+    second = composition.unfollow_alibaba_price("1600000000000")
+    assert first.is_active is False
+    assert second.is_active is False
+    assert second.variation.snapshot_count == 1
+    with pytest.raises(AlibabaFollowError, match=UNKNOWN_LISTING):
+        composition.unfollow_alibaba_price("missing-id")
+    with pytest.raises(AlibabaFollowError, match=UNKNOWN_LISTING):
+        UnfollowAlibabaPrice(repository=_EmptyRepo()).execute("1600000000000")
+
+
+def test_persistence_readback_failure_is_fail_closed() -> None:
+    repo = _WriteWithoutReadRepo()
+    with pytest.raises(AlibabaFollowError, match="guardar"):
+        FollowAlibabaPrice(repository=repo, clock=_clock(BASE)).execute(_observation())
+    assert repo.wrote is True
+
+
+def test_persistence_error_propagates_without_silent_follow() -> None:
+    repo = _ExplodingWriteRepo()
+    with pytest.raises(RuntimeError, match="disk full"):
+        FollowAlibabaPrice(repository=repo, clock=_clock(BASE)).execute(_observation())
+
+
+def test_list_skips_keys_without_snapshots() -> None:
+    repo = _KeysWithoutHistoryRepo()
+    listed = ListAlibabaTracked(repository=repo).execute(active_only=False)
+    assert listed == []
+    assert history_from_repository(repo, ListingKey(FOLLOW_SOURCE, "ghost")) is None
+    assert tracked_product_from_repository(repo, ListingKey(FOLLOW_SOURCE, "ghost")) is None
+
+
+def test_unfollow_readback_failure_is_unknown_listing() -> None:
+    class _DeactivateWithoutRead(_EmptyRepo):
+        def set_listing_active(self, key: ListingKey, active: bool) -> bool:
+            del key, active
+            return True
+
+    with pytest.raises(AlibabaFollowError, match=UNKNOWN_LISTING):
+        UnfollowAlibabaPrice(repository=_DeactivateWithoutRead()).execute("1600000000000")
+
+
+class _EmptyRepo:
+    def record_collection(self, batch: object) -> None:
+        del batch
+
+    def get_listing(self, key: ListingKey) -> object | None:
+        del key
+        return None
+
+    def get_price_history(self, key: ListingKey) -> list[object]:
+        del key
+        return []
+
+    def set_listing_active(self, key: ListingKey, active: bool) -> bool:
+        del key, active
+        return False
+
+    def list_listing_keys(
+        self, source: MarketplaceSource, *, active_only: bool = False
+    ) -> list[ListingKey]:
+        del source, active_only
+        return []
+
+
+class _WriteWithoutReadRepo(_EmptyRepo):
+    def __init__(self) -> None:
+        self.wrote = False
+
+    def record_collection(self, batch: object) -> None:
+        del batch
+        self.wrote = True
+
+
+class _ExplodingWriteRepo(_EmptyRepo):
+    def record_collection(self, batch: object) -> None:
+        del batch
+        raise RuntimeError("disk full")
+
+
+class _KeysWithoutHistoryRepo(_EmptyRepo):
+    def list_listing_keys(
+        self, source: MarketplaceSource, *, active_only: bool = False
+    ) -> list[ListingKey]:
+        del source, active_only
+        return [ListingKey(FOLLOW_SOURCE, "ghost")]
+
+
+def test_observation_accepts_decimal_representative() -> None:
+    observation = observation_from_loaded_row(
+        {
+            "product_id": "1600000000000",
+            "title": "Mouse",
+            "url": "https://www.alibaba.com/product-detail/1600000000000.html",
+            "representative": Decimal("1.45"),
+            "price_min": Decimal("1.45"),
+            "price_max": Decimal("1.45"),
+            "currency": "USD",
+        },
+        "mouse",
+    )
+    assert observation.representative_price == Decimal("1.45")
+    assert observation.min_price == Decimal("1.45")
+    assert observation.max_price == Decimal("1.45")
+
+
+class _ActiveListingWithoutSnapshots(_EmptyRepo):
+    def __init__(self) -> None:
+        self.wrote = False
+        self._history: list[StoredPriceObservation] = []
+        self.listing = StoredListing(
+            id=1,
+            key=ListingKey(FOLLOW_SOURCE, "1600000000000"),
+            title="Existing mouse",
+            url="https://www.alibaba.com/product-detail/1600000000000.html",
+            seller_name=None,
+            location=None,
+            product_condition=None,
+            first_seen_at=BASE,
+            last_seen_at=BASE,
+            is_active=True,
+        )
+
+    def get_listing(self, key: ListingKey) -> StoredListing | None:
+        return self.listing if key == self.listing.key else None
+
+    def get_price_history(self, key: ListingKey) -> list[object]:
+        del key
+        return list(self._history)
+
+    def record_collection(self, batch: object) -> None:
+        self.wrote = True
+        listing = batch.listings[0]  # type: ignore[attr-defined]
+        self._history = [
+            StoredPriceObservation(
+                collection_run_id=1,
+                query=listing.query,
+                snapshot=PriceSnapshot(
+                    listing_key=listing.key,
+                    price=listing.price,
+                    currency=listing.currency,
+                    collected_at=listing.collected_at,
+                    price_min=listing.price_min,
+                    price_max=listing.price_max,
+                ),
+            )
+        ]
+
+    def set_listing_active(self, key: ListingKey, active: bool) -> bool:
+        del key, active
+        return True
+
+
+def test_active_listing_without_snapshots_records_first_price() -> None:
+    repo = _ActiveListingWithoutSnapshots()
+    tracked = FollowAlibabaPrice(repository=repo, clock=_clock(BASE)).execute(_observation())
+    assert repo.wrote is True
+    assert tracked.product_id == "1600000000000"
+    assert tracked.variation.snapshot_count == 1
+    assert tracked.variation.last_price == Decimal("1.45")

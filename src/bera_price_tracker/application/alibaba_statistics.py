@@ -15,6 +15,7 @@ _P75 = Decimal("0.75")
 _TRIM_FRACTION = Decimal("0.10")
 STATS_CURRENCY = "USD"
 UNAVAILABLE_DISPLAY = "unavailable"
+MISSING_CURRENCY_DISPLAY = "moneda no disponible"
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,16 +81,29 @@ def _as_decimal(value: object) -> Decimal | None:
     return value
 
 
-def infer_alibaba_currency(product: object) -> str | None:
-    """Return an explicit ISO code, or USD when the display uses ``$``."""
+def explicit_alibaba_currency(value: object) -> str | None:
+    """Return a 3-letter ISO code. ``$`` and other symbols are not currency."""
 
-    raw = getattr(product, "currency", None)
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip().upper()
-    display = getattr(product, "price_display", None)
-    if isinstance(display, str) and "$" in display:
-        return STATS_CURRENCY
-    return None
+    if not isinstance(value, str):
+        return None
+    currency = value.strip().upper()
+    if len(currency) != 3 or not currency.isascii() or not currency.isalpha():
+        return None
+    return currency
+
+
+def infer_alibaba_currency(product: object) -> str | None:
+    """Return an explicit ISO code from the listing. Never infer from ``$``."""
+
+    return explicit_alibaba_currency(getattr(product, "currency", None))
+
+
+def alibaba_iso_currencies_match(left: object, right: object) -> bool:
+    """True only when both values are the same explicit 3-letter ISO code."""
+
+    first = explicit_alibaba_currency(left)
+    second = explicit_alibaba_currency(right)
+    return first is not None and second is not None and first == second
 
 
 def alibaba_price_bounds(product: object) -> tuple[Decimal, Decimal] | None:
@@ -229,6 +243,46 @@ def format_alibaba_money(value: Decimal | None) -> str:
     return f"${quantized}"
 
 
+def format_alibaba_currency(value: Decimal | None, currency: object) -> str:
+    """Render money without implying USD for another or unknown currency."""
+
+    explicit = explicit_alibaba_currency(currency)
+    if value is None or explicit is None:
+        return UNAVAILABLE_DISPLAY
+    quantized = value.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    if explicit == STATS_CURRENCY:
+        return f"${quantized}"
+    return f"{explicit} {quantized}"
+
+
+def format_alibaba_listing_price(
+    min_price: object,
+    max_price: object,
+    currency: object,
+) -> str:
+    """GUI listing price. ``min``/``max``/ISO are authority; never raw ``$`` text."""
+
+    low = min_price if isinstance(min_price, Decimal) and min_price.is_finite() else None
+    if low is None:
+        return ""
+    high = max_price if isinstance(max_price, Decimal) and max_price.is_finite() else low
+    quantized_low = low.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    quantized_high = high.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    explicit = explicit_alibaba_currency(currency)
+    if explicit is None:
+        amount = (
+            f"{quantized_low}"
+            if quantized_low == quantized_high
+            else f"{quantized_low}–{quantized_high}"
+        )
+        return f"{amount} · {MISSING_CURRENCY_DISPLAY}"
+    if quantized_low == quantized_high:
+        return format_alibaba_currency(low, explicit)
+    if explicit == STATS_CURRENCY:
+        return f"{format_alibaba_currency(low, explicit)}–{format_alibaba_currency(high, explicit)}"
+    return f"{explicit} {quantized_low}–{quantized_high}"
+
+
 def format_priced_count(priced: int, total: int) -> str:
     return f"{priced} de {total}"
 
@@ -255,14 +309,19 @@ def interpret_alibaba_prices(stats: AlibabaPriceStatistics) -> str:
 
 
 __all__ = [
+    "MISSING_CURRENCY_DISPLAY",
     "STATS_CURRENCY",
     "UNAVAILABLE_DISPLAY",
     "AlibabaPriceStatistics",
+    "alibaba_iso_currencies_match",
     "alibaba_percentile",
     "alibaba_price_bounds",
     "alibaba_representative_price",
     "alibaba_trimmed_mean",
     "calculate_alibaba_price_statistics",
+    "explicit_alibaba_currency",
+    "format_alibaba_currency",
+    "format_alibaba_listing_price",
     "format_alibaba_money",
     "format_alibaba_typical_range",
     "format_priced_count",

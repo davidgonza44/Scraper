@@ -257,7 +257,9 @@ def test_landed_recalc_invalidates_stored_comparison_and_uses_new_cost() -> None
     from bera_price_tracker.gui.state import TrackerState
 
     state = TrackerState()
-    state.alibaba_results = [AlibabaResultRow(product_id="P-1", title="Mouse A", price="$4")]
+    state.alibaba_results = [
+        AlibabaResultRow(product_id="P-1", title="Mouse A", price="$4", currency="USD")
+    ]
     state.alibaba_landed_has_result = True
     state.alibaba_landed_result = dict(LANDED_USD)
     state.alibaba_landed_product_id = "P-1"
@@ -321,7 +323,9 @@ def test_landed_for_matching_product_enables_profitability() -> None:
     from bera_price_tracker.gui.state import TrackerState
 
     state = TrackerState()
-    state.alibaba_results = [AlibabaResultRow(product_id="A", title="Mouse A", price="$4")]
+    state.alibaba_results = [
+        AlibabaResultRow(product_id="A", title="Mouse A", price="$4", currency="USD")
+    ]
     state.alibaba_landed_has_result = True
     state.alibaba_landed_result = dict(LANDED_USD)
     state.alibaba_landed_product_id = "A"
@@ -445,20 +449,66 @@ def test_tracked_product_can_create_context() -> None:
             supplier_name="Cactus",
             current_price="$5.00",
             last_price="$5.00",
+            currency="USD",
         )
     ]
     state.prepare_ml_comparables_from_alibaba_tracked("T-1")
     assert state.ml_has_alibaba_context is True
     assert state.ml_alibaba_context["external_id"] == "T-1"
     assert state.ml_alibaba_context["supplier_price"] == "$5.00"
+    assert state.ml_alibaba_context["currency"] == "USD"
     assert state.marketplace_tab == "mercadolibre"
+
+
+def test_tracked_cny_currency_survives_ml_context_without_usd_fallback() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    state.alibaba_query = "mouse"
+    state.alibaba_tracked_rows = [
+        AlibabaTrackedRow(
+            product_id="T-CNY",
+            title="Tracked CNY mouse",
+            supplier_name="Cactus",
+            current_price="CNY 5.00",
+            last_price="CNY 5.00",
+            currency="CNY",
+        )
+    ]
+    state.prepare_ml_comparables_from_alibaba_tracked("T-CNY")
+    assert state.ml_alibaba_context["external_id"] == "T-CNY"
+    assert state.ml_alibaba_context["currency"] == "CNY"
+    assert state.ml_alibaba_context["currency"] != "USD"
+
+
+def test_tracked_missing_iso_keeps_benchmark_context_but_blocks_landed_profitability() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    state.alibaba_query = "mouse"
+    state.alibaba_landed_has_result = True
+    state.alibaba_landed_product_id = "T-UNKNOWN"
+    state.alibaba_landed_result = LANDED_USD
+    state.alibaba_tracked_rows = [
+        AlibabaTrackedRow(
+            product_id="T-UNKNOWN",
+            title="Tracked mouse",
+            current_price="5.00",
+            last_price="5.00",
+            currency="",
+        )
+    ]
+    state.prepare_ml_comparables_from_alibaba_tracked("T-UNKNOWN")
+    assert state.ml_has_alibaba_context is True
+    assert state.ml_alibaba_context["currency"] == ""
+    assert state.ml_alibaba_context["has_landed"] == "0"
 
 
 def test_association_prices_are_decimal_formatted_not_float() -> None:
     rows = _pilot_map_rows()
     summary, comparison = _summary_and_compare(rows, LANDED_USD)
     context = gui_services.build_alibaba_ml_context(
-        external_id="P-1", title="Mouse", landed_row=LANDED_USD
+        external_id="P-1", title="Mouse", currency="USD", landed_row=LANDED_USD
     )
     association = gui_services.build_alibaba_ml_association(context, summary, comparison)
     for key in ("conservative_profit", "typical_profit", "high_profit"):

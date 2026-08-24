@@ -123,7 +123,9 @@ def _optional_string(body: dict[str, object], field_name: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise OllamaInvalidResponseError(f"Ollama field {field_name!r} must be a string or null")
+        raise AlibabaNegotiationDraftInvalidError(
+            f"Ollama field {field_name!r} must be a string or null"
+        )
     text = value.strip()
     return text or None
 

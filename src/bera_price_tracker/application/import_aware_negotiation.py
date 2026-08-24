@@ -35,6 +35,10 @@ from bera_price_tracker.application.alibaba_negotiation import (
     build_negotiation_explanation,
     calculate_alibaba_negotiation_plan,
 )
+from bera_price_tracker.application.alibaba_statistics import (
+    alibaba_iso_currencies_match,
+    format_alibaba_currency,
+)
 from bera_price_tracker.application.landed_cost import (
     LandedCostAnalysis,
     LandedCostViability,
@@ -45,6 +49,9 @@ from bera_price_tracker.domain.money import MONEY_QUANTUM, quantize_money
 
 MISSING_PROFITABILITY_CEILING = (
     "Completa el costo de importación para calcular el máximo por rentabilidad."
+)
+PROFITABILITY_CURRENCY_MISMATCH = (
+    "La moneda del costo puesto no coincide con la moneda de negociación."
 )
 
 ESTIMATE_PROVENANCE = "estimación logística"
@@ -116,21 +123,24 @@ def _profitability_note(
     effective_ceiling: Decimal,
     reduced: bool,
     rate_status: ShippingRateStatus | None,
+    currency: str,
 ) -> str:
+    original = format_alibaba_currency(original_ceiling, currency)
+    effective = format_alibaba_currency(effective_ceiling, currency)
     if not reduced:
         return (
             "La rentabilidad no aumenta el máximo de negociación. "
-            f"El máximo autorizado sigue en ${original_ceiling}."
+            f"El máximo autorizado sigue en {original}."
         )
     if rate_status is ShippingRateStatus.CONFIRMED_QUOTE:
         return (
             "El costo de importación según cotización logística confirmada "
-            f"reduce tu máximo de compra de ${original_ceiling} a ${effective_ceiling} "
+            f"reduce tu máximo de compra de {original} a {effective} "
             "para mantener el margen objetivo."
         )
     return (
         "El costo estimado de importación reduce tu máximo de compra de "
-        f"${original_ceiling} a ${effective_ceiling} para mantener el margen objetivo."
+        f"{original} a {effective} para mantener el margen objetivo."
     )
 
 
@@ -172,6 +182,7 @@ def _rebuild_plan(
         ladder_summary=plan.ladder_summary,
         warnings=plan.warnings,
         bounds=bounds,
+        currency=plan.currency,
     )
     explanation = build_negotiation_explanation(draft)
     if extra_explanation:
@@ -198,6 +209,27 @@ def _rebuild_plan(
         ladder_summary=draft.ladder_summary,
         warnings=draft.warnings,
         bounds=draft.bounds,
+        currency=draft.currency,
+    )
+
+
+def _unapplied_plan(
+    plan: AlibabaNegotiationPlan,
+    *,
+    original: Decimal,
+    status: ShippingRateStatus | None,
+    provenance: str | None,
+    note: str,
+) -> ImportAwareNegotiationPlan:
+    return ImportAwareNegotiationPlan(
+        plan=plan,
+        original_ceiling=original,
+        profitability_ceiling=None,
+        effective_ceiling=original,
+        applied=False,
+        rate_status=status,
+        provenance=provenance,
+        profitability_note=note,
     )
 
 
@@ -207,13 +239,20 @@ def apply_profitability_ceiling(
     analysis: LandedCostAnalysis | None = None,
     maximum_supplier_unit_price: Decimal | None = None,
     rate_status: ShippingRateStatus | None = None,
+    landed_currency: object = None,
 ) -> ImportAwareNegotiationPlan:
-    """Cap an already-computed plan. Pass ``None`` to leave it unchanged."""
+    """Cap an already-computed plan. Pass ``None`` to leave it unchanged.
+
+    A profitability ceiling is applied only when plan and landed ISO codes
+    match. Different or missing currencies fail closed without comparing
+    amounts or rewriting opening/target/ceiling.
+    """
 
     if not isinstance(plan, AlibabaNegotiationPlan):
         raise TypeError("plan must be an AlibabaNegotiationPlan")
     profitability = maximum_supplier_unit_price
     status = rate_status
+    resolved_landed_currency: object = landed_currency
     if analysis is not None:
         if not isinstance(analysis, LandedCostAnalysis):
             raise TypeError("analysis must be a LandedCostAnalysis")
@@ -221,6 +260,8 @@ def apply_profitability_ceiling(
             profitability = analysis.maximum_supplier_unit_price
         if status is None:
             status = analysis.rate_status
+        if resolved_landed_currency is None:
+            resolved_landed_currency = analysis.currency
     profitability = _quantize_optional_money(profitability)
     original = plan.ceiling_price
     provenance = None
@@ -229,15 +270,20 @@ def apply_profitability_ceiling(
     elif status is ShippingRateStatus.ESTIMATE:
         provenance = ESTIMATE_PROVENANCE
     if profitability is None:
-        return ImportAwareNegotiationPlan(
-            plan=plan,
-            original_ceiling=original,
-            profitability_ceiling=None,
-            effective_ceiling=original,
-            applied=False,
-            rate_status=status,
+        return _unapplied_plan(
+            plan,
+            original=original,
+            status=status,
             provenance=provenance,
-            profitability_note=MISSING_PROFITABILITY_CEILING,
+            note=MISSING_PROFITABILITY_CEILING,
+        )
+    if not alibaba_iso_currencies_match(plan.currency, resolved_landed_currency):
+        return _unapplied_plan(
+            plan,
+            original=original,
+            status=status,
+            provenance=provenance,
+            note=PROFITABILITY_CURRENCY_MISMATCH,
         )
     capped = (
         MONEY_QUANTUM
@@ -254,6 +300,7 @@ def apply_profitability_ceiling(
         effective_ceiling=capped,
         reduced=reduced,
         rate_status=status,
+        currency=plan.currency,
     )
     attractiveness = (
         DealAttractiveness.ECONOMICALLY_UNATTRACTIVE
@@ -297,6 +344,7 @@ class CalculateImportAwareNegotiationPlan:
         *,
         maximum_supplier_unit_price: Decimal | None = None,
         rate_status: ShippingRateStatus | None = None,
+        landed_currency: object = None,
     ) -> ImportAwareNegotiationPlan:
         plan = calculate_alibaba_negotiation_plan(payload)
         return apply_profitability_ceiling(
@@ -304,6 +352,7 @@ class CalculateImportAwareNegotiationPlan:
             analysis=analysis,
             maximum_supplier_unit_price=maximum_supplier_unit_price,
             rate_status=rate_status,
+            landed_currency=landed_currency,
         )
 
 
@@ -311,6 +360,7 @@ __all__ = [
     "CONFIRMED_PROVENANCE",
     "ESTIMATE_PROVENANCE",
     "MISSING_PROFITABILITY_CEILING",
+    "PROFITABILITY_CURRENCY_MISMATCH",
     "CalculateImportAwareNegotiationPlan",
     "ImportAwareNegotiationPlan",
     "apply_profitability_ceiling",

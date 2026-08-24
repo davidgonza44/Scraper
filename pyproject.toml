@@ -25,6 +25,7 @@ classifiers = [
 dev = [
     "mypy>=1.14",
     "pytest>=8.3",
+    "pytest-cov>=6.0",
     "ruff>=0.9",
 ]
 
@@ -37,6 +38,14 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["bera_price_tracker"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
 
 [tool.ruff]
 line-length = 100
