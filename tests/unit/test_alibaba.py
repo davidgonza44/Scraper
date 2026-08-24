@@ -765,6 +765,10 @@ def test_advanced_stats_two_prices() -> None:
     assert stats.iqr == Decimal("1.00")
     assert isinstance(stats.p25, Decimal)
     assert isinstance(stats.iqr, Decimal)
+    note = interpret_alibaba_prices(stats)
+    assert "50% central" in note
+    assert format_alibaba_money(stats.p25) in note
+    assert format_alibaba_money(stats.p75) in note
 
 
 def test_p25_p75_and_linear_interpolation() -> None:

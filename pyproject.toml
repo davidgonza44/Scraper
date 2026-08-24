@@ -41,14 +41,15 @@ addopts = ["--strict-config", "--strict-markers", "-ra"]
 testpaths = ["tests"]
 
 [tool.mutmut]
-# Round 2: mutate one monetary/statistics module at a time.
-# Switch only_mutate / test selection when measuring the other file.
+# Round 2: mutate the two Alibaba monetary modules together.
 source_paths = ["src"]
 only_mutate = [
     "src/bera_price_tracker/application/alibaba_statistics.py",
+    "src/bera_price_tracker/application/alibaba_negotiation.py",
 ]
 pytest_add_cli_args_test_selection = [
     "tests/unit/test_alibaba.py",
+    "tests/unit/test_alibaba_negotiation.py",
 ]
 use_git_change_detection = false
 debug = false
