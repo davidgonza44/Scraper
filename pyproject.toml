@@ -41,17 +41,15 @@ addopts = ["--strict-config", "--strict-markers", "-ra"]
 testpaths = ["tests"]
 
 [tool.mutmut]
-# First-round mutation testing of monetary logic. Scope is the two
-# application modules under review; switch only_mutate / test selection
-# to run one module at a time.
+# Round 2: mutate the two Alibaba monetary modules together.
 source_paths = ["src"]
 only_mutate = [
-    "src/bera_price_tracker/application/landed_cost.py",
-    "src/bera_price_tracker/application/import_aware_negotiation.py",
+    "src/bera_price_tracker/application/alibaba_statistics.py",
+    "src/bera_price_tracker/application/alibaba_negotiation.py",
 ]
 pytest_add_cli_args_test_selection = [
-    "tests/unit/test_landed_cost.py",
-    "tests/unit/test_import_aware_negotiation.py",
+    "tests/unit/test_alibaba.py",
+    "tests/unit/test_alibaba_negotiation.py",
 ]
 use_git_change_detection = false
 debug = false
