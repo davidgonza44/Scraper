@@ -785,6 +785,14 @@ def negotiation_plan_to_row(plan: Any) -> dict[str, str]:
         "min_order_quantity": (
             "" if plan.min_order_quantity is None else str(plan.min_order_quantity)
         ),
+        "original_ceiling": "",
+        "profitability_ceiling": "",
+        "profitability_ceiling_raw": "",
+        "effective_ceiling": "",
+        "profitability_applied": "0",
+        "ceiling_provenance": "",
+        "profitability_note": "",
+        "rate_status": "",
     }
 
 
@@ -872,12 +880,14 @@ def _plan_from_row(row: Mapping[str, object]) -> Any:
         calculate_alibaba_negotiation_plan,
         parse_ladder_text,
     )
+    from bera_price_tracker.application.import_aware_negotiation import apply_profitability_ceiling
+    from bera_price_tracker.application.landed_cost import ShippingRateStatus
 
     quantity = _optional_form_int(row.get("desired_quantity"))
     public = _optional_form_money(str(row.get("public_raw") or ""))
     if quantity is None or public is None:
         raise AlibabaNegotiationError("Calcula la estrategia antes de generar un mensaje.")
-    return calculate_alibaba_negotiation_plan(
+    plan = calculate_alibaba_negotiation_plan(
         AlibabaNegotiationInput(
             desired_quantity=quantity,
             title=str(row.get("title") or ""),
@@ -893,6 +903,22 @@ def _plan_from_row(row: Mapping[str, object]) -> Any:
             negotiation_aggressiveness=_parse_aggressiveness(row.get("aggressiveness")),
         )
     )
+    if str(row.get("profitability_applied") or "") != "1":
+        return plan
+    raw = str(row.get("profitability_ceiling_raw") or "").strip()
+    try:
+        max_supplier = Decimal(raw) if raw else None
+    except InvalidOperation:
+        max_supplier = None
+    status_text = str(row.get("rate_status") or "").strip()
+    status = None
+    if status_text in {item.value for item in ShippingRateStatus}:
+        status = ShippingRateStatus(status_text)
+    return apply_profitability_ceiling(
+        plan,
+        maximum_supplier_unit_price=max_supplier,
+        rate_status=status,
+    ).plan
 
 
 def generate_alibaba_negotiation_opening(
@@ -1140,7 +1166,70 @@ def calculate_alibaba_landed_cost(
             if analysis.maximum_supplier_unit_price is None
             else format_alibaba_money(analysis.maximum_supplier_unit_price)
         ),
+        "max_supplier_raw": (
+            ""
+            if analysis.maximum_supplier_unit_price is None
+            else f"{analysis.maximum_supplier_unit_price:f}"
+        ),
+        "rate_status": analysis.rate_status.value,
         "unattractive": (
             "1" if analysis.viability is LandedCostViability.ECONOMICALLY_UNATTRACTIVE else "0"
         ),
     }
+
+
+def apply_alibaba_profitability_ceiling(
+    plan_row: Mapping[str, object],
+    landed_row: Mapping[str, object] | None,
+) -> dict[str, str]:
+    """Apply a completed landed-cost ceiling to an existing negotiation row."""
+
+    from bera_price_tracker.application.alibaba_negotiation import AlibabaNegotiationError
+    from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
+    from bera_price_tracker.application.import_aware_negotiation import (
+        MISSING_PROFITABILITY_CEILING,
+        apply_profitability_ceiling,
+    )
+    from bera_price_tracker.application.landed_cost import LandedCostError, ShippingRateStatus
+
+    if not plan_row:
+        raise AlibabaNegotiationError("Calcula la estrategia antes de aplicar rentabilidad.")
+    raw = "" if landed_row is None else str(landed_row.get("max_supplier_raw") or "").strip()
+    if not raw:
+        raise LandedCostError(MISSING_PROFITABILITY_CEILING)
+    try:
+        max_supplier = Decimal(raw)
+    except InvalidOperation:
+        raise LandedCostError(MISSING_PROFITABILITY_CEILING) from None
+    status_text = "" if landed_row is None else str(landed_row.get("rate_status") or "").strip()
+    status = (
+        ShippingRateStatus(status_text)
+        if status_text in {item.value for item in ShippingRateStatus}
+        else ShippingRateStatus.ESTIMATE
+    )
+    base = {str(key): str(value) for key, value in plan_row.items()}
+    composed = apply_profitability_ceiling(
+        _plan_from_row({**base, "profitability_applied": "0"}),
+        maximum_supplier_unit_price=max_supplier,
+        rate_status=status,
+    )
+    row = {**base, **negotiation_plan_to_row(composed.plan)}
+    row.update(
+        {
+            "original_ceiling": format_alibaba_money(composed.original_ceiling),
+            "profitability_ceiling": format_alibaba_money(composed.profitability_ceiling)
+            if composed.profitability_ceiling is not None
+            else "",
+            "profitability_ceiling_raw": (
+                ""
+                if composed.profitability_ceiling is None
+                else f"{composed.profitability_ceiling:f}"
+            ),
+            "effective_ceiling": format_alibaba_money(composed.effective_ceiling),
+            "profitability_applied": "1" if composed.applied else "0",
+            "ceiling_provenance": composed.provenance or "",
+            "profitability_note": composed.profitability_note,
+            "rate_status": "" if composed.rate_status is None else composed.rate_status.value,
+        }
+    )
+    return row

@@ -232,6 +232,13 @@ class TrackerState(rx.State):
     alibaba_negotiation_analysis_notes: str = ""
     alibaba_negotiation_is_drafting: bool = False
     alibaba_negotiation_plan_payload: dict[str, str] = {}
+    alibaba_negotiation_original_ceiling: str = ""
+    alibaba_negotiation_profitability_ceiling: str = ""
+    alibaba_negotiation_effective_ceiling: str = ""
+    alibaba_negotiation_ceiling_provenance: str = ""
+    alibaba_negotiation_profitability_note: str = ""
+    alibaba_negotiation_has_profitability: bool = False
+    alibaba_negotiation_profitability_hint: str = ""
     alibaba_landed_quantity: str = "40"
     alibaba_landed_supplier_price: str = ""
     alibaba_landed_cartons: str = ""
@@ -406,6 +413,13 @@ class TrackerState(rx.State):
         self.alibaba_negotiation_explanation = row.get("explanation", "")
         self.alibaba_negotiation_attractiveness = row.get("attractiveness", "")
         self.alibaba_negotiation_plan_payload = dict(row)
+        self.alibaba_negotiation_original_ceiling = row.get("original_ceiling", "")
+        self.alibaba_negotiation_profitability_ceiling = row.get("profitability_ceiling", "")
+        self.alibaba_negotiation_effective_ceiling = row.get("effective_ceiling", "")
+        self.alibaba_negotiation_ceiling_provenance = row.get("ceiling_provenance", "")
+        self.alibaba_negotiation_profitability_note = row.get("profitability_note", "")
+        self.alibaba_negotiation_has_profitability = row.get("profitability_applied") == "1"
+        self.alibaba_negotiation_profitability_hint = ""
         self.alibaba_negotiation_message = ""
         self.alibaba_negotiation_analysis_summary = ""
         self.alibaba_negotiation_analysis_decision = ""
@@ -427,6 +441,32 @@ class TrackerState(rx.State):
         except Exception as exc:  # noqa: BLE001 — sanitized before display
             self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
             self.alibaba_negotiation_has_plan = False
+            return
+        self._apply_negotiation_plan(row)
+        self.alibaba_negotiation_has_profitability = False
+        self.alibaba_negotiation_original_ceiling = ""
+        self.alibaba_negotiation_profitability_ceiling = ""
+        self.alibaba_negotiation_effective_ceiling = ""
+        self.alibaba_negotiation_ceiling_provenance = ""
+        self.alibaba_negotiation_profitability_note = ""
+
+    def apply_alibaba_profitability_ceiling(self) -> None:
+        if not self.alibaba_negotiation_has_plan:
+            self.alibaba_negotiation_profitability_hint = (
+                "Calcula la estrategia antes de aplicar rentabilidad."
+            )
+            return
+        landed = self.alibaba_landed_result if self.alibaba_landed_has_result else None
+        try:
+            row = services.apply_alibaba_profitability_ceiling(
+                self.alibaba_negotiation_plan_payload,
+                landed,
+            )
+        except Exception as exc:  # noqa: BLE001 — sanitized before display
+            message = services.sanitize_alibaba_landed_cost_error(exc)
+            if message == services.ALIBABA_LANDED_COST_GENERIC_ERROR:
+                message = services.sanitize_alibaba_negotiation_error(exc)
+            self.alibaba_negotiation_profitability_hint = message
             return
         self._apply_negotiation_plan(row)
 

@@ -96,6 +96,11 @@ from bera_price_tracker.application.diagnostics import (
 from bera_price_tracker.application.facebook_venezuela_price import (
     normalize_facebook_venezuela_price,
 )
+from bera_price_tracker.application.import_aware_negotiation import (
+    CalculateImportAwareNegotiationPlan,
+    ImportAwareNegotiationPlan,
+    apply_profitability_ceiling,
+)
 from bera_price_tracker.application.landed_cost import (
     CargoPackagingInput,
     ImportOtherCosts,
@@ -255,6 +260,9 @@ __all__ = [
     "capped_negotiation_ceiling",
     "carton_cbm",
     "missing_logistics_fields",
+    "CalculateImportAwareNegotiationPlan",
+    "ImportAwareNegotiationPlan",
+    "apply_profitability_ceiling",
     "SearchAlibabaProducts",
     "alibaba_credit_warning",
     "alibaba_percentile",

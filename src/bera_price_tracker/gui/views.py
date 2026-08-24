@@ -1574,6 +1574,58 @@ def _alibaba_negotiation() -> rx.Component:
                             size="2",
                             color=styles.TEXT_PRIMARY,
                         ),
+                        rx.button(
+                            "Aplicar rentabilidad a negociación",
+                            on_click=TrackerState.apply_alibaba_profitability_ceiling,
+                            size="1",
+                            variant="outline",
+                        ),
+                        rx.cond(
+                            TrackerState.alibaba_negotiation_profitability_hint != "",
+                            rx.text(
+                                TrackerState.alibaba_negotiation_profitability_hint,
+                                size="2",
+                                color=BRICK,
+                            ),
+                        ),
+                        rx.cond(
+                            TrackerState.alibaba_negotiation_has_profitability,
+                            rx.vstack(
+                                rx.hstack(
+                                    _landed_card(
+                                        "Máximo negociación",
+                                        TrackerState.alibaba_negotiation_original_ceiling,
+                                        styles.TEXT_PRIMARY,
+                                    ),
+                                    _landed_card(
+                                        "Máximo por rentabilidad",
+                                        TrackerState.alibaba_negotiation_profitability_ceiling,
+                                        BRICK,
+                                    ),
+                                    _landed_card(
+                                        "Máximo final",
+                                        TrackerState.alibaba_negotiation_effective_ceiling,
+                                        styles.TEXT_PRIMARY,
+                                    ),
+                                    spacing="3",
+                                    width="100%",
+                                ),
+                                rx.text(
+                                    "Techo basado en "
+                                    + TrackerState.alibaba_negotiation_ceiling_provenance
+                                    + ".",
+                                    size="1",
+                                    color=MUTED,
+                                ),
+                                rx.text(
+                                    TrackerState.alibaba_negotiation_profitability_note,
+                                    size="2",
+                                    color=styles.TEXT_PRIMARY,
+                                ),
+                                spacing="2",
+                                width="100%",
+                            ),
+                        ),
                         rx.hstack(
                             rx.button(
                                 "Generar mensaje con MiniMax",
