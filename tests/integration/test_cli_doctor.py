@@ -362,3 +362,43 @@ def test_doctor_reports_deepl_not_configured_from_local_config_only(
     assert "Provider: deepl" in captured.out
     assert "DeepL Translator: NOT CONFIGURED" in captured.out
     assert TOKEN not in combined
+
+
+def test_doctor_reads_bootstrapped_dotenv_without_http(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database_path = tmp_path / "dotenv-doctor.db"
+    _initialize_database(database_path)
+    _configure(monkeypatch, database_path)
+    env_file = tmp_path / ".env"
+    dotenv_key = "doctor-dotenv-key-never-print"
+    env_file.write_text(
+        f"BERA_TRACKER_TRANSLATOR_PROVIDER=deepl\nBERA_TRACKER_DEEPL_API_KEY={dotenv_key}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BERA_TRACKER_DOTENV_PATH", str(env_file))
+    monkeypatch.delenv("BERA_TRACKER_TRANSLATOR_PROVIDER", raising=False)
+    monkeypatch.delenv("BERA_TRACKER_DEEPL_API_KEY", raising=False)
+    provider_factory = ForbiddenProviderFactory()
+
+    caplog.set_level(logging.DEBUG)
+    exit_code = main(
+        ["doctor"],
+        provider_factory=provider_factory,
+        repository_factory=ForbiddenWriterFactory(),
+        history_repository_factory=ForbiddenHistoryRepositoryFactory(),
+        inspection_repository_factory=ForbiddenInspectionRepositoryFactory(),
+    )
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err + caplog.text
+    assert exit_code == ExitCode.SUCCESS
+    assert provider_factory.calls == 0
+    assert "Provider: deepl" in captured.out
+    assert "DeepL Translator: CONFIGURED" in captured.out
+    assert dotenv_key not in combined
+    assert "DeepL-Auth-Key" not in combined
+    assert "Authorization" not in combined

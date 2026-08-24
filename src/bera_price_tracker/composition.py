@@ -38,6 +38,7 @@ from bera_price_tracker.config import (
     TRANSLATOR_PROVIDER_AZURE,
     TRANSLATOR_PROVIDER_DEEPL,
     Settings,
+    resolve_process_settings,
 )
 from bera_price_tracker.domain import (
     CollectionRunInspection,
@@ -487,7 +488,7 @@ def build_composition(
 def build_alibaba_search(settings: Settings | None = None) -> SearchAlibabaProducts:
     """Wire SearchAlibabaProducts to Apify without opening a run."""
 
-    resolved = Settings.from_env() if settings is None else settings
+    resolved = resolve_process_settings(settings)
     client = ApifyAlibabaClient(
         _api_token=resolved.apify_api_token,
         actor_id=resolved.apify_alibaba_actor,
@@ -498,7 +499,7 @@ def build_alibaba_search(settings: Settings | None = None) -> SearchAlibabaProdu
 def build_mercadolibre_search(settings: Settings | None = None) -> SearchMercadoLibreProducts:
     """Wire SearchMercadoLibreProducts to Apify without opening a run."""
 
-    resolved = Settings.from_env() if settings is None else settings
+    resolved = resolve_process_settings(settings)
     client = ApifyMercadoLibreClient(
         _api_token=resolved.apify_api_token,
         actor_id=resolved.apify_mercadolibre_actor,
@@ -513,7 +514,7 @@ def build_product_translator(
 ) -> ProductTranslator:
     """Wire the configured translator. Never falls back to another provider."""
 
-    resolved = Settings.from_env() if settings is None else settings
+    resolved = resolve_process_settings(settings)
     provider = resolved.resolved_translator_provider()
     if provider == TRANSLATOR_PROVIDER_DEEPL:
         return DeepLProductTranslator(
@@ -564,7 +565,7 @@ def build_alibaba_negotiation_drafter(
 
     from bera_price_tracker.infrastructure.ai import OllamaAlibabaNegotiationDrafter
 
-    resolved = Settings.from_env() if settings is None else settings
+    resolved = resolve_process_settings(settings)
     drafter: AlibabaNegotiationDrafter = OllamaAlibabaNegotiationDrafter(
         base_url=resolved.ollama_base_url,
         model=resolved.ollama_model,

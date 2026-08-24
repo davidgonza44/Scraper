@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import reflex as rx
 
+from bera_price_tracker.config import load_local_environment
 from bera_price_tracker.gui.views import dashboard
+
+load_local_environment()
 
 GOOGLE_FONTS = (
     "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650"

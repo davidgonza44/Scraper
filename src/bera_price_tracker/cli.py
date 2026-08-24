@@ -35,7 +35,7 @@ from bera_price_tracker.config import (
     DEFAULT_FACEBOOK_CITY,
     DEFAULT_FACEBOOK_RECORD_LIMIT,
     MAX_FACEBOOK_RECORD_LIMIT,
-    Settings,
+    settings_from_process_env,
 )
 from bera_price_tracker.domain import (
     CollectionRunInspection,
@@ -527,7 +527,7 @@ def main(
             )
 
     try:
-        settings = Settings.from_env()
+        settings = settings_from_process_env()
         if provider_source is MarketplaceSource.FACEBOOK_MARKETPLACE:
             settings = replace(
                 settings,

@@ -12,7 +12,7 @@ from typing import Any
 
 from bera_price_tracker.application.product_translation import InMemoryProductTranslationCache
 from bera_price_tracker.composition import ApplicationComposition, build_composition
-from bera_price_tracker.config import Settings
+from bera_price_tracker.config import Settings, resolve_process_settings
 from bera_price_tracker.domain.models import MarketplaceSource, SearchQuery
 from bera_price_tracker.gui.display import as_decimal, format_price, is_valid_price
 
@@ -239,7 +239,7 @@ def run_facebook_search(
     city = (city or "").strip() or "caracas"
     limit = max(1, min(5, int(limit)))
 
-    settings = apply_facebook_scope(Settings.from_env(), city, limit)
+    settings = apply_facebook_scope(resolve_process_settings(), city, limit)
     source = MarketplaceSource.FACEBOOK_MARKETPLACE
     composition = factory(settings, source)
     query = SearchQuery(text=query_text)
@@ -562,7 +562,7 @@ def follow_alibaba_price(
 ) -> dict[str, str]:
     from bera_price_tracker.application.alibaba_tracking import observation_from_loaded_row
 
-    resolved = settings if settings is not None else Settings.from_env()
+    resolved = resolve_process_settings(settings)
     service = composition if composition is not None else build_composition(resolved)
     observation = observation_from_loaded_row(row, query)
     tracked = service.follow_alibaba_price(observation, clock=clock)
@@ -575,7 +575,7 @@ def unfollow_alibaba_price(
     settings: Settings | None = None,
     composition: Any | None = None,
 ) -> dict[str, str]:
-    resolved = settings if settings is not None else Settings.from_env()
+    resolved = resolve_process_settings(settings)
     service = composition if composition is not None else build_composition(resolved)
     tracked = service.unfollow_alibaba_price(product_id)
     return tracked_product_to_row(tracked)
@@ -587,7 +587,7 @@ def list_alibaba_tracked(
     composition: Any | None = None,
     active_only: bool = True,
 ) -> list[dict[str, str]]:
-    resolved = settings if settings is not None else Settings.from_env()
+    resolved = resolve_process_settings(settings)
     service = composition if composition is not None else build_composition(resolved)
     return [
         tracked_product_to_row(item)
@@ -660,7 +660,7 @@ def refresh_alibaba_tracked(
     composition: Any | None = None,
     refresh_provider: Any | None = None,
 ) -> dict[str, str]:
-    resolved = settings if settings is not None else Settings.from_env()
+    resolved = resolve_process_settings(settings)
     service = composition if composition is not None else build_composition(resolved)
     summary = service.refresh_alibaba_products(
         product_ids,
@@ -1702,14 +1702,14 @@ def reset_product_translation_cache() -> None:
 def azure_translator_is_configured(settings: Settings | None = None) -> bool:
     """Local Azure configuration check. Never performs an Azure request."""
 
-    resolved = Settings.from_env() if settings is None else settings
+    resolved = resolve_process_settings(settings)
     return resolved.azure_translator_configured()
 
 
 def product_translator_is_configured(settings: Settings | None = None) -> bool:
     """Local check for the selected translator. Never performs a provider request."""
 
-    resolved = Settings.from_env() if settings is None else settings
+    resolved = resolve_process_settings(settings)
     return resolved.product_translator_configured()
 
 
@@ -1783,7 +1783,7 @@ def translate_product_title(
     )
     from bera_price_tracker.composition import build_product_translator
 
-    resolved = Settings.from_env() if settings is None else settings
+    resolved = resolve_process_settings(settings)
     service = TranslateProductTitle(
         translator=translator if translator is not None else build_product_translator(resolved),
         query_generator=(

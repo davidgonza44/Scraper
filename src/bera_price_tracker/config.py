@@ -8,7 +8,10 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from ipaddress import ip_address
+from pathlib import Path
 from urllib.parse import urlsplit
+
+from dotenv import load_dotenv
 
 _LOG_LEVELS = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"})
 _MERCADOLIBRE_MAX_PAGE_SIZE = 100
@@ -50,6 +53,69 @@ ALLOWED_TRANSLATOR_PROVIDERS = frozenset(
         TRANSLATOR_PROVIDER_DISABLED,
     }
 )
+_DOTENV_PATH_ENV = "BERA_TRACKER_DOTENV_PATH"
+_PROJECT_SRC_PACKAGE = Path("src") / "bera_price_tracker"
+
+
+def discover_project_root(*, start: Path | None = None) -> Path | None:
+    """Return the repository root that contains ``pyproject.toml`` and the package.
+
+    Walks from ``start`` when provided, otherwise from this module and the process
+    working directory. Does not read ``.env``.
+    """
+
+    starts: list[Path]
+    if start is not None:
+        starts = [start]
+    else:
+        starts = [Path(__file__).resolve().parent, Path.cwd()]
+    seen: set[Path] = set()
+    for origin in starts:
+        for candidate in (origin, *origin.parents):
+            resolved = candidate if candidate.is_absolute() else candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if (resolved / "pyproject.toml").is_file() and (
+                resolved / _PROJECT_SRC_PACKAGE
+            ).is_dir():
+                return resolved
+    return None
+
+
+def default_dotenv_path() -> Path | None:
+    """Return the ``.env`` path for local bootstrap. Missing files are allowed.
+
+    ``BERA_TRACKER_DOTENV_PATH`` overrides discovery: a blank value disables loading.
+    """
+
+    override = os.environ.get(_DOTENV_PATH_ENV)
+    if override is not None:
+        stripped = override.strip()
+        if not stripped:
+            return None
+        return Path(stripped)
+    root = discover_project_root()
+    if root is None:
+        return None
+    return root / ".env"
+
+
+def load_local_environment(*, dotenv_path: Path | None = None) -> Path | None:
+    """Load a local ``.env`` into ``os.environ`` without overriding existing values.
+
+    Never prints or logs variable values. A missing file is a no-op. This function is
+    not invoked by importing this module.
+    """
+
+    path = default_dotenv_path() if dotenv_path is None else dotenv_path
+    if path is None:
+        return None
+    resolved = path.expanduser()
+    if not resolved.is_file():
+        return None
+    load_dotenv(resolved, override=False, encoding="utf-8")
+    return resolved
 
 
 def is_valid_mercadolibre_site_id(site_id: str | None) -> bool:
@@ -638,3 +704,18 @@ class Settings:
         if provider == TRANSLATOR_PROVIDER_AZURE:
             return self.azure_translator_configured()
         return False
+
+
+def settings_from_process_env() -> Settings:
+    """Load a local ``.env`` if present, then read the process environment."""
+
+    load_local_environment()
+    return Settings.from_env()
+
+
+def resolve_process_settings(settings: Settings | None = None) -> Settings:
+    """Return provided settings, or build them from the process after local bootstrap."""
+
+    if settings is not None:
+        return settings
+    return settings_from_process_env()

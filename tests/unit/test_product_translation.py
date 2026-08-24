@@ -170,6 +170,64 @@ def test_changed_technical_token_is_deterministic_warning() -> None:
     assert validation.changed_tokens[0].translated_token == "110V"
 
 
+@pytest.mark.parametrize(
+    ("original", "translated"),
+    [
+        ("Impact Wrench 21V", "Llave de impacto 21 V"),
+        ("Impact Wrench 800Nm", "Llave de impacto 800 Nm"),
+        ("Centrifugal Pump 1.5kW", "Bomba centrífuga 1.5 kW"),
+        ("Bottle 500ml", "Botella 500 ml"),
+        ("Wireless Mouse 2.4GHz", "Ratón inalámbrico 2.4 GHz"),
+        (
+            "21V Brushless Cordless Impact Wrench 800Nm",
+            "Llave de impacto inalámbrica sin escobillas de 21 V, 800 Nm",
+        ),
+    ],
+)
+def test_number_unit_spacing_is_technically_equivalent(original: str, translated: str) -> None:
+    validation = validate_technical_tokens(original, translated)
+    assert validation.is_reliable is True
+    assert validation.missing_tokens == ()
+    assert validation.changed_tokens == ()
+    _translator, outcome = _translate(original, translated)
+    assert outcome.translation.translated_text == translated
+    assert outcome.is_technically_reliable is True
+
+
+@pytest.mark.parametrize(
+    ("original", "translated", "original_token"),
+    [
+        ("Tool 21V", "Herramienta 18 V", "21V"),
+        ("Tool 800Nm", "Herramienta 600 Nm", "800Nm"),
+        ("Pump 1.5kW", "Bomba 2 kW", "1.5kW"),
+        ("Bottle 500ml", "Botella 750 ml", "500ml"),
+        ("Mouse 2.4GHz", "Ratón 5 GHz", "2.4GHz"),
+    ],
+)
+def test_number_unit_value_change_is_not_equivalent(
+    original: str, translated: str, original_token: str
+) -> None:
+    validation = validate_technical_tokens(original, translated)
+    assert validation.is_reliable is False
+    assert original_token in (
+        validation.missing_tokens
+        + tuple(issue.original_token for issue in validation.changed_tokens)
+    )
+    _translator, outcome = _translate(original, translated)
+    assert outcome.translation.translated_text == translated
+    assert outcome.is_technically_reliable is False
+
+
+def test_deepl_spaced_units_keep_translation_and_query_intact() -> None:
+    original = "21V Brushless Cordless Impact Wrench 800Nm"
+    translated = "Llave de impacto inalámbrica sin escobillas de 21 V, 800 Nm"
+    _translator, outcome = _translate(original, translated)
+    assert outcome.translation.translated_text == translated
+    assert outcome.is_technically_reliable is True
+    assert "21 V" in outcome.search_query
+    assert "800 Nm" in outcome.search_query
+
+
 def test_translation_models_have_no_currency_or_price_authority() -> None:
     request = ProductTranslationRequest(text="Mouse $4.03 USD 220V")
     result = ProductTranslationResult(
