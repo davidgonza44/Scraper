@@ -1630,3 +1630,177 @@ def test_counteroffer_stage_does_not_authorize_a_stray_opening_price() -> None:
     allowed = authorized_money_set(context)
     assert allowed == frozenset({Decimal("4.06")})
     assert Decimal("4.03") not in allowed
+
+
+def test_plan_preserves_identity_tier_bounds_and_ladder() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    assert plan.supplier_name == "Example Electronics Co., Ltd."
+    assert plan.min_order_quantity == 1
+    assert plan.selected_min_quantity == 1
+    assert plan.selected_max_quantity == 49
+    assert plan.aggressiveness == DEFAULT_NEGOTIATION_AGGRESSIVENESS
+    assert plan.ladder_summary
+    assert "4.30" in plan.ladder_summary
+    assert "4.00" in plan.ladder_summary
+    assert plan.explanation
+    assert "80%" in plan.explanation
+    assert "económicamente atractivo" not in plan.explanation
+
+
+def test_duties_reduce_max_product_instead_of_raising_it() -> None:
+    without_duties = calculate_alibaba_negotiation_plan(
+        _input(resale=Decimal("10.00"), margin=Decimal("30"), shipping=Decimal("0.50"))
+    )
+    with_duties = calculate_alibaba_negotiation_plan(
+        _input(
+            resale=Decimal("10.00"),
+            margin=Decimal("30"),
+            shipping=Decimal("0.50"),
+            duties=Decimal("1.00"),
+        )
+    )
+    # max_total = 10 * 0.70 = 7.00; product = 7.00 - 0.50 - 1.00 = 5.50
+    assert without_duties.max_product_unit_price == Decimal("6.50")
+    assert with_duties.max_product_unit_price == Decimal("5.50")
+    assert margin_product_ceiling(
+        Decimal("10.00"),
+        Decimal("30"),
+        Decimal("0.50"),
+        Decimal("1.00"),
+        Decimal("0"),
+    ) == Decimal("5.50")
+
+
+def test_unattractive_explanation_keeps_proximity_and_warns() -> None:
+    plan = calculate_alibaba_negotiation_plan(
+        _input(resale=Decimal("5.00"), margin=Decimal("40"), shipping=Decimal("1.00"))
+    )
+    assert plan.attractiveness is DealAttractiveness.ECONOMICALLY_UNATTRACTIVE
+    assert "80%" in plan.explanation
+    assert "no es económicamente atractivo" in plan.explanation
+
+
+def test_opening_payload_keeps_moq_and_names_authorized_offer() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    context = draft_context_from_plan(plan, stage=NegotiationStage.OPENING)
+    assert context.public_supplier_name == "Example Electronics Co., Ltd."
+    assert context.min_order_quantity == 1
+    assert context.ask_lead_time is True
+    payload = draft_context_payload(context)
+    instructions = payload["draft_instructions"]
+    assert isinstance(instructions, dict)
+    assert instructions["min_order_quantity"] == 1
+    instruction = instructions["instruction"]
+    assert isinstance(instruction, str)
+    assert "authorized_offer" in instruction
+    assert "4.03" in str(payload)
+    assert "4.06" not in str(payload)
+    assert "4.30" not in str(payload)
+
+
+def test_counter_context_does_not_ask_lead_time() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    parsed = parse_supplier_response("We can offer $4.15 for 40 units.")
+    recommendation = classify_supplier_price(parsed.quoted_unit_price, plan.bounds)
+    context = draft_context_from_plan(
+        plan,
+        stage=NegotiationStage.COUNTEROFFER,
+        recommendation=recommendation,
+        supplier=parsed,
+    )
+    assert context.ask_lead_time is False
+    assert context.public_supplier_name == "Example Electronics Co., Ltd."
+    assert context.min_order_quantity == 1
+    assert context.supplier_response
+    assert "4.15" in context.supplier_response
+
+
+def test_above_ceiling_payload_keeps_authorized_final_offer() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    parsed = parse_supplier_response("The best we can do is $4.50 per unit.")
+    recommendation = classify_supplier_price(parsed.quoted_unit_price, plan.bounds)
+    context = draft_context_from_plan(
+        plan,
+        stage=NegotiationStage.COUNTEROFFER,
+        recommendation=recommendation,
+        supplier=parsed,
+    )
+    payload = draft_context_payload(context)
+    instructions = payload["draft_instructions"]
+    assert isinstance(instructions, dict)
+    assert instructions["authorized_final_offer"] == "4.30"
+    instruction = instructions["instruction"]
+    assert isinstance(instruction, str)
+    assert "authorized_final_offer" in instruction
+
+
+def test_analyze_copies_plan_attractiveness_onto_recommendation() -> None:
+    plan = calculate_alibaba_negotiation_plan(
+        _input(resale=Decimal("5.00"), margin=Decimal("40"), shipping=Decimal("1.00"))
+    )
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, "Best is $1.90")
+    assert parsed.quoted_unit_price == Decimal("1.90")
+    assert recommendation.decision is CounterOfferDecision.ACCEPTABLE
+    assert recommendation.attractiveness is DealAttractiveness.ECONOMICALLY_UNATTRACTIVE
+
+
+def test_parse_detects_fob_and_keeps_extracted_quantity() -> None:
+    parsed = parse_supplier_response("FOB $4.10, MOQ 50 units")
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.shipping_mentioned is True
+    assert parsed.quoted_quantity == 50
+    silent = parse_supplier_response("We can do $4.10")
+    assert silent.shipping_mentioned is False
+    assert silent.quoted_quantity is None
+
+
+def test_integer_usd_and_dollar_amounts_are_prices_not_quantities() -> None:
+    assert extract_supplier_money("$4 each") == (Decimal("4.00"),)
+    assert extract_supplier_money("USD 4 per unit") == (Decimal("4.00"),)
+    assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
+
+
+def test_reference_price_accepts_zero_and_full_proximity() -> None:
+    public = Decimal("4.30")
+    nxt = Decimal("4.00")
+    assert negotiable_reference_price(public, nxt, None) == public
+    assert negotiable_reference_price(public, None, Decimal("0.80")) == public
+    assert negotiable_reference_price(public, nxt, Decimal("0")) == public
+    assert negotiable_reference_price(public, nxt, Decimal("1")) == nxt
+    assert tier_proximity(1, 1) == Decimal("1")
+
+
+def test_search_last_price_does_not_replace_a_published_range() -> None:
+    assert (
+        public_price_from_catalog_row(
+            {
+                "source": "search",
+                "currency": "USD",
+                "last_price": "4.12",
+                "price_min": "4.00",
+                "price_max": "5.00",
+            }
+        )
+        is None
+    )
+
+
+def test_same_min_prefers_closed_tier_over_open_ended() -> None:
+    closed = NegotiationTier(min_quantity=40, max_quantity=100, unit_price=Decimal("4.00"))
+    open_ended = NegotiationTier(min_quantity=40, max_quantity=None, unit_price=Decimal("3.50"))
+    selected = select_quantity_tier((closed, open_ended), 40)
+    assert selected == closed
+
+
+def test_supplier_reply_stage_does_not_authorize_a_quoted_price() -> None:
+    context = NegotiationDraftContext(
+        product_title="Wireless Mouse",
+        public_supplier_name="Example",
+        desired_quantity=40,
+        currency="USD",
+        stage=NegotiationStage.SUPPLIER_REPLY.value,
+        language="English",
+        supplier_quoted_price="4.10",
+        authorized_counter_offer="4.06",
+    )
+    assert authorized_money_set(context) == frozenset()
