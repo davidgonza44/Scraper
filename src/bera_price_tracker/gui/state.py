@@ -33,6 +33,7 @@ UI_LOADING = "LOADING"
 UI_SUCCESS = "SUCCESS"
 UI_EMPTY = "EMPTY"
 UI_ERROR = "ERROR"
+UI_NOT_CONFIGURED = "NOT_CONFIGURED"
 
 ALIBABA_SORT_BY_LABEL = {
     "Relevancia original": analysis.SORT_ORIGINAL,
@@ -287,6 +288,14 @@ class TrackerState(rx.State):
     ml_alibaba_context: dict[str, str] = {}
     ml_last_search_query: str = ""
     ml_association_product_id: str = ""
+    ml_translated_title: str = ""
+    ml_translation_ui_status: str = UI_INITIAL
+    ml_translation_error: str = ""
+    ml_translation_warning: str = ""
+    ml_translation_is_loading: bool = False
+    ml_translation_generation: int = 0
+    ml_translation_source_language: str = ""
+    ml_query_origin: str = ""
     alibaba_negotiation_product_key: str = ""
     alibaba_negotiation_quantity: str = "40"
     alibaba_negotiation_resale: str = ""
@@ -950,13 +959,14 @@ class TrackerState(rx.State):
 
     def set_ml_query(self, value: str) -> None:
         self.ml_query = value
+        self.ml_query_origin = services.ML_QUERY_ORIGIN_USER
         if value.strip() != self.ml_last_search_query.strip():
             self._invalidate_ml_comparison()
 
-    def prepare_ml_comparables_from_alibaba_result(self, product_id: str) -> None:
+    def prepare_ml_comparables_from_alibaba_result(self, product_id: str) -> object | None:
         row = next((item for item in self.alibaba_results if item.product_id == product_id), None)
         if row is None:
-            return
+            return None
         self._prepare_ml_comparables(
             external_id=row.product_id,
             title=row.title,
@@ -964,13 +974,14 @@ class TrackerState(rx.State):
             supplier_price=row.price or row.representative,
             currency=row.currency,
         )
+        return TrackerState.translate_selected_alibaba_title
 
-    def prepare_ml_comparables_from_alibaba_tracked(self, product_id: str) -> None:
+    def prepare_ml_comparables_from_alibaba_tracked(self, product_id: str) -> object | None:
         row = next(
             (item for item in self.alibaba_tracked_rows if item.product_id == product_id), None
         )
         if row is None:
-            return
+            return None
         self._prepare_ml_comparables(
             external_id=row.product_id,
             title=row.title,
@@ -978,6 +989,7 @@ class TrackerState(rx.State):
             supplier_price=row.current_price or row.last_price,
             currency=row.currency,
         )
+        return TrackerState.translate_selected_alibaba_title
 
     def _prepare_ml_comparables(
         self,
@@ -1004,14 +1016,28 @@ class TrackerState(rx.State):
         )
         if not context["external_id"]:
             return
+        product_changed = previous_id != context["external_id"]
+        keep_user_query = (
+            not product_changed or self.ml_query_origin == services.ML_QUERY_ORIGIN_USER
+        )
         self.ml_alibaba_context = context
         self.ml_has_alibaba_context = True
-        self.ml_query = services.suggest_mercadolibre_query(
-            current_query=self.ml_query,
-            fallback_query=self.alibaba_query,
-        )
+        if keep_user_query:
+            self.ml_query = services.suggest_mercadolibre_query(
+                current_query=self.ml_query,
+                fallback_query=self.alibaba_query,
+            )
+            if not self.ml_query_origin and self.ml_query:
+                self.ml_query_origin = services.ML_QUERY_ORIGIN_FALLBACK
+        else:
+            self.ml_query = services.suggest_mercadolibre_query(
+                current_query="",
+                fallback_query=self.alibaba_query,
+            )
+            self.ml_query_origin = services.ML_QUERY_ORIGIN_FALLBACK if self.ml_query else ""
+        self._reset_product_translation_state(configured=services.azure_translator_is_configured())
         self.marketplace_tab = "mercadolibre"
-        if previous_id != context["external_id"]:
+        if product_changed:
             self.ml_results = []
             self.ml_summary = {}
             self.ml_ui_status = UI_INITIAL
@@ -1019,6 +1045,100 @@ class TrackerState(rx.State):
             self.ml_last_search_query = ""
             self.ml_association_product_id = ""
             self._invalidate_ml_comparison()
+
+    def _reset_product_translation_state(self, *, configured: bool) -> None:
+        self.ml_translation_generation += 1
+        self.ml_translated_title = ""
+        self.ml_translation_warning = ""
+        self.ml_translation_source_language = ""
+        if configured:
+            self.ml_translation_is_loading = True
+            self.ml_translation_ui_status = UI_LOADING
+            self.ml_translation_error = ""
+        else:
+            self.ml_translation_is_loading = False
+            self.ml_translation_ui_status = UI_NOT_CONFIGURED
+            self.ml_translation_error = services.TRANSLATION_NOT_CONFIGURED_MESSAGE
+
+    def _finalize_product_translation(
+        self,
+        *,
+        product_id: str,
+        title: str,
+        generation: int,
+        translated_title: str = "",
+        search_query: str = "",
+        source_language: str = "",
+        warning: str = "",
+        error_message: str | None = None,
+        configured: bool = True,
+    ) -> None:
+        current_product_id = self._ml_active_search_product_id()
+        current_title = str(self.ml_alibaba_context.get("title", "") or "")
+        if (
+            product_id != current_product_id
+            or title != current_title
+            or generation != self.ml_translation_generation
+        ):
+            return
+        self.ml_translation_is_loading = False
+        if error_message is not None:
+            self.ml_translated_title = ""
+            self.ml_translation_warning = ""
+            self.ml_translation_source_language = ""
+            self.ml_translation_error = error_message
+            self.ml_translation_ui_status = UI_NOT_CONFIGURED if not configured else UI_ERROR
+            return
+        self.ml_translation_error = ""
+        self.ml_translated_title = translated_title
+        self.ml_translation_warning = warning
+        self.ml_translation_source_language = source_language
+        self.ml_translation_ui_status = UI_SUCCESS
+        if services.should_replace_generated_query(self.ml_query_origin) and search_query.strip():
+            self.ml_query = search_query.strip()
+            self.ml_query_origin = services.ML_QUERY_ORIGIN_GENERATED
+
+    @rx.event(background=True)
+    async def translate_selected_alibaba_title(self) -> None:
+        async with self:
+            if not self.ml_has_alibaba_context:
+                return
+            if self.ml_translation_ui_status == UI_NOT_CONFIGURED:
+                return
+            product_id = self._ml_active_search_product_id()
+            title = str(self.ml_alibaba_context.get("title", "") or "")
+            generation = self.ml_translation_generation
+            self.ml_translation_is_loading = True
+            self.ml_translation_ui_status = UI_LOADING
+            self.ml_translation_error = ""
+            self.ml_translation_warning = ""
+
+        try:
+            payload = await asyncio.to_thread(services.translate_product_title, title)
+        except Exception as exc:  # noqa: BLE001 - sanitized before display
+            from bera_price_tracker.application.ports import ProductTranslatorNotConfiguredError
+
+            message = services.sanitize_translation_error(exc)
+            async with self:
+                self._finalize_product_translation(
+                    product_id=product_id,
+                    title=title,
+                    generation=generation,
+                    error_message=message,
+                    configured=not isinstance(exc, ProductTranslatorNotConfiguredError),
+                )
+            return
+
+        async with self:
+            self._finalize_product_translation(
+                product_id=product_id,
+                title=title,
+                generation=generation,
+                translated_title=str(payload.get("translated_text", "") or ""),
+                search_query=str(payload.get("search_query", "") or ""),
+                source_language=str(payload.get("source_language", "") or ""),
+                warning=str(payload.get("warning", "") or ""),
+            )
 
     def set_ml_limit(self, value: str | int) -> None:
         try:

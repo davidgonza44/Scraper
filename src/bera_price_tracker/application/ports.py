@@ -21,6 +21,10 @@ if TYPE_CHECKING:
         AIClassification,
         SanitizedProductCandidate,
     )
+    from bera_price_tracker.application.product_translation import (
+        ProductTranslationRequest,
+        ProductTranslationResult,
+    )
     from bera_price_tracker.domain.alibaba import AlibabaProduct
     from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
 
@@ -47,6 +51,41 @@ class AlibabaNegotiationDraftUnavailableError(RuntimeError):
 
 class AlibabaNegotiationDraftInvalidError(RuntimeError):
     """Raised when MiniMax/Ollama output cannot satisfy the negotiation contract."""
+
+
+class ProductTranslatorNotConfiguredError(ProviderNotConfiguredError):
+    """Raised when the product translator adapter has no local configuration."""
+
+
+class ProductTranslatorUnavailableError(RuntimeError):
+    """Raised when a translator adapter cannot complete a request."""
+
+
+class ProductTranslatorTimeoutError(ProductTranslatorUnavailableError):
+    """Raised when a translator request exceeds its configured timeout."""
+
+
+class ProductTranslatorHTTPError(ProductTranslatorUnavailableError):
+    """Raised for a non-success translator HTTP status."""
+
+    def __init__(self, status_code: int, message: str | None = None) -> None:
+        self.status_code = status_code
+        super().__init__(message or f"Product translator request failed with HTTP {status_code}")
+
+
+class ProductTranslatorRateLimitError(ProductTranslatorHTTPError):
+    """Raised when the translator rejects the request as rate-limited."""
+
+    def __init__(self, status_code: int = 429) -> None:
+        super().__init__(status_code, "Product translator rate limit was reached")
+
+
+class ProductTranslatorInvalidResponseError(RuntimeError):
+    """Raised when translator output cannot satisfy the translation contract."""
+
+
+class ProductTranslationEmptyTextError(ValueError):
+    """Raised when the source product text is empty and must not be translated."""
 
 
 @runtime_checkable
@@ -85,6 +124,26 @@ class AlibabaProductRefreshProvider(Protocol):
 
     def refresh_products(self, products: Sequence[Any]) -> Any:
         """Refresh the given tracked products in one batch."""
+
+        ...
+
+
+@runtime_checkable
+class ProductTranslator(Protocol):
+    """Provider-neutral product-text translation. Must not touch money fields."""
+
+    def translate(self, request: ProductTranslationRequest) -> ProductTranslationResult:
+        """Translate one product text. Implementations must not infer currency."""
+
+        ...
+
+
+@runtime_checkable
+class ProductSearchQueryGenerator(Protocol):
+    """Derive an editable commercial search query from a translation."""
+
+    def generate(self, *, original_text: str, translated_text: str) -> str:
+        """Return a conservative query. Must not invent attributes or prices."""
 
         ...
 

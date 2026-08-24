@@ -155,6 +155,7 @@ def test_doctor_ready_is_offline_read_only_and_never_reveals_secrets(
     assert f"Schema: OK (version {expected_schema_version})" in captured.out
     assert "Facebook Marketplace:" in captured.out
     assert "Status: NOT CONFIGURED" in captured.out
+    assert "Azure Translator:" in captured.out
     assert "Overall: READY" in captured.out
     for secret_fragment in (
         TOKEN,
@@ -295,3 +296,24 @@ def test_python_module_doctor_uses_the_same_offline_command(tmp_path: Path) -> N
     assert TOKEN not in completed.stdout
     assert TOKEN not in completed.stderr
     assert "Authorization" not in completed.stdout + completed.stderr
+
+
+def test_doctor_reports_azure_translator_from_local_config_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_path = tmp_path / "azure-doctor.db"
+    _initialize_database(database_path)
+    _configure(monkeypatch, database_path)
+    monkeypatch.setenv("BERA_TRACKER_AZURE_TRANSLATOR_KEY", TOKEN)
+
+    exit_code = main(["doctor"])
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert exit_code == ExitCode.SUCCESS
+    assert "Azure Translator:" in captured.out
+    assert "Status: CONFIGURED" in captured.out
+    assert TOKEN not in combined
+    assert "Ocp-Apim-Subscription-Key" not in combined

@@ -36,6 +36,8 @@ MAX_APIFY_ALIBABA_REFRESH_RETRIES = 5
 MAX_APIFY_ALIBABA_REFRESH_CONCURRENCY = 3
 DEFAULT_FACEBOOK_RECORD_LIMIT = 5
 MAX_FACEBOOK_RECORD_LIMIT = 5
+DEFAULT_AZURE_TRANSLATOR_ENDPOINT = "https://api.cognitive.microsofttranslator.com"
+DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS = 10.0
 
 
 def is_valid_mercadolibre_site_id(site_id: str | None) -> bool:
@@ -119,6 +121,45 @@ def normalize_ollama_model(value: str) -> str:
     return normalized
 
 
+def normalize_azure_translator_endpoint(value: str) -> str:
+    """Validate an Azure Translator origin. Path is allowed; credentials are not."""
+
+    if not isinstance(value, str):
+        raise TypeError("azure_translator_endpoint must be a string")
+    normalized = value.strip()
+    if not normalized or any(character.isspace() for character in normalized):
+        raise ValueError("azure_translator_endpoint must not be blank or contain whitespace")
+    parsed = urlsplit(normalized)
+    if parsed.scheme.lower() != "https" or parsed.hostname is None:
+        raise ValueError("azure_translator_endpoint must be an absolute HTTPS URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("azure_translator_endpoint must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("azure_translator_endpoint must not contain a query or fragment")
+    try:
+        _ = parsed.port
+    except ValueError as error:
+        raise ValueError("azure_translator_endpoint contains an invalid port") from error
+    path = parsed.path.rstrip("/")
+    origin = f"https://{parsed.netloc}".rstrip("/")
+    return origin if path in {"", "/"} else f"{origin}{path}"
+
+
+def normalize_azure_translator_timeout_seconds(value: float) -> float:
+    """Validate the bounded Azure Translator HTTP timeout."""
+
+    return _positive_finite(value, "azure_translator_timeout_seconds")
+
+
+def azure_translator_is_configured(
+    *,
+    api_key: str | None,
+) -> bool:
+    """Return whether a local Azure Translator key is present. No HTTP."""
+
+    return api_key is not None and bool(api_key.strip())
+
+
 def normalize_ollama_timeout_seconds(value: float) -> float:
     """Validate the bounded-request timeout used for cloud-backed local inference."""
 
@@ -186,6 +227,10 @@ class Settings:
     facebook_record_limit: int = DEFAULT_FACEBOOK_RECORD_LIMIT
     facebook_backend: str = DEFAULT_FACEBOOK_BACKEND
     apify_api_token: str | None = field(default=None, repr=False)
+    azure_translator_key: str | None = field(default=None, repr=False)
+    azure_translator_endpoint: str = DEFAULT_AZURE_TRANSLATOR_ENDPOINT
+    azure_translator_region: str | None = None
+    azure_translator_timeout_seconds: float = DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS
     apify_alibaba_actor: str = DEFAULT_APIFY_ALIBABA_ACTOR
     apify_alibaba_refresh_actor: str = DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR
     apify_alibaba_refresh_retries: int = DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES
@@ -274,6 +319,22 @@ class Settings:
         token = self.apify_api_token
         if token is not None:
             object.__setattr__(self, "apify_api_token", token.strip() or None)
+        azure_key = self.azure_translator_key
+        if azure_key is not None:
+            object.__setattr__(self, "azure_translator_key", azure_key.strip() or None)
+        object.__setattr__(
+            self,
+            "azure_translator_endpoint",
+            normalize_azure_translator_endpoint(self.azure_translator_endpoint),
+        )
+        region = self.azure_translator_region
+        if region is not None:
+            object.__setattr__(self, "azure_translator_region", region.strip() or None)
+        object.__setattr__(
+            self,
+            "azure_translator_timeout_seconds",
+            normalize_azure_translator_timeout_seconds(self.azure_translator_timeout_seconds),
+        )
         city = " ".join(self.facebook_city.strip().split()).casefold()
         if not city:
             raise ValueError("facebook_city must not be blank")
@@ -396,6 +457,20 @@ class Settings:
                 DEFAULT_FACEBOOK_BACKEND,
             ),
             apify_api_token=_optional_value(values, "BERA_TRACKER_APIFY_API_TOKEN"),
+            azure_translator_key=_optional_value(values, "BERA_TRACKER_AZURE_TRANSLATOR_KEY"),
+            azure_translator_endpoint=(
+                _optional_value(values, "BERA_TRACKER_AZURE_TRANSLATOR_ENDPOINT")
+                or DEFAULT_AZURE_TRANSLATOR_ENDPOINT
+            ),
+            azure_translator_region=_optional_value(
+                values,
+                "BERA_TRACKER_AZURE_TRANSLATOR_REGION",
+            ),
+            azure_translator_timeout_seconds=_float_value(
+                values,
+                "BERA_TRACKER_AZURE_TRANSLATOR_TIMEOUT_SECONDS",
+                DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS,
+            ),
             apify_alibaba_actor=values.get(
                 "BERA_TRACKER_APIFY_ALIBABA_ACTOR",
                 DEFAULT_APIFY_ALIBABA_ACTOR,
@@ -419,3 +494,8 @@ class Settings:
                 DEFAULT_APIFY_MERCADOLIBRE_ACTOR,
             ),
         )
+
+    def azure_translator_configured(self) -> bool:
+        """Return whether a local Azure Translator key is present. No HTTP."""
+
+        return azure_translator_is_configured(api_key=self.azure_translator_key)

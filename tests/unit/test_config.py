@@ -4,6 +4,8 @@ import pytest
 
 from bera_price_tracker.config import (
     DEFAULT_APIFY_MERCADOLIBRE_ACTOR,
+    DEFAULT_AZURE_TRANSLATOR_ENDPOINT,
+    DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS,
     DEFAULT_BRIGHTDATA_BASE_URL,
     DEFAULT_BRIGHTDATA_DATASET_ID,
     DEFAULT_FACEBOOK_CITY,
@@ -41,6 +43,10 @@ def test_settings_are_read_from_a_mapping_without_loading_files() -> None:
             "BERA_TRACKER_FACEBOOK_CITY": " Caracas ",
             "BERA_TRACKER_FACEBOOK_RECORD_LIMIT": "4",
             "BERA_TRACKER_APIFY_API_TOKEN": " apify-secret ",
+            "BERA_TRACKER_AZURE_TRANSLATOR_KEY": " azure-secret ",
+            "BERA_TRACKER_AZURE_TRANSLATOR_ENDPOINT": "https://translator.example.test/",
+            "BERA_TRACKER_AZURE_TRANSLATOR_REGION": " eastus ",
+            "BERA_TRACKER_AZURE_TRANSLATOR_TIMEOUT_SECONDS": "8.5",
         }
     )
 
@@ -66,12 +72,18 @@ def test_settings_are_read_from_a_mapping_without_loading_files() -> None:
     assert settings.facebook_city == "caracas"
     assert settings.facebook_record_limit == 4
     assert settings.apify_api_token == "apify-secret"
+    assert settings.azure_translator_key == "azure-secret"
+    assert settings.azure_translator_endpoint == "https://translator.example.test"
+    assert settings.azure_translator_region == "eastus"
+    assert settings.azure_translator_timeout_seconds == 8.5
+    assert settings.azure_translator_configured() is True
     assert settings.apify_alibaba_refresh_actor == "xtracto/alibaba-product-scraper"
     assert settings.apify_alibaba_refresh_retries == 1
     assert settings.apify_alibaba_refresh_concurrency == 3
     assert settings.apify_mercadolibre_actor == DEFAULT_APIFY_MERCADOLIBRE_ACTOR
     assert "bright-secret" not in repr(settings)
     assert "apify-secret" not in repr(settings)
+    assert "azure-secret" not in repr(settings)
 
 
 def test_blank_optional_environment_values_become_none() -> None:
@@ -89,6 +101,16 @@ def test_blank_optional_environment_values_become_none() -> None:
     assert settings.facebook_city == DEFAULT_FACEBOOK_CITY
     assert settings.facebook_record_limit == DEFAULT_FACEBOOK_RECORD_LIMIT
     assert settings.apify_api_token is None
+    assert settings.azure_translator_key is None
+    assert settings.azure_translator_endpoint == DEFAULT_AZURE_TRANSLATOR_ENDPOINT
+    assert settings.azure_translator_region is None
+    assert settings.azure_translator_timeout_seconds == DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS
+    assert settings.azure_translator_configured() is False
+    assert settings.azure_translator_key is None
+    assert settings.azure_translator_endpoint == DEFAULT_AZURE_TRANSLATOR_ENDPOINT
+    assert settings.azure_translator_region is None
+    assert settings.azure_translator_timeout_seconds == DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS
+    assert settings.azure_translator_configured() is False
 
 
 def test_blank_database_path_is_rejected() -> None:
@@ -203,3 +225,28 @@ def test_valid_mercado_libre_site_ids_are_recognized(site_id: str) -> None:
 @pytest.mark.parametrize("site_id", [None, "", "   ", "bad site", "MLV!", "MLV/"])
 def test_invalid_mercado_libre_site_ids_are_rejected(site_id: str | None) -> None:
     assert is_valid_mercadolibre_site_id(site_id) is False
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://api.cognitive.microsofttranslator.com",
+        "https://user:pass@translator.example.test",
+        "https://translator.example.test?api-version=3.0",
+        "not-a-url",
+    ],
+)
+def test_invalid_azure_translator_endpoint_is_rejected(endpoint: str) -> None:
+    with pytest.raises((TypeError, ValueError), match="azure_translator_endpoint"):
+        Settings.from_env({"BERA_TRACKER_AZURE_TRANSLATOR_ENDPOINT": endpoint})
+
+
+def test_blank_azure_translator_endpoint_uses_default() -> None:
+    settings = Settings.from_env({"BERA_TRACKER_AZURE_TRANSLATOR_ENDPOINT": "  "})
+    assert settings.azure_translator_endpoint == DEFAULT_AZURE_TRANSLATOR_ENDPOINT
+
+
+def test_blank_azure_translator_key_is_not_configured() -> None:
+    settings = Settings.from_env({"BERA_TRACKER_AZURE_TRANSLATOR_KEY": "  "})
+    assert settings.azure_translator_key is None
+    assert settings.azure_translator_configured() is False
