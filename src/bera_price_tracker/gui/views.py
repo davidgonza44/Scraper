@@ -2175,7 +2175,7 @@ def _ml_form() -> rx.Component:
             rx.cond(
                 TrackerState.ml_has_alibaba_context,
                 rx.vstack(
-                    rx.text("Producto Alibaba seleccionado", size="1", color=MUTED),
+                    rx.text("Título Alibaba", size="1", color=MUTED),
                     rx.text(
                         TrackerState.ml_alibaba_context["title"],
                         size="3",
@@ -2192,6 +2192,41 @@ def _ml_form() -> rx.Component:
                         size="2",
                         color=BRICK,
                     ),
+                    rx.text("Traducción al español", size="1", color=MUTED, padding_top="8px"),
+                    rx.cond(
+                        TrackerState.ml_translation_is_loading,
+                        rx.hstack(
+                            rx.spinner(size="1"),
+                            rx.text("Traduciendo título...", size="2", color=MUTED),
+                            spacing="2",
+                        ),
+                        rx.cond(
+                            TrackerState.ml_translated_title != "",
+                            rx.text(
+                                TrackerState.ml_translated_title,
+                                size="3",
+                                weight="medium",
+                                color=styles.TEXT_PRIMARY,
+                            ),
+                            rx.text(
+                                TrackerState.ml_translation_error,
+                                size="2",
+                                color=rx.cond(
+                                    TrackerState.ml_translation_ui_status == "NOT_CONFIGURED",
+                                    MUTED,
+                                    BRICK,
+                                ),
+                            ),
+                        ),
+                    ),
+                    rx.cond(
+                        TrackerState.ml_translation_warning != "",
+                        rx.text(
+                            TrackerState.ml_translation_warning,
+                            size="1",
+                            color=BRICK,
+                        ),
+                    ),
                     spacing="1",
                     width="100%",
                     align_items="start",
@@ -2200,7 +2235,7 @@ def _ml_form() -> rx.Component:
             rx.hstack(
                 rx.vstack(
                     rx.text(
-                        "Consulta para Mercado Libre Venezuela",
+                        "Consulta Mercado Libre",
                         size="1",
                         color=styles.TEXT_SECONDARY,
                         weight="medium",

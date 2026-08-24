@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from bera_price_tracker.application import (
     AlibabaFollowObservation,
@@ -29,6 +30,7 @@ from bera_price_tracker.application import (
     RefreshTrackedAlibabaProducts,
     SearchAlibabaProducts,
     SearchMercadoLibreProducts,
+    TranslateProductTitle,
     UnfollowAlibabaPrice,
 )
 from bera_price_tracker.config import Settings
@@ -61,6 +63,12 @@ from bera_price_tracker.infrastructure.providers.alibaba_refresh import (
     ApifyAlibabaProductRefreshClient,
 )
 from bera_price_tracker.infrastructure.providers.mercadolibre_apify import ApifyMercadoLibreClient
+from bera_price_tracker.infrastructure.translation import AzureProductTranslator
+
+if TYPE_CHECKING:
+    import httpx
+
+    from bera_price_tracker.application.product_translation import InMemoryProductTranslationCache
 
 _logger = logging.getLogger(__name__)
 
@@ -487,6 +495,47 @@ def build_mercadolibre_search(settings: Settings | None = None) -> SearchMercado
         actor_id=resolved.apify_mercadolibre_actor,
     )
     return SearchMercadoLibreProducts(provider=client)
+
+
+def build_product_translator(
+    settings: Settings | None = None,
+    *,
+    client: httpx.Client | None = None,
+) -> AzureProductTranslator:
+    """Wire Azure Translator without opening a request."""
+
+    resolved = Settings.from_env() if settings is None else settings
+    return AzureProductTranslator(
+        api_key=resolved.azure_translator_key,
+        endpoint=resolved.azure_translator_endpoint,
+        region=resolved.azure_translator_region,
+        timeout_seconds=resolved.azure_translator_timeout_seconds,
+        client=client,
+    )
+
+
+def build_product_title_translator(
+    settings: Settings | None = None,
+    *,
+    client: httpx.Client | None = None,
+    cache: InMemoryProductTranslationCache | None = None,
+) -> TranslateProductTitle:
+    """Wire translation + conservative query generation. No marketplace HTTP."""
+
+    from bera_price_tracker.application.product_translation import (
+        ConservativeProductSearchQueryGenerator,
+    )
+    from bera_price_tracker.application.product_translation import (
+        InMemoryProductTranslationCache as Cache,
+    )
+
+    translator = build_product_translator(settings, client=client)
+    resolved_cache = Cache() if cache is None else cache
+    return TranslateProductTitle(
+        translator=translator,
+        query_generator=ConservativeProductSearchQueryGenerator(),
+        cache=resolved_cache,
+    )
 
 
 def build_alibaba_negotiation_drafter(

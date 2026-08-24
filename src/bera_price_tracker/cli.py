@@ -398,6 +398,10 @@ def _print_diagnostic_report(report: DiagnosticReport) -> None:
     print("Facebook Marketplace:")
     print("  Status: NOT CONFIGURED")
     print()
+    azure_status = "CONFIGURED" if report.azure_translator_configured else "NOT CONFIGURED"
+    print("Azure Translator:")
+    print(f"  Status: {azure_status}")
+    print()
     print(f"Overall: {report.overall.value}")
 
 

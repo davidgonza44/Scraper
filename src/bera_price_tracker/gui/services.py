@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
+from bera_price_tracker.application.product_translation import InMemoryProductTranslationCache
 from bera_price_tracker.composition import ApplicationComposition, build_composition
 from bera_price_tracker.config import Settings
 from bera_price_tracker.domain.models import MarketplaceSource, SearchQuery
@@ -1667,6 +1668,142 @@ def suggest_mercadolibre_query(*, current_query: object, fallback_query: object)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+ML_QUERY_ORIGIN_USER = "user"
+ML_QUERY_ORIGIN_GENERATED = "generated"
+ML_QUERY_ORIGIN_FALLBACK = "fallback"
+
+TRANSLATION_NOT_CONFIGURED_MESSAGE = (
+    "Traducción no configurada. Escribe la consulta de Mercado Libre manualmente."
+)
+TRANSLATION_TIMEOUT_MESSAGE = (
+    "La traducción tardó demasiado. Escribe la consulta de Mercado Libre manualmente."
+)
+TRANSLATION_HTTP_MESSAGE = (
+    "No se pudo traducir el título. Escribe la consulta de Mercado Libre manualmente."
+)
+TRANSLATION_INVALID_MESSAGE = (
+    "La traducción no es usable. Escribe la consulta de Mercado Libre manualmente."
+)
+TRANSLATION_EMPTY_TITLE_MESSAGE = "El título del producto está vacío."
+TRANSLATION_GENERIC_MESSAGE = (
+    "No se pudo traducir el título. Escribe la consulta de Mercado Libre manualmente."
+)
+TRANSLATION_TOKEN_WARNING_PREFIX = "La traducción puede haber alterado especificaciones técnicas"
+
+_PRODUCT_TRANSLATION_CACHE = InMemoryProductTranslationCache()
+
+
+def reset_product_translation_cache() -> None:
+    _PRODUCT_TRANSLATION_CACHE.clear()
+
+
+def azure_translator_is_configured(settings: Settings | None = None) -> bool:
+    """Local configuration check. Never performs an Azure request."""
+
+    resolved = Settings.from_env() if settings is None else settings
+    return resolved.azure_translator_configured()
+
+
+def sanitize_translation_error(exc: BaseException) -> str:
+    from bera_price_tracker.application.ports import (
+        ProductTranslationEmptyTextError,
+        ProductTranslatorHTTPError,
+        ProductTranslatorInvalidResponseError,
+        ProductTranslatorNotConfiguredError,
+        ProductTranslatorRateLimitError,
+        ProductTranslatorTimeoutError,
+        ProductTranslatorUnavailableError,
+    )
+
+    type_name = type(exc).__name__
+    logger.info("Product translation failed: %s", type_name)
+    if isinstance(exc, ProductTranslatorNotConfiguredError):
+        return TRANSLATION_NOT_CONFIGURED_MESSAGE
+    if isinstance(exc, ProductTranslationEmptyTextError):
+        return TRANSLATION_EMPTY_TITLE_MESSAGE
+    if isinstance(exc, ProductTranslatorTimeoutError):
+        return TRANSLATION_TIMEOUT_MESSAGE
+    if isinstance(exc, ProductTranslatorRateLimitError):
+        return TRANSLATION_HTTP_MESSAGE
+    if isinstance(exc, ProductTranslatorHTTPError):
+        return TRANSLATION_HTTP_MESSAGE
+    if isinstance(exc, ProductTranslatorInvalidResponseError):
+        return TRANSLATION_INVALID_MESSAGE
+    if isinstance(exc, ProductTranslatorUnavailableError):
+        return TRANSLATION_HTTP_MESSAGE
+    return TRANSLATION_GENERIC_MESSAGE
+
+
+def format_technical_token_warning(missing: Sequence[object], changed: Sequence[object]) -> str:
+    tokens: list[str] = []
+    for token in missing:
+        text = str(token).strip()
+        if text:
+            tokens.append(text)
+    for token in changed:
+        text = str(token).strip()
+        if text:
+            tokens.append(text)
+    if not tokens:
+        return ""
+    return f"{TRANSLATION_TOKEN_WARNING_PREFIX}: {', '.join(tokens)}. Revisa la consulta antes de buscar."
+
+
+def should_replace_generated_query(query_origin: object) -> bool:
+    origin = str(query_origin or "").strip()
+    return origin != ML_QUERY_ORIGIN_USER
+
+
+def translate_product_title(
+    text: str,
+    *,
+    translator: Any | None = None,
+    query_generator: Any | None = None,
+    cache: Any | None = None,
+    settings: Settings | None = None,
+) -> dict[str, str]:
+    """Translate one product title and derive an editable MLV query. No prices."""
+
+    from bera_price_tracker.application.product_translation import (
+        ConservativeProductSearchQueryGenerator,
+        ProductTranslationRequest,
+        TranslateProductTitle,
+    )
+    from bera_price_tracker.composition import build_product_translator
+
+    resolved = Settings.from_env() if settings is None else settings
+    service = TranslateProductTitle(
+        translator=translator if translator is not None else build_product_translator(resolved),
+        query_generator=(
+            query_generator
+            if query_generator is not None
+            else ConservativeProductSearchQueryGenerator()
+        ),
+        cache=_PRODUCT_TRANSLATION_CACHE if cache is None else cache,
+    )
+    outcome = service.execute(ProductTranslationRequest(text=text))
+    missing = list(outcome.technical_tokens.missing_tokens)
+    changed = [
+        (
+            issue.original_token
+            if issue.translated_token is None
+            else f"{issue.original_token}→{issue.translated_token}"
+        )
+        for issue in outcome.technical_tokens.changed_tokens
+    ]
+    warning = format_technical_token_warning(missing, changed)
+    return {
+        "original_text": outcome.translation.original_text,
+        "translated_text": outcome.translation.translated_text,
+        "search_query": outcome.search_query,
+        "source_language": outcome.translation.source_language or "",
+        "target_language": outcome.translation.target_language,
+        "provider": outcome.translation.provider,
+        "is_technically_reliable": "1" if outcome.is_technically_reliable else "0",
+        "warning": warning,
+    }
 
 
 def build_alibaba_ml_context(

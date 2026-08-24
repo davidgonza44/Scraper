@@ -92,6 +92,7 @@ def test_ready_report_contains_validated_configuration_values() -> None:
     assert report.timeout_seconds == 7.5
     assert report.max_retries == 1
     assert report.mercado_libre_status is DiagnosticStatus.READY
+    assert report.azure_translator_configured is False
     assert report.database.state is DatabaseState.OK
     assert report.overall is DiagnosticStatus.READY
     assert repository.inspect_calls == 1
@@ -158,4 +159,20 @@ def test_report_never_contains_credentials() -> None:
     assert _FAKE_TOKEN not in repr(report)
     assert "client_secret" not in {field.name for field in fields(report)}
     assert "access_token" not in {field.name for field in fields(report)}
+    assert "azure_translator_key" not in {field.name for field in fields(report)}
     assert report.access_token_configured is True
+    assert report.azure_translator_configured is False
+
+
+def test_azure_translator_config_does_not_block_ready() -> None:
+    report, _ = _diagnose(
+        settings=Settings(
+            mercadolibre_site_id="MLV",
+            mercadolibre_access_token=_FAKE_TOKEN,
+            azure_translator_key=_FAKE_TOKEN,
+        )
+    )
+
+    assert report.azure_translator_configured is True
+    assert report.overall is DiagnosticStatus.READY
+    assert _FAKE_TOKEN not in repr(report)
