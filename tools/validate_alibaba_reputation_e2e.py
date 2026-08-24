@@ -17,7 +17,6 @@ trackInfo.
 from __future__ import annotations
 
 import dataclasses
-import os
 import re
 import statistics
 import sys
@@ -93,17 +92,9 @@ PREVIOUSLY_OBSERVED_ACTOR_KEYS = frozenset(
 
 
 def load_dotenv_without_printing(path: Path) -> None:
-    if not path.is_file():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
+    from bera_price_tracker.config import load_local_environment
+
+    load_local_environment(dotenv_path=path)
 
 
 class RecordingActorClient:
