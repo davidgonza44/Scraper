@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import quote_plus
 
@@ -15,6 +16,7 @@ from bera_price_tracker.application.alibaba_statistics import (
     UNAVAILABLE_DISPLAY,
     alibaba_iso_currencies_match,
     alibaba_percentile,
+    alibaba_price_bounds,
     alibaba_representative_price,
     calculate_alibaba_price_statistics,
     explicit_alibaba_currency,
@@ -904,6 +906,116 @@ def test_advanced_stats_use_decimal_not_float() -> None:
         stats.upper_fence,
     ):
         assert isinstance(value, Decimal)
+
+
+def _duck_product(
+    min_price: Decimal | None,
+    max_price: Decimal | None = None,
+    currency: str | None = "USD",
+) -> SimpleNamespace:
+    return SimpleNamespace(min_price=min_price, max_price=max_price, currency=currency)
+
+
+def test_zero_and_non_finite_prices_are_excluded() -> None:
+    stats = calculate_alibaba_price_statistics(
+        [
+            _duck_product(Decimal("0")),
+            _duck_product(Decimal("-1")),
+            _duck_product(Decimal("NaN")),
+            _duck_product(Decimal("Infinity")),
+            _usd_product("kept", "$4.00"),
+        ]
+    )
+    assert stats.priced_products == 1
+    assert stats.minimum == Decimal("4.00")
+    assert stats.median == Decimal("4.00")
+
+
+def test_two_letter_and_non_alpha_codes_are_not_iso() -> None:
+    assert explicit_alibaba_currency("US") is None
+    assert explicit_alibaba_currency("US$") is None
+    assert explicit_alibaba_currency("US1") is None
+    assert explicit_alibaba_currency("USD") == "USD"
+
+
+def test_missing_currency_attribute_is_not_iso() -> None:
+    assert infer_alibaba_currency(SimpleNamespace()) is None
+    assert infer_alibaba_currency(SimpleNamespace(currency="USD")) == "USD"
+
+
+def test_range_minimum_uses_low_bound_not_high_bound() -> None:
+    stats = calculate_alibaba_price_statistics(
+        [
+            _usd_product("wide", "$10.00-20.00"),
+            _usd_product("tight", "$15.00-18.00"),
+        ]
+    )
+    assert stats.minimum == Decimal("10.00")
+    assert stats.maximum == Decimal("20.00")
+
+
+def test_non_usd_before_usd_still_aggregates_later_prices() -> None:
+    eur = map_alibaba_item({"title": "eur", "price": "EUR 100"})
+    usd = _usd_product("usd", "$4.00")
+    assert eur is not None
+    stats = calculate_alibaba_price_statistics([eur, usd])
+    assert stats.priced_products == 1
+    assert stats.minimum == Decimal("4.00")
+
+
+def test_missing_max_price_is_treated_as_simple_price() -> None:
+    product = SimpleNamespace(min_price=Decimal("4.03"), currency="USD")
+    assert alibaba_price_bounds(product) == (Decimal("4.03"), Decimal("4.03"))
+    assert alibaba_representative_price(product) == Decimal("4.03")
+
+
+def test_typical_range_unavailable_if_either_percentile_is_missing() -> None:
+    assert format_alibaba_typical_range(None, Decimal("2.00")) == UNAVAILABLE_DISPLAY
+    assert format_alibaba_typical_range(Decimal("1.00"), None) == UNAVAILABLE_DISPLAY
+    assert format_alibaba_typical_range(None, None) == UNAVAILABLE_DISPLAY
+
+
+def test_single_price_does_not_claim_a_central_range() -> None:
+    stats = calculate_alibaba_price_statistics([_usd_product("One", "$4.00")])
+    assert stats.priced_products == 1
+    assert stats.p25 == Decimal("4.00")
+    assert interpret_alibaba_prices(stats) == ""
+
+
+def test_interpretation_uses_formatted_typical_bounds() -> None:
+    stats = calculate_alibaba_price_statistics(
+        [_usd_product("A", "$1.40"), _usd_product("B", "$3.20")]
+    )
+    note = interpret_alibaba_prices(stats)
+    assert format_alibaba_money(stats.p25) in note
+    assert format_alibaba_money(stats.p75) in note
+    assert "unavailable" not in note
+
+
+def test_duplicate_prices_keep_median_and_percentiles() -> None:
+    products = [_usd_product(str(index), "$4.00") for index in range(4)]
+    stats = calculate_alibaba_price_statistics(products)
+    assert stats.priced_products == 4
+    assert stats.median == Decimal("4.00")
+    assert stats.p25 == Decimal("4.00")
+    assert stats.p75 == Decimal("4.00")
+    assert stats.iqr == Decimal("0")
+    assert stats.lower_fence == Decimal("4.00")
+    assert stats.upper_fence == Decimal("4.00")
+    # Tukey uses strict inequalities, so a price sitting on the fence is inliers.
+    assert stats.outlier_count == 0
+
+
+def test_five_prices_hit_exact_percentile_index() -> None:
+    ordered = [Decimal(str(value)) for value in (1, 2, 3, 4, 5)]
+    assert alibaba_percentile(ordered, Decimal("0.25")) == Decimal("2")
+    assert alibaba_percentile(ordered, Decimal("0.75")) == Decimal("4")
+    stats = calculate_alibaba_price_statistics(
+        [_usd_product(str(value), f"${value}.00") for value in (1, 2, 3, 4, 5)]
+    )
+    assert stats.p25 == Decimal("2")
+    assert stats.p75 == Decimal("4")
+    assert stats.median == Decimal("3")
 
 
 def test_parse_dollar_price_does_not_infer_usd() -> None:
