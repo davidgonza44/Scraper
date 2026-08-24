@@ -33,7 +33,12 @@ from bera_price_tracker.application import (
     TranslateProductTitle,
     UnfollowAlibabaPrice,
 )
-from bera_price_tracker.config import Settings
+from bera_price_tracker.application.ports import ProductTranslator
+from bera_price_tracker.config import (
+    TRANSLATOR_PROVIDER_AZURE,
+    TRANSLATOR_PROVIDER_DEEPL,
+    Settings,
+)
 from bera_price_tracker.domain import (
     CollectionRunInspection,
     Listing,
@@ -63,7 +68,11 @@ from bera_price_tracker.infrastructure.providers.alibaba_refresh import (
     ApifyAlibabaProductRefreshClient,
 )
 from bera_price_tracker.infrastructure.providers.mercadolibre_apify import ApifyMercadoLibreClient
-from bera_price_tracker.infrastructure.translation import AzureProductTranslator
+from bera_price_tracker.infrastructure.translation import (
+    AzureProductTranslator,
+    DeepLProductTranslator,
+    DisabledProductTranslator,
+)
 
 if TYPE_CHECKING:
     import httpx
@@ -501,17 +510,27 @@ def build_product_translator(
     settings: Settings | None = None,
     *,
     client: httpx.Client | None = None,
-) -> AzureProductTranslator:
-    """Wire Azure Translator without opening a request."""
+) -> ProductTranslator:
+    """Wire the configured translator. Never falls back to another provider."""
 
     resolved = Settings.from_env() if settings is None else settings
-    return AzureProductTranslator(
-        api_key=resolved.azure_translator_key,
-        endpoint=resolved.azure_translator_endpoint,
-        region=resolved.azure_translator_region,
-        timeout_seconds=resolved.azure_translator_timeout_seconds,
-        client=client,
-    )
+    provider = resolved.resolved_translator_provider()
+    if provider == TRANSLATOR_PROVIDER_DEEPL:
+        return DeepLProductTranslator(
+            api_key=resolved.deepl_api_key,
+            endpoint=resolved.deepl_api_endpoint,
+            timeout_seconds=resolved.deepl_timeout_seconds,
+            client=client,
+        )
+    if provider == TRANSLATOR_PROVIDER_AZURE:
+        return AzureProductTranslator(
+            api_key=resolved.azure_translator_key,
+            endpoint=resolved.azure_translator_endpoint,
+            region=resolved.azure_translator_region,
+            timeout_seconds=resolved.azure_translator_timeout_seconds,
+            client=client,
+        )
+    return DisabledProductTranslator()
 
 
 def build_product_title_translator(

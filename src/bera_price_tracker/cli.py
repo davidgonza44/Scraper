@@ -398,9 +398,12 @@ def _print_diagnostic_report(report: DiagnosticReport) -> None:
     print("Facebook Marketplace:")
     print("  Status: NOT CONFIGURED")
     print()
+    print("Translator:")
+    print(f"  Provider: {report.translator_provider}")
+    deepl_status = "CONFIGURED" if report.deepl_translator_configured else "NOT CONFIGURED"
     azure_status = "CONFIGURED" if report.azure_translator_configured else "NOT CONFIGURED"
-    print("Azure Translator:")
-    print(f"  Status: {azure_status}")
+    print(f"  DeepL Translator: {deepl_status}")
+    print(f"  Azure Translator: {azure_status}")
     print()
     print(f"Overall: {report.overall.value}")
 

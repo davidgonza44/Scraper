@@ -8,6 +8,8 @@ from bera_price_tracker.config import (
     DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS,
     DEFAULT_BRIGHTDATA_BASE_URL,
     DEFAULT_BRIGHTDATA_DATASET_ID,
+    DEFAULT_DEEPL_API_ENDPOINT,
+    DEFAULT_DEEPL_TIMEOUT_SECONDS,
     DEFAULT_FACEBOOK_CITY,
     DEFAULT_FACEBOOK_RECORD_LIMIT,
     DEFAULT_OLLAMA_BASE_URL,
@@ -47,6 +49,10 @@ def test_settings_are_read_from_a_mapping_without_loading_files() -> None:
             "BERA_TRACKER_AZURE_TRANSLATOR_ENDPOINT": "https://translator.example.test/",
             "BERA_TRACKER_AZURE_TRANSLATOR_REGION": " eastus ",
             "BERA_TRACKER_AZURE_TRANSLATOR_TIMEOUT_SECONDS": "8.5",
+            "BERA_TRACKER_TRANSLATOR_PROVIDER": "deepl",
+            "BERA_TRACKER_DEEPL_API_KEY": " deepl-secret ",
+            "BERA_TRACKER_DEEPL_API_ENDPOINT": "https://api.deepl.com/",
+            "BERA_TRACKER_DEEPL_TIMEOUT_SECONDS": "9.5",
         }
     )
 
@@ -77,6 +83,13 @@ def test_settings_are_read_from_a_mapping_without_loading_files() -> None:
     assert settings.azure_translator_region == "eastus"
     assert settings.azure_translator_timeout_seconds == 8.5
     assert settings.azure_translator_configured() is True
+    assert settings.translator_provider == "deepl"
+    assert settings.deepl_api_key == "deepl-secret"
+    assert settings.deepl_api_endpoint == "https://api.deepl.com"
+    assert settings.deepl_timeout_seconds == 9.5
+    assert settings.deepl_translator_configured() is True
+    assert settings.resolved_translator_provider() == "deepl"
+    assert settings.product_translator_configured() is True
     assert settings.apify_alibaba_refresh_actor == "xtracto/alibaba-product-scraper"
     assert settings.apify_alibaba_refresh_retries == 1
     assert settings.apify_alibaba_refresh_concurrency == 3
@@ -84,6 +97,7 @@ def test_settings_are_read_from_a_mapping_without_loading_files() -> None:
     assert "bright-secret" not in repr(settings)
     assert "apify-secret" not in repr(settings)
     assert "azure-secret" not in repr(settings)
+    assert "deepl-secret" not in repr(settings)
 
 
 def test_blank_optional_environment_values_become_none() -> None:
@@ -106,11 +120,13 @@ def test_blank_optional_environment_values_become_none() -> None:
     assert settings.azure_translator_region is None
     assert settings.azure_translator_timeout_seconds == DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS
     assert settings.azure_translator_configured() is False
-    assert settings.azure_translator_key is None
-    assert settings.azure_translator_endpoint == DEFAULT_AZURE_TRANSLATOR_ENDPOINT
-    assert settings.azure_translator_region is None
-    assert settings.azure_translator_timeout_seconds == DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS
-    assert settings.azure_translator_configured() is False
+    assert settings.translator_provider is None
+    assert settings.deepl_api_key is None
+    assert settings.deepl_api_endpoint == DEFAULT_DEEPL_API_ENDPOINT
+    assert settings.deepl_timeout_seconds == DEFAULT_DEEPL_TIMEOUT_SECONDS
+    assert settings.deepl_translator_configured() is False
+    assert settings.resolved_translator_provider() == "disabled"
+    assert settings.product_translator_configured() is False
 
 
 def test_blank_database_path_is_rejected() -> None:
@@ -250,3 +266,28 @@ def test_blank_azure_translator_key_is_not_configured() -> None:
     settings = Settings.from_env({"BERA_TRACKER_AZURE_TRANSLATOR_KEY": "  "})
     assert settings.azure_translator_key is None
     assert settings.azure_translator_configured() is False
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://api-free.deepl.com",
+        "https://user:pass@api-free.deepl.com",
+        "https://api-free.deepl.com?auth_key=secret",
+        "not-a-url",
+    ],
+)
+def test_invalid_deepl_endpoint_is_rejected(endpoint: str) -> None:
+    with pytest.raises((TypeError, ValueError), match="deepl_api_endpoint"):
+        Settings.from_env({"BERA_TRACKER_DEEPL_API_ENDPOINT": endpoint})
+
+
+def test_blank_deepl_endpoint_uses_free_default() -> None:
+    settings = Settings.from_env({"BERA_TRACKER_DEEPL_API_ENDPOINT": "  "})
+    assert settings.deepl_api_endpoint == DEFAULT_DEEPL_API_ENDPOINT
+
+
+def test_blank_deepl_key_is_not_configured() -> None:
+    settings = Settings.from_env({"BERA_TRACKER_DEEPL_API_KEY": "  "})
+    assert settings.deepl_api_key is None
+    assert settings.deepl_translator_configured() is False

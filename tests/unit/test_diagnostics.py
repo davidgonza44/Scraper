@@ -92,6 +92,8 @@ def test_ready_report_contains_validated_configuration_values() -> None:
     assert report.timeout_seconds == 7.5
     assert report.max_retries == 1
     assert report.mercado_libre_status is DiagnosticStatus.READY
+    assert report.translator_provider == "disabled"
+    assert report.deepl_translator_configured is False
     assert report.azure_translator_configured is False
     assert report.database.state is DatabaseState.OK
     assert report.overall is DiagnosticStatus.READY
@@ -160,8 +162,11 @@ def test_report_never_contains_credentials() -> None:
     assert "client_secret" not in {field.name for field in fields(report)}
     assert "access_token" not in {field.name for field in fields(report)}
     assert "azure_translator_key" not in {field.name for field in fields(report)}
+    assert "deepl_api_key" not in {field.name for field in fields(report)}
     assert report.access_token_configured is True
     assert report.azure_translator_configured is False
+    assert report.deepl_translator_configured is False
+    assert report.translator_provider == "disabled"
 
 
 def test_azure_translator_config_does_not_block_ready() -> None:
@@ -174,5 +179,38 @@ def test_azure_translator_config_does_not_block_ready() -> None:
     )
 
     assert report.azure_translator_configured is True
+    assert report.translator_provider == "azure"
+    assert report.deepl_translator_configured is False
     assert report.overall is DiagnosticStatus.READY
     assert _FAKE_TOKEN not in repr(report)
+
+
+def test_deepl_translator_config_does_not_block_ready() -> None:
+    report, _ = _diagnose(
+        settings=Settings(
+            mercadolibre_site_id="MLV",
+            mercadolibre_access_token=_FAKE_TOKEN,
+            translator_provider="deepl",
+            deepl_api_key=_FAKE_TOKEN,
+        )
+    )
+
+    assert report.translator_provider == "deepl"
+    assert report.deepl_translator_configured is True
+    assert report.azure_translator_configured is False
+    assert report.overall is DiagnosticStatus.READY
+    assert _FAKE_TOKEN not in repr(report)
+
+
+def test_missing_deepl_key_is_reported_without_blocking_ready() -> None:
+    report, _ = _diagnose(
+        settings=Settings(
+            mercadolibre_site_id="MLV",
+            mercadolibre_access_token=_FAKE_TOKEN,
+            translator_provider="deepl",
+        )
+    )
+
+    assert report.translator_provider == "deepl"
+    assert report.deepl_translator_configured is False
+    assert report.overall is DiagnosticStatus.READY

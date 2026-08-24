@@ -38,6 +38,18 @@ DEFAULT_FACEBOOK_RECORD_LIMIT = 5
 MAX_FACEBOOK_RECORD_LIMIT = 5
 DEFAULT_AZURE_TRANSLATOR_ENDPOINT = "https://api.cognitive.microsofttranslator.com"
 DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS = 10.0
+DEFAULT_DEEPL_API_ENDPOINT = "https://api-free.deepl.com"
+DEFAULT_DEEPL_TIMEOUT_SECONDS = 10.0
+TRANSLATOR_PROVIDER_DEEPL = "deepl"
+TRANSLATOR_PROVIDER_AZURE = "azure"
+TRANSLATOR_PROVIDER_DISABLED = "disabled"
+ALLOWED_TRANSLATOR_PROVIDERS = frozenset(
+    {
+        TRANSLATOR_PROVIDER_DEEPL,
+        TRANSLATOR_PROVIDER_AZURE,
+        TRANSLATOR_PROVIDER_DISABLED,
+    }
+)
 
 
 def is_valid_mercadolibre_site_id(site_id: str | None) -> bool:
@@ -160,6 +172,77 @@ def azure_translator_is_configured(
     return api_key is not None and bool(api_key.strip())
 
 
+def deepl_translator_is_configured(*, api_key: str | None) -> bool:
+    """Return whether a local DeepL API key is present. No HTTP."""
+
+    return api_key is not None and bool(api_key.strip())
+
+
+def normalize_deepl_api_endpoint(value: str) -> str:
+    """Validate a DeepL API origin. Path is allowed; credentials are not."""
+
+    if not isinstance(value, str):
+        raise TypeError("deepl_api_endpoint must be a string")
+    normalized = value.strip()
+    if not normalized or any(character.isspace() for character in normalized):
+        raise ValueError("deepl_api_endpoint must not be blank or contain whitespace")
+    parsed = urlsplit(normalized)
+    if parsed.scheme.lower() != "https" or parsed.hostname is None:
+        raise ValueError("deepl_api_endpoint must be an absolute HTTPS URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("deepl_api_endpoint must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("deepl_api_endpoint must not contain a query or fragment")
+    try:
+        _ = parsed.port
+    except ValueError as error:
+        raise ValueError("deepl_api_endpoint contains an invalid port") from error
+    path = parsed.path.rstrip("/")
+    origin = f"https://{parsed.netloc}".rstrip("/")
+    return origin if path in {"", "/"} else f"{origin}{path}"
+
+
+def normalize_deepl_timeout_seconds(value: float) -> float:
+    """Validate the bounded DeepL HTTP timeout."""
+
+    return _positive_finite(value, "deepl_timeout_seconds")
+
+
+def normalize_translator_provider(value: str | None) -> str | None:
+    """Normalize an explicit translator provider. Blank means unset."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("translator_provider must be a string")
+    normalized = value.strip().casefold()
+    if not normalized:
+        return None
+    if normalized not in ALLOWED_TRANSLATOR_PROVIDERS:
+        allowed = ", ".join(sorted(ALLOWED_TRANSLATOR_PROVIDERS))
+        raise ValueError(f"translator_provider must be one of: {allowed}")
+    return normalized
+
+
+def resolve_translator_provider(
+    *,
+    configured_provider: str | None,
+    azure_configured: bool,
+) -> str:
+    """Select the translator provider without silent DeepL/Azure fallback.
+
+    Unset ``BERA_TRACKER_TRANSLATOR_PROVIDER`` keeps the previous behavior:
+    Azure when an Azure key is present, otherwise translation stays disabled.
+    DeepL is used only when the provider is explicitly ``deepl``.
+    """
+
+    if configured_provider is not None:
+        return configured_provider
+    if azure_configured:
+        return TRANSLATOR_PROVIDER_AZURE
+    return TRANSLATOR_PROVIDER_DISABLED
+
+
 def normalize_ollama_timeout_seconds(value: float) -> float:
     """Validate the bounded-request timeout used for cloud-backed local inference."""
 
@@ -231,6 +314,10 @@ class Settings:
     azure_translator_endpoint: str = DEFAULT_AZURE_TRANSLATOR_ENDPOINT
     azure_translator_region: str | None = None
     azure_translator_timeout_seconds: float = DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS
+    translator_provider: str | None = None
+    deepl_api_key: str | None = field(default=None, repr=False)
+    deepl_api_endpoint: str = DEFAULT_DEEPL_API_ENDPOINT
+    deepl_timeout_seconds: float = DEFAULT_DEEPL_TIMEOUT_SECONDS
     apify_alibaba_actor: str = DEFAULT_APIFY_ALIBABA_ACTOR
     apify_alibaba_refresh_actor: str = DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR
     apify_alibaba_refresh_retries: int = DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES
@@ -334,6 +421,24 @@ class Settings:
             self,
             "azure_translator_timeout_seconds",
             normalize_azure_translator_timeout_seconds(self.azure_translator_timeout_seconds),
+        )
+        object.__setattr__(
+            self,
+            "translator_provider",
+            normalize_translator_provider(self.translator_provider),
+        )
+        deepl_key = self.deepl_api_key
+        if deepl_key is not None:
+            object.__setattr__(self, "deepl_api_key", deepl_key.strip() or None)
+        object.__setattr__(
+            self,
+            "deepl_api_endpoint",
+            normalize_deepl_api_endpoint(self.deepl_api_endpoint),
+        )
+        object.__setattr__(
+            self,
+            "deepl_timeout_seconds",
+            normalize_deepl_timeout_seconds(self.deepl_timeout_seconds),
         )
         city = " ".join(self.facebook_city.strip().split()).casefold()
         if not city:
@@ -471,6 +576,17 @@ class Settings:
                 "BERA_TRACKER_AZURE_TRANSLATOR_TIMEOUT_SECONDS",
                 DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS,
             ),
+            translator_provider=_optional_value(values, "BERA_TRACKER_TRANSLATOR_PROVIDER"),
+            deepl_api_key=_optional_value(values, "BERA_TRACKER_DEEPL_API_KEY"),
+            deepl_api_endpoint=(
+                _optional_value(values, "BERA_TRACKER_DEEPL_API_ENDPOINT")
+                or DEFAULT_DEEPL_API_ENDPOINT
+            ),
+            deepl_timeout_seconds=_float_value(
+                values,
+                "BERA_TRACKER_DEEPL_TIMEOUT_SECONDS",
+                DEFAULT_DEEPL_TIMEOUT_SECONDS,
+            ),
             apify_alibaba_actor=values.get(
                 "BERA_TRACKER_APIFY_ALIBABA_ACTOR",
                 DEFAULT_APIFY_ALIBABA_ACTOR,
@@ -499,3 +615,26 @@ class Settings:
         """Return whether a local Azure Translator key is present. No HTTP."""
 
         return azure_translator_is_configured(api_key=self.azure_translator_key)
+
+    def deepl_translator_configured(self) -> bool:
+        """Return whether a local DeepL API key is present. No HTTP."""
+
+        return deepl_translator_is_configured(api_key=self.deepl_api_key)
+
+    def resolved_translator_provider(self) -> str:
+        """Return the explicit or backward-compatible translator provider."""
+
+        return resolve_translator_provider(
+            configured_provider=self.translator_provider,
+            azure_configured=self.azure_translator_configured(),
+        )
+
+    def product_translator_configured(self) -> bool:
+        """Return whether the selected translator has local configuration. No HTTP."""
+
+        provider = self.resolved_translator_provider()
+        if provider == TRANSLATOR_PROVIDER_DEEPL:
+            return self.deepl_translator_configured()
+        if provider == TRANSLATOR_PROVIDER_AZURE:
+            return self.azure_translator_configured()
+        return False

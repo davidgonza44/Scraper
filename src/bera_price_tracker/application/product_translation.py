@@ -21,6 +21,8 @@ from bera_price_tracker.application.ports import (
 DEFAULT_TARGET_LANGUAGE = "es"
 DEFAULT_TARGET_MARKET = "VE"
 AZURE_TRANSLATOR_PROVIDER = "azure"
+DEEPL_TRANSLATOR_PROVIDER = "deepl"
+DISABLED_TRANSLATOR_PROVIDER = "disabled"
 
 _CURRENCY_ISO_CODES = frozenset(
     {
@@ -269,11 +271,26 @@ def _reject_money_fields(value: object) -> None:
             raise TypeError(f"{type(value).__name__} must not carry Decimal values")
 
 
-def normalize_translation_cache_key(text: str, target_language: str) -> tuple[str, str]:
-    """Session cache key: normalized source text and target language."""
+def normalize_translation_cache_key(
+    text: str, target_language: str, provider: str
+) -> tuple[str, str, str]:
+    """Session cache key: provider, normalized source text, and target language."""
 
     collapsed = unicodedata.normalize("NFC", " ".join(text.split()))
-    return collapsed.casefold(), target_language.strip().casefold()
+    return (
+        provider.strip().casefold(),
+        collapsed.casefold(),
+        target_language.strip().casefold(),
+    )
+
+
+def translator_provider_name(translator: ProductTranslator) -> str:
+    """Return the adapter provider id used for cache isolation. Never a secret."""
+
+    provider = getattr(translator, "provider", "")
+    if not isinstance(provider, str):
+        return ""
+    return provider.strip().casefold()
 
 
 def extract_technical_tokens(text: object) -> tuple[str, ...]:
@@ -402,13 +419,17 @@ def _strip_commercial_noise(text: str) -> str:
 class InMemoryProductTranslationCache:
     """Process-local translation cache. Stores no secrets or provider headers."""
 
-    _entries: dict[tuple[str, str], ProductTranslationResult] = field(default_factory=dict)
+    _entries: dict[tuple[str, str, str], ProductTranslationResult] = field(default_factory=dict)
 
-    def get(self, text: str, target_language: str) -> ProductTranslationResult | None:
-        return self._entries.get(normalize_translation_cache_key(text, target_language))
+    def get(
+        self, text: str, target_language: str, provider: str
+    ) -> ProductTranslationResult | None:
+        return self._entries.get(normalize_translation_cache_key(text, target_language, provider))
 
     def put(self, result: ProductTranslationResult) -> None:
-        key = normalize_translation_cache_key(result.original_text, result.target_language)
+        key = normalize_translation_cache_key(
+            result.original_text, result.target_language, result.provider
+        )
         self._entries[key] = result
 
     def clear(self) -> None:
@@ -450,7 +471,11 @@ class TranslateProductTitle:
         cached = (
             None
             if self.cache is None
-            else self.cache.get(normalized_request.text, normalized_request.target_language)
+            else self.cache.get(
+                normalized_request.text,
+                normalized_request.target_language,
+                translator_provider_name(self.translator),
+            )
         )
         translation = (
             cached if cached is not None else self.translator.translate(normalized_request)

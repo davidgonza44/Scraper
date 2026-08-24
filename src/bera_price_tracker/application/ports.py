@@ -80,6 +80,13 @@ class ProductTranslatorRateLimitError(ProductTranslatorHTTPError):
         super().__init__(status_code, "Product translator rate limit was reached")
 
 
+class ProductTranslatorQuotaError(ProductTranslatorHTTPError):
+    """Raised when the translator rejects the request as over quota."""
+
+    def __init__(self, status_code: int = 456) -> None:
+        super().__init__(status_code, "Product translator quota was exceeded")
+
+
 class ProductTranslatorInvalidResponseError(RuntimeError):
     """Raised when translator output cannot satisfy the translation contract."""
 

@@ -82,6 +82,8 @@ def _strict_json_loads(value: str | bytes) -> object:
 class AzureProductTranslator:
     """Translate product text through Azure Translator Text. No money fields."""
 
+    provider = AZURE_TRANSLATOR_PROVIDER
+
     def __init__(
         self,
         *,

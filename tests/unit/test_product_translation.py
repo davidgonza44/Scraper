@@ -25,9 +25,16 @@ from bera_price_tracker.gui import services as gui_services
 
 
 class FakeProductTranslator:
-    def __init__(self, translated: str, *, source_language: str | None = "en") -> None:
+    def __init__(
+        self,
+        translated: str,
+        *,
+        source_language: str | None = "en",
+        provider: str = "fake",
+    ) -> None:
         self.translated = translated
         self.source_language = source_language
+        self.provider = provider
         self.calls: list[ProductTranslationRequest] = []
         self.error: BaseException | None = None
 
@@ -40,7 +47,7 @@ class FakeProductTranslator:
             translated_text=self.translated,
             source_language=self.source_language,
             target_language=request.target_language,
-            provider="fake",
+            provider=self.provider,
         )
 
 
@@ -231,6 +238,23 @@ def test_cache_avoids_duplicate_translation_within_session() -> None:
     assert len(cache) == 1
 
 
+def test_cache_does_not_reuse_results_across_providers() -> None:
+    cache = InMemoryProductTranslationCache()
+    azure = FakeProductTranslator("Traducción Azure", provider="azure")
+    TranslateProductTitle(translator=azure, cache=cache).execute(
+        ProductTranslationRequest(text="Wireless mouse G102")
+    )
+    deepl = FakeProductTranslator("Traducción DeepL", provider="deepl")
+    second = TranslateProductTitle(translator=deepl, cache=cache).execute(
+        ProductTranslationRequest(text="Wireless mouse G102")
+    )
+    assert len(azure.calls) == 1
+    assert len(deepl.calls) == 1
+    assert second.translation.translated_text == "Traducción DeepL"
+    assert second.translation.provider == "deepl"
+    assert len(cache) == 2
+
+
 def test_fake_translator_satisfies_port() -> None:
     translator: ProductTranslator = FakeProductTranslator("Hola")
     result = translator.translate(ProductTranslationRequest(text="Hello"))
@@ -250,6 +274,7 @@ def test_sanitize_translation_errors_never_include_secrets() -> None:
         ProductTranslatorHTTPError,
         ProductTranslatorInvalidResponseError,
         ProductTranslatorNotConfiguredError,
+        ProductTranslatorQuotaError,
         ProductTranslatorRateLimitError,
         ProductTranslatorTimeoutError,
         ProductTranslatorUnavailableError,
@@ -261,6 +286,7 @@ def test_sanitize_translation_errors_never_include_secrets() -> None:
         ProductTranslationEmptyTextError("empty"),
         ProductTranslatorTimeoutError(f"timeout {secret}"),
         ProductTranslatorRateLimitError(),
+        ProductTranslatorQuotaError(),
         ProductTranslatorHTTPError(500, f"boom {secret}"),
         ProductTranslatorInvalidResponseError(f"bad {secret}"),
         ProductTranslatorUnavailableError(f"down {secret}"),
@@ -279,11 +305,11 @@ def test_build_product_translator_fails_closed_without_http() -> None:
         build_product_translator,
     )
     from bera_price_tracker.config import Settings
-    from bera_price_tracker.infrastructure.translation import AzureTranslatorNotConfiguredError
+    from bera_price_tracker.infrastructure.translation import DisabledTranslatorNotConfiguredError
 
     translator = build_product_translator(Settings())
-    with pytest.raises(AzureTranslatorNotConfiguredError):
+    with pytest.raises(DisabledTranslatorNotConfiguredError):
         translator.translate(ProductTranslationRequest(text="Hello"))
     service = build_product_title_translator(Settings())
-    with pytest.raises(AzureTranslatorNotConfiguredError):
+    with pytest.raises(DisabledTranslatorNotConfiguredError):
         service.execute(ProductTranslationRequest(text="Hello"))
