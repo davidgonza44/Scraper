@@ -66,6 +66,8 @@ class DiagnosticReport:
     timeout_seconds: float
     max_retries: int
     mercado_libre_status: DiagnosticStatus
+    translator_provider: str
+    deepl_translator_configured: bool
     azure_translator_configured: bool
     database: DatabaseDiagnostic
     overall: DiagnosticStatus
@@ -91,6 +93,8 @@ class DiagnoseEnvironment:
         token = settings.mercadolibre_access_token
         access_token_configured = token is not None and bool(token.strip())
         azure_translator_configured = settings.azure_translator_configured()
+        deepl_translator_configured = settings.deepl_translator_configured()
+        translator_provider = settings.resolved_translator_provider()
         database = self.repository.inspect()
         mercado_libre_status = (
             DiagnosticStatus.READY
@@ -120,6 +124,8 @@ class DiagnoseEnvironment:
             timeout_seconds=settings.mercadolibre_timeout_seconds,
             max_retries=settings.mercadolibre_max_retries,
             mercado_libre_status=mercado_libre_status,
+            translator_provider=translator_provider,
+            deepl_translator_configured=deepl_translator_configured,
             azure_translator_configured=azure_translator_configured,
             database=database,
             overall=overall,

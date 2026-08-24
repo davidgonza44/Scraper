@@ -1700,10 +1700,17 @@ def reset_product_translation_cache() -> None:
 
 
 def azure_translator_is_configured(settings: Settings | None = None) -> bool:
-    """Local configuration check. Never performs an Azure request."""
+    """Local Azure configuration check. Never performs an Azure request."""
 
     resolved = Settings.from_env() if settings is None else settings
     return resolved.azure_translator_configured()
+
+
+def product_translator_is_configured(settings: Settings | None = None) -> bool:
+    """Local check for the selected translator. Never performs a provider request."""
+
+    resolved = Settings.from_env() if settings is None else settings
+    return resolved.product_translator_configured()
 
 
 def sanitize_translation_error(exc: BaseException) -> str:
@@ -1712,6 +1719,7 @@ def sanitize_translation_error(exc: BaseException) -> str:
         ProductTranslatorHTTPError,
         ProductTranslatorInvalidResponseError,
         ProductTranslatorNotConfiguredError,
+        ProductTranslatorQuotaError,
         ProductTranslatorRateLimitError,
         ProductTranslatorTimeoutError,
         ProductTranslatorUnavailableError,
@@ -1726,6 +1734,8 @@ def sanitize_translation_error(exc: BaseException) -> str:
     if isinstance(exc, ProductTranslatorTimeoutError):
         return TRANSLATION_TIMEOUT_MESSAGE
     if isinstance(exc, ProductTranslatorRateLimitError):
+        return TRANSLATION_HTTP_MESSAGE
+    if isinstance(exc, ProductTranslatorQuotaError):
         return TRANSLATION_HTTP_MESSAGE
     if isinstance(exc, ProductTranslatorHTTPError):
         return TRANSLATION_HTTP_MESSAGE

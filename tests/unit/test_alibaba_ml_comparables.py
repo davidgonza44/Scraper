@@ -970,7 +970,7 @@ def test_missing_azure_config_still_allows_manual_mlv_query(
 ) -> None:
     from bera_price_tracker.gui.state import TrackerState
 
-    monkeypatch.setattr(gui_services, "azure_translator_is_configured", lambda: False)
+    monkeypatch.setattr(gui_services, "product_translator_is_configured", lambda: False)
     state = TrackerState()
     state.alibaba_results = [AlibabaResultRow(product_id="P-1", title="Pump 220V", price="$4")]
     state.prepare_ml_comparables_from_alibaba_result("P-1")
@@ -999,6 +999,98 @@ def test_gui_translation_cache_avoids_duplicate_calls() -> None:
     assert second["search_query"]
     assert len(translator.calls) == 1
     gui_services.reset_product_translation_cache()
+
+
+def test_gui_cache_does_not_cross_providers() -> None:
+    from tests.unit.test_product_translation import FakeProductTranslator
+
+    gui_services.reset_product_translation_cache()
+    azure = FakeProductTranslator("Traducción Azure", provider="azure")
+    deepl = FakeProductTranslator("Traducción DeepL", provider="deepl")
+    first = gui_services.translate_product_title(
+        "Impact Wrench 21V 800Nm",
+        translator=azure,
+    )
+    second = gui_services.translate_product_title(
+        "Impact Wrench 21V 800Nm",
+        translator=deepl,
+    )
+    assert first["provider"] == "azure"
+    assert second["provider"] == "deepl"
+    assert second["translated_text"] == "Traducción DeepL"
+    assert len(azure.calls) == 1
+    assert len(deepl.calls) == 1
+    gui_services.reset_product_translation_cache()
+
+
+def test_missing_deepl_config_still_allows_manual_mlv_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    monkeypatch.setattr(gui_services, "product_translator_is_configured", lambda: False)
+    state = TrackerState()
+    state.alibaba_results = [AlibabaResultRow(product_id="P-1", title="Pump 220V", price="$4")]
+    state.prepare_ml_comparables_from_alibaba_result("P-1")
+    assert state.ml_translation_ui_status == "NOT_CONFIGURED"
+    assert state.ml_is_loading is False
+    state.set_ml_query("bomba centrífuga 220V")
+    assert state.ml_query == "bomba centrífuga 220V"
+    assert gui_services.can_start_mercadolibre_search(state.ml_is_loading) is True
+
+
+def test_late_deepl_success_for_a_cannot_overwrite_b() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    state.alibaba_results = [
+        AlibabaResultRow(product_id="A", title="Title A 220V", price="$4"),
+        AlibabaResultRow(product_id="B", title="Title B 110V", price="$5"),
+    ]
+    state.prepare_ml_comparables_from_alibaba_result("A")
+    generation_a = state.ml_translation_generation
+    title_a = state.ml_alibaba_context["title"]
+    state.set_ml_query("consulta manual de A")
+    state.prepare_ml_comparables_from_alibaba_result("B")
+    state._finalize_product_translation(
+        product_id="A",
+        title=title_a,
+        generation=generation_a,
+        translated_title="Traducción DeepL A",
+        search_query="consulta DeepL A",
+    )
+    assert state.ml_alibaba_context["external_id"] == "B"
+    assert state.ml_translated_title == ""
+    assert state.ml_query == ""
+    assert state.ml_query != "consulta DeepL A"
+    assert state.ml_query != "consulta manual de A"
+
+
+def test_late_deepl_error_for_a_cannot_alter_b() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    state.alibaba_results = [
+        AlibabaResultRow(product_id="A", title="Title A", price="$4"),
+        AlibabaResultRow(product_id="B", title="Title B", price="$5"),
+    ]
+    state.prepare_ml_comparables_from_alibaba_result("A")
+    generation_a = state.ml_translation_generation
+    title_a = state.ml_alibaba_context["title"]
+    state.prepare_ml_comparables_from_alibaba_result("B")
+    b_status = state.ml_translation_ui_status
+    b_error = state.ml_translation_error
+    state._finalize_product_translation(
+        product_id="A",
+        title=title_a,
+        generation=generation_a,
+        error_message="DeepL stale error",
+    )
+    assert state.ml_alibaba_context["external_id"] == "B"
+    assert state.ml_translation_error == b_error
+    assert state.ml_translation_error != "DeepL stale error"
+    assert state.ml_translation_ui_status == b_status
+    assert state.ml_query == ""
 
 
 def test_translation_does_not_change_alibaba_money_fields() -> None:

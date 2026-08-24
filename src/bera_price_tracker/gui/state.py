@@ -1030,7 +1030,9 @@ class TrackerState(rx.State):
             )
             if not self.ml_query_origin and self.ml_query:
                 self.ml_query_origin = services.ML_QUERY_ORIGIN_FALLBACK
-        self._reset_product_translation_state(configured=services.azure_translator_is_configured())
+        self._reset_product_translation_state(
+            configured=services.product_translator_is_configured()
+        )
         self.marketplace_tab = "mercadolibre"
         if product_changed:
             self.ml_results = []

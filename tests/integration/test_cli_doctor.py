@@ -313,7 +313,52 @@ def test_doctor_reports_azure_translator_from_local_config_only(
     captured = capsys.readouterr()
     combined = captured.out + captured.err
     assert exit_code == ExitCode.SUCCESS
-    assert "Azure Translator:" in captured.out
-    assert "Status: CONFIGURED" in captured.out
+    assert "Azure Translator: CONFIGURED" in captured.out
+    assert "Provider: azure" in captured.out
     assert TOKEN not in combined
     assert "Ocp-Apim-Subscription-Key" not in combined
+    assert "DeepL-Auth-Key" not in combined
+
+
+def test_doctor_reports_deepl_translator_from_local_config_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_path = tmp_path / "deepl-doctor.db"
+    _initialize_database(database_path)
+    _configure(monkeypatch, database_path)
+    monkeypatch.setenv("BERA_TRACKER_TRANSLATOR_PROVIDER", "deepl")
+    monkeypatch.setenv("BERA_TRACKER_DEEPL_API_KEY", TOKEN)
+
+    exit_code = main(["doctor"])
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert exit_code == ExitCode.SUCCESS
+    assert "Provider: deepl" in captured.out
+    assert "DeepL Translator: CONFIGURED" in captured.out
+    assert TOKEN not in combined
+    assert "Authorization" not in combined
+    assert "DeepL-Auth-Key" not in combined
+
+
+def test_doctor_reports_deepl_not_configured_from_local_config_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_path = tmp_path / "deepl-missing-doctor.db"
+    _initialize_database(database_path)
+    _configure(monkeypatch, database_path)
+    monkeypatch.setenv("BERA_TRACKER_TRANSLATOR_PROVIDER", "deepl")
+    monkeypatch.delenv("BERA_TRACKER_DEEPL_API_KEY", raising=False)
+
+    exit_code = main(["doctor"])
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert exit_code == ExitCode.SUCCESS
+    assert "Provider: deepl" in captured.out
+    assert "DeepL Translator: NOT CONFIGURED" in captured.out
+    assert TOKEN not in combined
