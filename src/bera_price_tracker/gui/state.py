@@ -1017,24 +1017,19 @@ class TrackerState(rx.State):
         if not context["external_id"]:
             return
         product_changed = previous_id != context["external_id"]
-        keep_user_query = (
-            not product_changed or self.ml_query_origin == services.ML_QUERY_ORIGIN_USER
-        )
+        switched_from_another_product = bool(previous_id) and product_changed
         self.ml_alibaba_context = context
         self.ml_has_alibaba_context = True
-        if keep_user_query:
+        if switched_from_another_product:
+            self.ml_query = ""
+            self.ml_query_origin = ""
+        else:
             self.ml_query = services.suggest_mercadolibre_query(
                 current_query=self.ml_query,
                 fallback_query=self.alibaba_query,
             )
             if not self.ml_query_origin and self.ml_query:
                 self.ml_query_origin = services.ML_QUERY_ORIGIN_FALLBACK
-        else:
-            self.ml_query = services.suggest_mercadolibre_query(
-                current_query="",
-                fallback_query=self.alibaba_query,
-            )
-            self.ml_query_origin = services.ML_QUERY_ORIGIN_FALLBACK if self.ml_query else ""
         self._reset_product_translation_state(configured=services.azure_translator_is_configured())
         self.marketplace_tab = "mercadolibre"
         if product_changed:
@@ -1042,6 +1037,7 @@ class TrackerState(rx.State):
             self.ml_summary = {}
             self.ml_ui_status = UI_INITIAL
             self.ml_error = ""
+            self.ml_is_loading = False
             self.ml_last_search_query = ""
             self.ml_association_product_id = ""
             self._invalidate_ml_comparison()

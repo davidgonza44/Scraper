@@ -742,7 +742,53 @@ def test_product_switch_invalidates_previous_translation() -> None:
     assert state.ml_alibaba_context["external_id"] == "P-2"
     assert state.ml_translated_title == ""
     assert state.ml_translation_warning == ""
-    assert state.ml_query_origin != gui_services.ML_QUERY_ORIGIN_GENERATED
+    assert state.ml_query == ""
+    assert state.ml_query_origin == ""
+
+
+def test_product_a_generated_query_is_cleared_when_switching_to_b() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    state.alibaba_results = [
+        AlibabaResultRow(product_id="A", title="Title A 220V", price="$4"),
+        AlibabaResultRow(product_id="B", title="Title B 110V", price="$5"),
+    ]
+    state.prepare_ml_comparables_from_alibaba_result("A")
+    state._finalize_product_translation(
+        product_id="A",
+        title="Title A 220V",
+        generation=state.ml_translation_generation,
+        translated_title="Título A 220V",
+        search_query="titulo A 220V",
+    )
+    assert state.ml_query == "titulo A 220V"
+    assert state.ml_query_origin == gui_services.ML_QUERY_ORIGIN_GENERATED
+    state.prepare_ml_comparables_from_alibaba_result("B")
+    assert state.ml_alibaba_context["external_id"] == "B"
+    assert state.ml_query == ""
+    assert state.ml_query_origin == ""
+    assert state.ml_translated_title == ""
+    assert state.ml_translation_warning == ""
+
+
+def test_product_a_manually_edited_query_is_cleared_when_switching_to_b() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    state.alibaba_results = [
+        AlibabaResultRow(product_id="A", title="Title A 220V", price="$4"),
+        AlibabaResultRow(product_id="B", title="Title B 110V", price="$5"),
+    ]
+    state.prepare_ml_comparables_from_alibaba_result("A")
+    state.set_ml_query("consulta manual de A")
+    assert state.ml_query == "consulta manual de A"
+    assert state.ml_query_origin == gui_services.ML_QUERY_ORIGIN_USER
+    state.prepare_ml_comparables_from_alibaba_result("B")
+    assert state.ml_alibaba_context["external_id"] == "B"
+    assert state.ml_query == ""
+    assert state.ml_query_origin == ""
+    assert state.ml_query != "consulta manual de A"
 
 
 def test_late_translation_success_for_a_cannot_overwrite_b() -> None:
@@ -766,7 +812,39 @@ def test_late_translation_success_for_a_cannot_overwrite_b() -> None:
     )
     assert state.ml_alibaba_context["external_id"] == "B"
     assert state.ml_translated_title != "Traducción A"
+    assert state.ml_translated_title == ""
+    assert state.ml_query == ""
     assert state.ml_query != "consulta A"
+    assert state.ml_query_origin == ""
+
+
+def test_late_translation_from_a_cannot_repopulate_query_on_b() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    state.alibaba_results = [
+        AlibabaResultRow(product_id="A", title="Title A 220V", price="$4"),
+        AlibabaResultRow(product_id="B", title="Title B 110V", price="$5"),
+    ]
+    state.prepare_ml_comparables_from_alibaba_result("A")
+    generation_a = state.ml_translation_generation
+    title_a = state.ml_alibaba_context["title"]
+    state.set_ml_query("consulta manual de A")
+    state.prepare_ml_comparables_from_alibaba_result("B")
+    assert state.ml_query == ""
+    state._finalize_product_translation(
+        product_id="A",
+        title=title_a,
+        generation=generation_a,
+        translated_title="Traducción tardía A",
+        search_query="consulta tardía A",
+    )
+    assert state.ml_alibaba_context["external_id"] == "B"
+    assert state.ml_translated_title == ""
+    assert state.ml_query == ""
+    assert state.ml_query_origin == ""
+    assert state.ml_query != "consulta tardía A"
+    assert state.ml_query != "consulta manual de A"
 
 
 def test_late_translation_error_for_a_cannot_overwrite_b() -> None:
@@ -791,6 +869,100 @@ def test_late_translation_error_for_a_cannot_overwrite_b() -> None:
     assert state.ml_alibaba_context["external_id"] == "B"
     assert state.ml_translation_error != "stale translation error"
     assert state.ml_translation_error == previous_error
+
+
+def test_late_error_from_a_cannot_alter_b_status() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    state.alibaba_results = [
+        AlibabaResultRow(product_id="A", title="Title A", price="$4"),
+        AlibabaResultRow(product_id="B", title="Title B", price="$5"),
+    ]
+    state.prepare_ml_comparables_from_alibaba_result("A")
+    generation_a = state.ml_translation_generation
+    title_a = state.ml_alibaba_context["title"]
+    state.ml_ui_status = "LOADING"
+    state.ml_is_loading = True
+    state.ml_error = "error de búsqueda A"
+    state.ml_translation_ui_status = "LOADING"
+    state.prepare_ml_comparables_from_alibaba_result("B")
+    b_ui_status = state.ml_ui_status
+    b_translation_status = state.ml_translation_ui_status
+    b_translation_error = state.ml_translation_error
+    b_ml_error = state.ml_error
+    assert b_ui_status == "INITIAL"
+    assert state.ml_is_loading is False
+    assert b_ml_error == ""
+    state._finalize_product_translation(
+        product_id="A",
+        title=title_a,
+        generation=generation_a,
+        error_message="error tardío de A",
+        configured=True,
+    )
+    assert state.ml_alibaba_context["external_id"] == "B"
+    assert state.ml_translation_error == b_translation_error
+    assert state.ml_translation_error != "error tardío de A"
+    assert state.ml_translation_ui_status == b_translation_status
+    assert state.ml_translation_ui_status != "ERROR"
+    assert state.ml_ui_status == b_ui_status
+    assert state.ml_ui_status == "INITIAL"
+    assert state.ml_error == ""
+    assert state.ml_is_loading is False
+
+
+def test_old_mlv_results_benchmark_and_provenance_from_a_remain_cleared_on_b() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    state.alibaba_results = [
+        AlibabaResultRow(product_id="A", title="Title A", price="$4"),
+        AlibabaResultRow(product_id="B", title="Title B", price="$5"),
+    ]
+    state.prepare_ml_comparables_from_alibaba_result("A")
+    search_product_id, search_query = _begin_in_flight_ml_search(
+        state, query="consulta A", product_id="A"
+    )
+    state.ml_results = [_ml_gui_row("MLV-A", "4.95")]
+    state.ml_summary = {"comparable_count": "1", "p25": "4.95 USD", "mediana": "4.95 USD"}
+    state.ml_ui_status = "SUCCESS"
+    state.ml_last_search_query = "consulta A"
+    state.ml_association_product_id = "A"
+    state.ml_has_comparison = True
+    state.ml_comparison = {"comparable": "1", "typical_profit": "$1.00"}
+    assert _show(state) is True
+    state.prepare_ml_comparables_from_alibaba_result("B")
+    assert state.ml_alibaba_context["external_id"] == "B"
+    assert state.ml_results == []
+    assert state.ml_summary == {}
+    assert state.ml_has_comparison is False
+    assert state.ml_comparison == {}
+    assert state.ml_last_search_query == ""
+    assert state.ml_association_product_id == ""
+    assert state.ml_ui_status == "INITIAL"
+    assert state.ml_is_loading is False
+    assert state.ml_error == ""
+    assert state.ml_query == ""
+    assert _show(state) is False
+    rows, summary = _stale_success_payload()
+    state._finalize_mercadolibre_search(
+        search_product_id=search_product_id,
+        query=search_query,
+        rows=rows,
+        summary=summary,
+        ui_status="SUCCESS",
+    )
+    assert state.ml_alibaba_context["external_id"] == "B"
+    assert state.ml_results == []
+    assert state.ml_summary == {}
+    assert state.ml_has_comparison is False
+    assert state.ml_comparison == {}
+    assert state.ml_last_search_query == ""
+    assert state.ml_association_product_id == ""
+    assert state.ml_ui_status == "INITIAL"
+    assert state.ml_query == ""
+    assert _show(state) is False
 
 
 def test_missing_azure_config_still_allows_manual_mlv_query(
