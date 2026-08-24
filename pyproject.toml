@@ -27,6 +27,7 @@ dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "ruff>=0.9",
+    "mutmut>=3.7,<4",
 ]
 
 [project.scripts]
@@ -38,6 +39,20 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers", "-ra"]
 testpaths = ["tests"]
+
+[tool.mutmut]
+# First-round mutation testing of monetary logic. Scope is the two
+# application modules under review; switch only_mutate / test selection
+# to run one module at a time.
+source_paths = ["src"]
+only_mutate = [
+    "src/bera_price_tracker/application/landed_cost.py",
+]
+pytest_add_cli_args_test_selection = [
+    "tests/unit/test_landed_cost.py",
+]
+use_git_change_detection = false
+debug = false
 
 [tool.coverage.run]
 branch = true
