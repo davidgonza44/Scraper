@@ -97,6 +97,8 @@ def test_without_landed_cost_matches_previous_plan() -> None:
     assert composed.applied is False
     assert composed.effective_ceiling == Decimal("4.30")
     assert composed.profitability_note == MISSING_PROFITABILITY_CEILING
+    assert composed.provenance is None
+    assert composed.rate_status is None
 
 
 def test_lower_landed_ceiling_reduces_ceiling() -> None:
@@ -915,3 +917,217 @@ def test_zero_opening_is_clamped_to_money_quantum() -> None:
     assert composed.applied is True
     assert composed.plan.opening_offer > Decimal("0")
     assert composed.plan.opening_offer <= composed.plan.target_price
+
+
+def test_already_unattractive_plan_stays_unattractive_when_ceiling_is_high() -> None:
+    from dataclasses import replace
+
+    plan = replace(_base_plan(), attractiveness=DealAttractiveness.ECONOMICALLY_UNATTRACTIVE)
+    composed = apply_profitability_ceiling(
+        plan,
+        maximum_supplier_unit_price=Decimal("5.00"),
+        landed_currency="USD",
+    )
+    assert composed.applied is True
+    assert composed.effective_ceiling == Decimal("4.30")
+    assert composed.plan.attractiveness is DealAttractiveness.ECONOMICALLY_UNATTRACTIVE
+
+
+def test_attractive_analysis_does_not_mark_deal_unattractive() -> None:
+    analysis = calculate_landed_cost(
+        LandedCostInput(
+            quantity=40,
+            supplier_unit_price=Decimal("4.03"),
+            packaging=CargoPackagingInput(
+                cartons=2,
+                units_per_carton=20,
+                carton_length_cm=Decimal("50"),
+                carton_width_cm=Decimal("40"),
+                carton_height_cm=Decimal("30"),
+                gross_weight_kg_per_carton=Decimal("8"),
+            ),
+            rate=ShippingRateProfile(rate_usd_per_cbm=Decimal("800")),
+            expected_sale_price_per_unit=Decimal("10.00"),
+            target_margin_percent=Decimal("30"),
+        )
+    )
+    assert analysis.viability is LandedCostViability.ATTRACTIVE
+    composed = apply_profitability_ceiling(_base_plan(), analysis=analysis)
+    assert composed.applied is True
+    assert composed.plan.attractiveness is DealAttractiveness.ATTRACTIVE
+    assert composed.rate_status is analysis.rate_status
+
+
+def test_ceiling_equal_to_original_opening_stays_attractive() -> None:
+    plan = _base_plan()
+    composed = apply_profitability_ceiling(
+        plan,
+        maximum_supplier_unit_price=plan.opening_offer,
+        landed_currency="USD",
+    )
+    assert composed.plan.opening_offer == plan.opening_offer
+    assert composed.plan.ceiling_price == plan.opening_offer
+    assert composed.plan.attractiveness is DealAttractiveness.ATTRACTIVE
+
+
+def test_ceiling_equal_to_raised_commercial_floor_stays_attractive() -> None:
+    from dataclasses import replace
+
+    plan = replace(_base_plan(), next_tier_price=Decimal("4.20"))
+    composed = apply_profitability_ceiling(
+        plan,
+        maximum_supplier_unit_price=Decimal("4.20"),
+        landed_currency="USD",
+    )
+    assert composed.plan.ceiling_price == Decimal("4.20")
+    assert composed.plan.attractiveness is DealAttractiveness.ATTRACTIVE
+
+
+def test_unattractive_analysis_stays_unattractive_if_kwargs_raise_amount() -> None:
+    analysis = calculate_landed_cost(
+        LandedCostInput(
+            quantity=40,
+            supplier_unit_price=Decimal("4.03"),
+            packaging=CargoPackagingInput(
+                cartons=2,
+                units_per_carton=20,
+                carton_length_cm=Decimal("50"),
+                carton_width_cm=Decimal("40"),
+                carton_height_cm=Decimal("30"),
+                gross_weight_kg_per_carton=Decimal("8"),
+            ),
+            rate=ShippingRateProfile(rate_usd_per_cbm=Decimal("800")),
+            expected_sale_price_per_unit=Decimal("3.00"),
+            target_margin_percent=Decimal("40"),
+        )
+    )
+    assert analysis.viability is LandedCostViability.ECONOMICALLY_UNATTRACTIVE
+    composed = apply_profitability_ceiling(
+        _base_plan(),
+        analysis=analysis,
+        maximum_supplier_unit_price=Decimal("4.10"),
+        landed_currency="USD",
+    )
+    assert composed.applied is True
+    assert composed.effective_ceiling == Decimal("4.10")
+    assert composed.plan.attractiveness is DealAttractiveness.ECONOMICALLY_UNATTRACTIVE
+
+
+def test_applied_plan_preserves_identity_and_appends_note() -> None:
+    plan = _base_plan()
+    composed = apply_profitability_ceiling(
+        plan,
+        maximum_supplier_unit_price=Decimal("4.10"),
+        landed_currency="USD",
+        rate_status=ShippingRateStatus.ESTIMATE,
+    )
+    adjusted = composed.plan
+    assert adjusted.title == plan.title
+    assert adjusted.supplier_name == plan.supplier_name
+    assert adjusted.min_order_quantity == plan.min_order_quantity
+    assert adjusted.public_unit_price == plan.public_unit_price
+    assert adjusted.negotiable_reference == plan.negotiable_reference
+    assert adjusted.selected_min_quantity == plan.selected_min_quantity
+    assert adjusted.selected_max_quantity == plan.selected_max_quantity
+    assert adjusted.next_tier_min_quantity == plan.next_tier_min_quantity
+    assert adjusted.next_tier_price == plan.next_tier_price
+    assert adjusted.tier_proximity == plan.tier_proximity
+    assert adjusted.max_product_unit_price == plan.max_product_unit_price
+    assert adjusted.aggressiveness == plan.aggressiveness
+    assert adjusted.ladder_summary == plan.ladder_summary
+    assert adjusted.warnings == plan.warnings
+    assert adjusted.currency == plan.currency
+    assert adjusted.bounds.public_unit_price == adjusted.public_unit_price
+    assert adjusted.bounds.opening_offer == adjusted.opening_offer
+    assert adjusted.bounds.target_price == adjusted.target_price
+    assert adjusted.bounds.ceiling_price == adjusted.ceiling_price
+    assert adjusted.bounds.negotiable_reference == adjusted.negotiable_reference
+    assert composed.profitability_note in adjusted.explanation
+
+
+def test_unapplied_mismatch_keeps_original_ceiling_and_status() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input(currency="CNY"))
+    composed = apply_profitability_ceiling(
+        plan,
+        maximum_supplier_unit_price=Decimal("4.10"),
+        landed_currency="USD",
+        rate_status=ShippingRateStatus.CONFIRMED_QUOTE,
+    )
+    assert composed.applied is False
+    assert composed.original_ceiling == plan.ceiling_price
+    assert composed.effective_ceiling == plan.ceiling_price
+    assert composed.rate_status is ShippingRateStatus.CONFIRMED_QUOTE
+    assert composed.provenance == CONFIRMED_PROVENANCE
+
+
+def test_thousands_separator_in_profitability_text_is_stripped() -> None:
+    composed = apply_profitability_ceiling(
+        _base_plan(),
+        maximum_supplier_unit_price="$1,000.00",  # type: ignore[arg-type]
+        landed_currency="USD",
+    )
+    assert composed.applied is True
+    assert composed.profitability_ceiling == Decimal("1000.00")
+    assert composed.effective_ceiling == Decimal("4.30")
+
+
+def test_execute_forwards_analysis_and_explicit_kwargs() -> None:
+    analysis = calculate_landed_cost(
+        LandedCostInput(
+            quantity=40,
+            supplier_unit_price=Decimal("4.03"),
+            packaging=CargoPackagingInput(
+                cartons=2,
+                units_per_carton=20,
+                carton_length_cm=Decimal("50"),
+                carton_width_cm=Decimal("40"),
+                carton_height_cm=Decimal("30"),
+                gross_weight_kg_per_carton=Decimal("8"),
+            ),
+            rate=ShippingRateProfile(rate_usd_per_cbm=Decimal("800")),
+            expected_sale_price_per_unit=Decimal("10.00"),
+            target_margin_percent=Decimal("40"),
+        )
+    )
+    from_analysis = CalculateImportAwareNegotiationPlan().execute(_input(), analysis)
+    assert from_analysis.applied is True
+    assert from_analysis.profitability_ceiling == analysis.maximum_supplier_unit_price
+    assert from_analysis.rate_status is analysis.rate_status
+
+    from_kwargs = CalculateImportAwareNegotiationPlan().execute(
+        _input(),
+        maximum_supplier_unit_price=Decimal("4.10"),
+        rate_status=ShippingRateStatus.ESTIMATE,
+        landed_currency="USD",
+    )
+    assert from_kwargs.applied is True
+    assert from_kwargs.effective_ceiling == Decimal("4.10")
+    assert from_kwargs.rate_status is ShippingRateStatus.ESTIMATE
+    assert from_kwargs.provenance == ESTIMATE_PROVENANCE
+
+    blocked = CalculateImportAwareNegotiationPlan().execute(
+        _input(currency="CNY"),
+        maximum_supplier_unit_price=Decimal("4.10"),
+        landed_currency="USD",
+    )
+    assert blocked.applied is False
+    assert blocked.profitability_note == PROFITABILITY_CURRENCY_MISMATCH
+
+
+def test_missing_profitability_still_keeps_rate_provenance() -> None:
+    """Rate provenance is kept even when the ceiling cannot be applied yet.
+
+    Remaining mutmut survivors in this module are equivalent or defensive:
+    Spanish note punctuation, TypeError/ValueError wrapping, the unreachable
+    incoherent-bounds raise, ``profitability_ceiling <= 0`` vs ``< 0`` (zero
+    already clamps the ceiling to ``MONEY_QUANTUM``), and rewriting the
+    placeholder ``explanation=""`` before ``build_negotiation_explanation``.
+    """
+    composed = apply_profitability_ceiling(
+        _base_plan(),
+        rate_status=ShippingRateStatus.ESTIMATE,
+    )
+    assert composed.applied is False
+    assert composed.profitability_note == MISSING_PROFITABILITY_CEILING
+    assert composed.rate_status is ShippingRateStatus.ESTIMATE
+    assert composed.provenance == ESTIMATE_PROVENANCE

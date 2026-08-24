@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 
 from bera_price_tracker.application.landed_cost import (
+    DEFAULT_CARGO_DESTINATION,
+    DEFAULT_CARGO_PROVIDER,
+    DEFAULT_CARGO_SERVICE,
     INVALID_BATTERY_MULTIPLIER,
     INVALID_CARGO_RATE,
     INVALID_IMPORT_COST,
@@ -458,6 +461,7 @@ def test_missing_sale_price_skips_profitability_and_keeps_landed_math() -> None:
     assert analysis.total_landed_cost == Decimal("257.20")
     assert analysis.revenue is None
     assert analysis.margin_percent is None
+    assert analysis.max_total_unit_cost is None
     assert analysis.maximum_supplier_unit_price is None
     assert analysis.viability is None
 
@@ -467,6 +471,7 @@ def test_sale_without_margin_computes_profit_but_not_max_supplier() -> None:
     assert analysis.revenue == Decimal("400.00")
     assert analysis.gross_profit == Decimal("142.80")
     assert analysis.margin_percent == Decimal("35.70")
+    assert analysis.max_total_unit_cost is None
     assert analysis.maximum_supplier_unit_price is None
     assert analysis.viability is None
 
@@ -544,8 +549,10 @@ def test_sale_price_validation_guarantees_positive_revenue() -> None:
 
     ``expected_sale_price_per_unit`` is rejected unless it is a positive finite
     Decimal, and ``quantity`` is a positive int, so ``revenue = sale * quantity``
-    cannot be 0 or negative after those checks. Do not change production just
-    to force the False branch.
+    cannot be 0 or negative after those checks. Mutating ``>`` to ``>=`` is
+    therefore equivalent. Wrapping TypeError message punctuation is also
+    equivalent: tests already match a distinctive substring. Do not change
+    production or add message-pinning tests just to force those mutants.
     """
 
     analysis = calculate_landed_cost(_input(sale=Decimal("0.01"), quantity=1))
@@ -555,3 +562,107 @@ def test_sale_price_validation_guarantees_positive_revenue() -> None:
         calculate_landed_cost(_input(sale=Decimal("0")))
     with pytest.raises(LandedCostError, match=INVALID_SALE_PRICE):
         calculate_landed_cost(_input(sale=Decimal("-1")))
+
+
+def test_one_carton_and_one_unit_per_carton_are_valid() -> None:
+    packaging = CargoPackagingInput(
+        cartons=1,
+        units_per_carton=1,
+        carton_length_cm=Decimal("50"),
+        carton_width_cm=Decimal("40"),
+        carton_height_cm=Decimal("30"),
+        gross_weight_kg_per_carton=Decimal("8"),
+    )
+    analysis = calculate_landed_cost(_input(quantity=1, packaging=packaging))
+    assert analysis.quantity == 1
+    assert analysis.total_cbm == Decimal("0.060000")
+    assert analysis.total_weight_kg == Decimal("8.000")
+
+
+@pytest.mark.parametrize(
+    "length, width, height",
+    [
+        (None, Decimal("40"), Decimal("30")),
+        (Decimal("50"), None, Decimal("30")),
+        (Decimal("50"), Decimal("40"), None),
+    ],
+)
+def test_any_missing_carton_dimension_is_listed(
+    length: Decimal | None,
+    width: Decimal | None,
+    height: Decimal | None,
+) -> None:
+    packaging = CargoPackagingInput(
+        cartons=2,
+        units_per_carton=20,
+        carton_length_cm=length,
+        carton_width_cm=width,
+        carton_height_cm=height,
+        gross_weight_kg_per_carton=Decimal("8"),
+    )
+    missing = missing_logistics_fields(packaging)
+    assert MISSING_CARTON_DIMENSIONS in missing
+    with pytest.raises(LandedCostError, match=MISSING_LOGISTICS_PREFIX):
+        calculate_landed_cost(_input(packaging=packaging))
+
+
+def test_non_product_cost_adds_shipping_and_import_costs() -> None:
+    analysis = calculate_landed_cost(
+        _input(
+            import_costs=ImportOtherCosts(bank_fees=Decimal("4"), inspection_cost=Decimal("6")),
+            sale=Decimal("10.00"),
+            margin=Decimal("30"),
+        )
+    )
+    # shipping 96 + import 10 = 106; per unit 2.65. Subtraction would yield 2.15.
+    assert analysis.shipping_total == Decimal("96.00")
+    assert analysis.other_import_costs == Decimal("10.00")
+    assert analysis.non_product_cost_per_unit == Decimal("2.65")
+    assert analysis.maximum_supplier_unit_price == Decimal("4.35")
+
+
+def test_zero_maximum_supplier_is_economically_unattractive() -> None:
+    analysis = calculate_landed_cost(_input(sale=Decimal("10.00"), margin=Decimal("76")))
+    assert analysis.non_product_cost_per_unit == Decimal("2.40")
+    assert analysis.max_total_unit_cost == Decimal("2.40")
+    assert analysis.maximum_supplier_unit_price == Decimal("0.00")
+    assert analysis.viability is LandedCostViability.ECONOMICALLY_UNATTRACTIVE
+
+
+def test_analysis_copies_quantity_and_rate_metadata() -> None:
+    confirmed = ShippingRateProfile(
+        rate_usd_per_cbm=TEST_RATE,
+        provider="DTD Cargo Valencia",
+        service="Door to Door express",
+        destination_country="Venezuela",
+        rate_source="cotización DTD",
+        rate_date="2026-08-24",
+        status=ShippingRateStatus.CONFIRMED_QUOTE,
+    )
+    analysis = calculate_landed_cost(
+        LandedCostInput(
+            quantity=40,
+            supplier_unit_price=Decimal("4.03"),
+            packaging=_packaging(),
+            rate=confirmed,
+        )
+    )
+    assert analysis.quantity == 40
+    assert analysis.provider == "DTD Cargo Valencia"
+    assert analysis.service == "Door to Door express"
+    assert analysis.destination_country == "Venezuela"
+    assert analysis.rate_source == "cotización DTD"
+    assert analysis.rate_date == "2026-08-24"
+    defaults = calculate_landed_cost(_input())
+    assert defaults.provider == DEFAULT_CARGO_PROVIDER
+    assert defaults.service == DEFAULT_CARGO_SERVICE
+    assert defaults.destination_country == DEFAULT_CARGO_DESTINATION
+    assert defaults.rate_source == "manual"
+    assert defaults.rate_date is None
+
+
+def test_unparseable_surcharge_keeps_surcharge_error() -> None:
+    with pytest.raises(LandedCostError, match=INVALID_SURCHARGE):
+        ShippingSurcharges(insurance="not-a-surcharge")  # type: ignore[arg-type]
+    with pytest.raises(LandedCostError, match=INVALID_IMPORT_COST):
+        ImportOtherCosts(bank_fees="abc")  # type: ignore[arg-type]
