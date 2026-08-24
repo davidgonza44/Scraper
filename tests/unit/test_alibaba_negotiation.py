@@ -1527,3 +1527,106 @@ def test_gui_analyze_and_reply_use_injected_drafter_not_minimax() -> None:
             {"title": "Mouse", "currency": "USD"},
             drafter=FakeDrafter(),
         )
+
+
+def test_zero_quantity_matches_missing_quantity_not_missing_price() -> None:
+    with pytest.raises(AlibabaNegotiationError, match="mayor que cero"):
+        calculate_alibaba_negotiation_plan(_input(quantity=0, tiers=(), public=Decimal("4.30")))
+
+
+def test_quantity_one_is_valid_on_simple_public_price() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input(quantity=1, tiers=(), public=Decimal("4.30")))
+    assert plan.desired_quantity == 1
+    assert plan.public_unit_price == Decimal("4.30")
+    assert plan.opening_offer <= plan.target_price <= plan.ceiling_price
+
+
+def test_boolean_quantity_is_rejected() -> None:
+    payload = AlibabaNegotiationInput(
+        desired_quantity=True,  # type: ignore[arg-type]
+        title="Wireless Mouse",
+        tiers=(),
+        public_unit_price=Decimal("4.30"),
+        currency="USD",
+    )
+    with pytest.raises(AlibabaNegotiationError, match="mayor que cero"):
+        calculate_alibaba_negotiation_plan(payload)
+
+
+def test_supplier_exactly_at_opening_is_acceptable() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    at_opening = classify_supplier_price(plan.opening_offer, plan.bounds)
+    assert at_opening.decision is CounterOfferDecision.ACCEPTABLE
+    assert at_opening.authorized_price is None
+    assert plan.opening_offer < plan.target_price
+
+
+def test_ambiguous_flag_wins_even_when_a_price_is_present() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    recommendation = classify_supplier_price(Decimal("4.10"), plan.bounds, ambiguous=True)
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+    assert recommendation.authorized_price is None
+
+
+def test_overlapping_tiers_prefer_the_highest_covering_minimum() -> None:
+    tiers = (
+        NegotiationTier(min_quantity=1, max_quantity=100, unit_price=Decimal("4.30")),
+        NegotiationTier(min_quantity=40, max_quantity=100, unit_price=Decimal("4.00")),
+    )
+    selected = select_quantity_tier(tiers, 40)
+    assert selected is not None
+    assert selected.min_quantity == 40
+    assert selected.unit_price == Decimal("4.00")
+    plan = calculate_alibaba_negotiation_plan(_input(quantity=40, tiers=tiers))
+    assert plan.public_unit_price == Decimal("4.00")
+    assert plan.selected_min_quantity == 40
+
+
+def test_next_better_tier_requires_later_min_and_strictly_lower_price() -> None:
+    selected = NegotiationTier(min_quantity=1, max_quantity=49, unit_price=Decimal("4.30"))
+    worse_later = NegotiationTier(min_quantity=50, max_quantity=199, unit_price=Decimal("4.50"))
+    same_price_later = NegotiationTier(min_quantity=80, max_quantity=99, unit_price=Decimal("4.30"))
+    cheaper_later = NegotiationTier(min_quantity=200, max_quantity=None, unit_price=Decimal("3.80"))
+    assert next_better_tier((selected, worse_later, same_price_later, cheaper_later), selected) == (
+        cheaper_later
+    )
+    assert next_better_tier((selected, worse_later, same_price_later), selected) is None
+
+
+def test_zero_and_full_margin_remain_valid_bounds() -> None:
+    zero = margin_product_ceiling(
+        Decimal("10.00"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")
+    )
+    assert zero == Decimal("10.00")
+    full = margin_product_ceiling(
+        Decimal("10.00"), Decimal("100"), Decimal("0"), Decimal("0"), Decimal("0")
+    )
+    assert full == Decimal("0.00")
+    with pytest.raises(AlibabaNegotiationError, match="margen"):
+        margin_product_ceiling(
+            Decimal("10.00"), Decimal("Infinity"), Decimal("0"), Decimal("0"), Decimal("0")
+        )
+
+
+def test_max_product_equal_to_next_tier_stays_attractive() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input(resale=Decimal("8.00"), margin=Decimal("50")))
+    # max_total = 8 * 0.50 = 4.00, which equals the next-tier price, not below it.
+    assert plan.max_product_unit_price == Decimal("4.00")
+    assert plan.next_tier_price == Decimal("4.00")
+    assert plan.attractiveness is DealAttractiveness.ATTRACTIVE
+
+
+def test_counteroffer_stage_does_not_authorize_a_stray_opening_price() -> None:
+    context = NegotiationDraftContext(
+        product_title="Wireless Mouse",
+        public_supplier_name="Example",
+        desired_quantity=40,
+        currency="USD",
+        stage=NegotiationStage.COUNTEROFFER.value,
+        language="English",
+        authorized_offer="4.03",
+        authorized_counter_offer="4.06",
+    )
+    allowed = authorized_money_set(context)
+    assert allowed == frozenset({Decimal("4.06")})
+    assert Decimal("4.03") not in allowed
