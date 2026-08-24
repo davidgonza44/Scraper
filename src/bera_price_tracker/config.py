@@ -29,6 +29,7 @@ DEFAULT_FACEBOOK_CITY = "caracas"
 DEFAULT_FACEBOOK_BACKEND = "apify"
 DEFAULT_APIFY_ALIBABA_ACTOR = "scraper-engine/alibaba-scraper"
 DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR = "xtracto/alibaba-product-scraper"
+DEFAULT_APIFY_MERCADOLIBRE_ACTOR = "piotrv1001/mercado-libre-listings-scraper"
 DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES = 1
 DEFAULT_APIFY_ALIBABA_REFRESH_CONCURRENCY = 3
 MAX_APIFY_ALIBABA_REFRESH_RETRIES = 5
@@ -189,6 +190,7 @@ class Settings:
     apify_alibaba_refresh_actor: str = DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR
     apify_alibaba_refresh_retries: int = DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES
     apify_alibaba_refresh_concurrency: int = DEFAULT_APIFY_ALIBABA_REFRESH_CONCURRENCY
+    apify_mercadolibre_actor: str = DEFAULT_APIFY_MERCADOLIBRE_ACTOR
 
     def __post_init__(self) -> None:
         level = self.log_level.strip().upper()
@@ -315,6 +317,10 @@ class Settings:
                 "apify_alibaba_refresh_concurrency must be between 1 and "
                 f"{MAX_APIFY_ALIBABA_REFRESH_CONCURRENCY}"
             )
+        ml_actor = self.apify_mercadolibre_actor.strip()
+        if not ml_actor:
+            raise ValueError("apify_mercadolibre_actor must not be blank")
+        object.__setattr__(self, "apify_mercadolibre_actor", ml_actor)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> Settings:
@@ -407,5 +413,9 @@ class Settings:
                 values,
                 "BERA_TRACKER_APIFY_ALIBABA_REFRESH_CONCURRENCY",
                 DEFAULT_APIFY_ALIBABA_REFRESH_CONCURRENCY,
+            ),
+            apify_mercadolibre_actor=values.get(
+                "BERA_TRACKER_APIFY_MERCADOLIBRE_ACTOR",
+                DEFAULT_APIFY_MERCADOLIBRE_ACTOR,
             ),
         )

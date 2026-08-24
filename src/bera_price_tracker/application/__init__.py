@@ -129,6 +129,7 @@ from bera_price_tracker.application.ports import (
     ListingRepository,
     MarketplaceProvider,
     MarketplaceSourceUnavailable,
+    MercadoLibreSearchProvider,
     ProviderNotConfiguredError,
 )
 from bera_price_tracker.application.price_normalization import PriceNormalizer
@@ -142,8 +143,11 @@ from bera_price_tracker.application.services import (
     GetListingStatistics,
     InspectLatestCollection,
     SearchAlibabaProducts,
+    SearchMercadoLibreProducts,
     alibaba_credit_warning,
+    mercadolibre_credit_warning,
     validate_alibaba_search,
+    validate_mercadolibre_search,
 )
 from bera_price_tracker.application.statistics import (
     EmptyListingHistoryError,
@@ -212,6 +216,7 @@ __all__ = [
     "AIProductClassifier",
     "AlibabaPriceStatistics",
     "AlibabaSearchProvider",
+    "MercadoLibreSearchProvider",
     "ClassificationSource",
     "CollectionClock",
     "CollectionInspectionRepository",
@@ -264,7 +269,10 @@ __all__ = [
     "ImportAwareNegotiationPlan",
     "apply_profitability_ceiling",
     "SearchAlibabaProducts",
+    "SearchMercadoLibreProducts",
     "alibaba_credit_warning",
+    "mercadolibre_credit_warning",
+    "validate_mercadolibre_search",
     "alibaba_percentile",
     "alibaba_representative_price",
     "calculate_alibaba_price_statistics",

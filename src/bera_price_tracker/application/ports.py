@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         SanitizedProductCandidate,
     )
     from bera_price_tracker.domain.alibaba import AlibabaProduct
+    from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
 
 
 class ProviderNotConfiguredError(RuntimeError):
@@ -64,6 +65,16 @@ class AlibabaSearchProvider(Protocol):
 
     def search(self, query: str, limit: int) -> list[AlibabaProduct]:
         """Return mapped Alibaba products for one query."""
+
+        ...
+
+
+@runtime_checkable
+class MercadoLibreSearchProvider(Protocol):
+    """Read-only Mercado Libre Venezuela search. Implementations must not persist."""
+
+    def search(self, query: str, limit: int) -> list[MercadoLibreListing]:
+        """Return mapped Mercado Libre listings for one query."""
 
         ...
 

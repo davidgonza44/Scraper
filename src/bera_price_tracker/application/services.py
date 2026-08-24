@@ -10,6 +10,7 @@ from bera_price_tracker.application.ports import (
     ListingHistoryRepository,
     ListingRepository,
     MarketplaceProvider,
+    MercadoLibreSearchProvider,
 )
 from bera_price_tracker.application.statistics import calculate_listing_statistics
 from bera_price_tracker.domain import (
@@ -23,6 +24,7 @@ from bera_price_tracker.domain import (
     SearchQuery,
 )
 from bera_price_tracker.domain.alibaba import AlibabaProduct
+from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
 
 type CollectionClock = Callable[[], datetime]
 
@@ -132,4 +134,40 @@ class SearchAlibabaProducts:
 
     def execute(self, query: str, limit: int) -> list[AlibabaProduct]:
         normalized_query, normalized_limit = validate_alibaba_search(query, limit)
+        return list(self.provider.search(normalized_query, normalized_limit))
+
+
+MIN_MERCADOLIBRE_LIMIT = 1
+MAX_MERCADOLIBRE_LIMIT = 50
+MERCADOLIBRE_CREDIT_WARNING = "Esta búsqueda puede consumir créditos de Apify."
+
+
+def validate_mercadolibre_search(query: str, limit: int) -> tuple[str, int]:
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must not be blank")
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise TypeError("limit must be an integer")
+    if not MIN_MERCADOLIBRE_LIMIT <= limit <= MAX_MERCADOLIBRE_LIMIT:
+        raise ValueError(
+            f"limit must be between {MIN_MERCADOLIBRE_LIMIT} and {MAX_MERCADOLIBRE_LIMIT}"
+        )
+    return query.strip(), limit
+
+
+def mercadolibre_credit_warning(limit: int) -> str | None:
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return None
+    if limit > 20 and limit <= MAX_MERCADOLIBRE_LIMIT:
+        return MERCADOLIBRE_CREDIT_WARNING
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class SearchMercadoLibreProducts:
+    """Read-only Mercado Libre Venezuela search. One execute maps to one provider.search."""
+
+    provider: MercadoLibreSearchProvider
+
+    def execute(self, query: str, limit: int) -> list[MercadoLibreListing]:
+        normalized_query, normalized_limit = validate_mercadolibre_search(query, limit)
         return list(self.provider.search(normalized_query, normalized_limit))

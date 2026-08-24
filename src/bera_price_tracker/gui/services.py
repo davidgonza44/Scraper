@@ -1233,3 +1233,355 @@ def apply_alibaba_profitability_ceiling(
         }
     )
     return row
+
+
+MERCADOLIBRE_GENERIC_USER_MESSAGE = "No se pudo completar la búsqueda en Mercado Libre Venezuela."
+MERCADOLIBRE_EMPTY_MESSAGE = "No se encontraron publicaciones en Mercado Libre Venezuela."
+MERCADOLIBRE_LOADING_MESSAGE = "Buscando publicaciones en Mercado Libre Venezuela..."
+MERCADOLIBRE_QUERY_ERROR = "Indica un término de búsqueda."
+MERCADOLIBRE_LIMIT_ERROR = "La cantidad debe estar entre 1 y 50."
+MERCADOLIBRE_LANDED_MISSING = "Calcula el costo Venezuela en Alibaba antes de comparar."
+MERCADOLIBRE_PUBLISHED_NOTE = "Precios publicados observados en Mercado Libre Venezuela"
+
+
+def can_start_mercadolibre_search(is_loading: bool) -> bool:
+    return not is_loading
+
+
+def sanitize_mercadolibre_error(exc: BaseException) -> str:
+    from bera_price_tracker.application.ports import MarketplaceSourceUnavailable
+
+    type_name = type(exc).__name__
+    logger.info("Mercado Libre search failed: %s", type_name)
+    if isinstance(exc, ValueError) and "query" in str(exc):
+        return MERCADOLIBRE_QUERY_ERROR
+    if isinstance(exc, (ValueError, TypeError)) and "limit" in str(exc):
+        return MERCADOLIBRE_LIMIT_ERROR
+    if isinstance(exc, MarketplaceSourceUnavailable) or type_name == "ApifyConfigurationError":
+        return MERCADOLIBRE_GENERIC_USER_MESSAGE
+    return MERCADOLIBRE_GENERIC_USER_MESSAGE
+
+
+def _blank_or_dash(value: str | None) -> str:
+    if value is None or not value.strip():
+        return "—"
+    return value
+
+
+def _relevance_stub(score: int) -> Any:
+    from bera_price_tracker.application.mercadolibre_relevance import MercadoLibreListingRelevance
+
+    safe = score if isinstance(score, int) and not isinstance(score, bool) else 0
+    return MercadoLibreListingRelevance(
+        relevance_score=safe,
+        matched_tokens=0,
+        total_query_tokens=0,
+        exact_phrase_match=False,
+    )
+
+
+def mercadolibre_listing_to_row(scored: Any) -> dict[str, Any]:
+    from bera_price_tracker.application.mercadolibre_relevance import (
+        format_relevance_display,
+        relevance_label,
+    )
+    from bera_price_tracker.application.mercadolibre_statistics import format_mercadolibre_money
+
+    listing = scored.listing
+    price = listing.price
+    currency = listing.currency
+    if listing.free_shipping is True:
+        shipping = "Envío gratis"
+    elif listing.free_shipping is False:
+        shipping = "Pago"
+    else:
+        shipping = "—"
+    return {
+        "external_id": listing.external_id,
+        "title": listing.title,
+        "permalink": listing.permalink or "",
+        "price": (
+            "—"
+            if price is None
+            else (
+                format_mercadolibre_money(price, currency)
+                if currency
+                else f"{price.quantize(Decimal('0.01'))}"
+            )
+        ),
+        "price_raw": "" if price is None else f"{price:f}",
+        "currency": currency or "—",
+        "condition": _blank_or_dash(listing.condition),
+        "seller_name": _blank_or_dash(listing.seller_name),
+        "shipping": shipping,
+        "thumbnail_url": listing.thumbnail_url or "",
+        "country": _blank_or_dash(listing.country),
+        "representative": "" if price is None else f"{price:f}",
+        "relevance_value": scored.relevance_score,
+        "relevance": format_relevance_display(scored.relevance_score),
+        "relevance_label": relevance_label(scored.relevance_score),
+        "relevance_tokens": (
+            f"{scored.relevance.matched_tokens}/{scored.relevance.total_query_tokens} "
+            "términos de la búsqueda"
+        ),
+        "is_outlier": False,
+    }
+
+
+def _row_to_listing(row: Mapping[str, object]) -> Any:
+    from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
+
+    raw_price = str(row.get("price_raw") or "").strip()
+    price = None
+    if raw_price:
+        try:
+            parsed = Decimal(raw_price)
+        except InvalidOperation:
+            parsed = None
+        if parsed is not None and parsed.is_finite() and parsed > 0:
+            price = parsed
+    currency = str(row.get("currency") or "").strip()
+    return MercadoLibreListing(
+        external_id=str(row.get("external_id") or "UNKNOWN"),
+        title=str(row.get("title") or "Sin título"),
+        permalink=str(row.get("permalink") or "") or None,
+        price=price,
+        currency=None if currency in {"", "—"} else currency,
+    )
+
+
+def _scored_from_rows(rows: Sequence[Mapping[str, object]]) -> list[Any]:
+    from bera_price_tracker.application.mercadolibre_benchmark import MercadoLibreScoredListing
+
+    scored = []
+    for row in rows:
+        relevance_value = row.get("relevance_value", 0)
+        score = relevance_value if isinstance(relevance_value, int) else 0
+        scored.append(
+            MercadoLibreScoredListing(
+                listing=_row_to_listing(row), relevance=_relevance_stub(score)
+            )
+        )
+    return scored
+
+
+def build_mercadolibre_summary(
+    scored: Sequence[Any],
+    *,
+    min_relevance: int,
+    total_results: int | None = None,
+) -> dict[str, str]:
+    from bera_price_tracker.application.mercadolibre_benchmark import build_market_benchmark
+    from bera_price_tracker.application.mercadolibre_statistics import (
+        format_mercadolibre_money,
+        format_mercadolibre_typical_range,
+    )
+
+    benchmark = build_market_benchmark(
+        scored, min_relevance=min_relevance, total_results=total_results
+    )
+    currency = benchmark.currency
+    return {
+        "comparables": f"{benchmark.comparable_count} de {benchmark.total_results}",
+        "minimo": format_mercadolibre_money(benchmark.minimum, currency),
+        "p25": format_mercadolibre_money(benchmark.p25, currency),
+        "mediana": format_mercadolibre_money(benchmark.median, currency),
+        "precio_tipico": format_mercadolibre_money(benchmark.typical_price, currency),
+        "p75": format_mercadolibre_money(benchmark.p75, currency),
+        "maximo": format_mercadolibre_money(benchmark.maximum, currency),
+        "promedio": format_mercadolibre_money(benchmark.average, currency),
+        "outliers": str(benchmark.outlier_count),
+        "rango_tipico": format_mercadolibre_typical_range(benchmark.p25, benchmark.p75, currency),
+        "currency": currency or "",
+        "note": benchmark.note,
+    }
+
+
+def run_mercadolibre_search(
+    query_text: str,
+    limit: int,
+    *,
+    search_service: Any | None = None,
+) -> dict[str, Any]:
+    from bera_price_tracker.application.mercadolibre_benchmark import (
+        DEFAULT_BENCHMARK_RELEVANCE,
+        score_listings,
+    )
+    from bera_price_tracker.application.mercadolibre_statistics import (
+        calculate_mercadolibre_price_statistics,
+        dominant_currency,
+        explicit_currency,
+        is_price_outlier,
+        listing_price,
+    )
+    from bera_price_tracker.application.services import (
+        SearchMercadoLibreProducts,
+        validate_mercadolibre_search,
+    )
+    from bera_price_tracker.composition import build_mercadolibre_search
+
+    query, normalized_limit = validate_mercadolibre_search(query_text, limit)
+    service = search_service if search_service is not None else build_mercadolibre_search()
+    if not isinstance(service, SearchMercadoLibreProducts) and not hasattr(service, "execute"):
+        raise TypeError("search_service must implement execute")
+    listings = list(service.execute(query, normalized_limit))
+    scored = score_listings(query, listings)
+    comparables = [
+        item.listing for item in scored if item.relevance_score >= DEFAULT_BENCHMARK_RELEVANCE
+    ]
+    currency = dominant_currency(comparables)
+    stats = (
+        None
+        if currency is None
+        else calculate_mercadolibre_price_statistics(comparables, currency=currency)
+    )
+    rows: list[dict[str, Any]] = []
+    for item in scored:
+        row = mercadolibre_listing_to_row(item)
+        price = listing_price(item.listing)
+        if (
+            stats is not None
+            and price is not None
+            and explicit_currency(item.listing) == stats.currency
+        ):
+            row["is_outlier"] = is_price_outlier(price, stats.lower_fence, stats.upper_fence)
+        rows.append(row)
+    return {
+        "ui_status": "SUCCESS" if rows else "EMPTY",
+        "results": rows,
+        "summary": build_mercadolibre_summary(scored, min_relevance=DEFAULT_BENCHMARK_RELEVANCE),
+        "error_message": "",
+    }
+
+
+def mercadolibre_benchmark_source_rows[RowT](
+    rows: Sequence[RowT],
+    *,
+    price_min: object = "",
+    price_max: object = "",
+) -> list[RowT]:
+    """Rows that feed cards and landed comparison. Hide-outliers stays visual-only."""
+
+    from bera_price_tracker.gui.analysis import (
+        SORT_ORIGINAL,
+        apply_table_view,
+        validate_price_filters,
+    )
+
+    minimum, maximum, error = validate_price_filters(price_min, price_max)
+    if error:
+        minimum = None
+        maximum = None
+    return apply_table_view(
+        rows,
+        sort=SORT_ORIGINAL,
+        minimum=minimum,
+        maximum=maximum,
+        hide_outliers=False,
+        min_relevance=0,
+    )
+
+
+def mercadolibre_summary_from_rows(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    min_relevance: int,
+    total_results: int,
+) -> dict[str, str]:
+    return build_mercadolibre_summary(
+        _scored_from_rows(rows),
+        min_relevance=min_relevance,
+        total_results=total_results,
+    )
+
+
+def parse_landed_unit_from_display_row(
+    landed_row: Mapping[str, object] | None,
+) -> tuple[Decimal | None, str]:
+    from bera_price_tracker.application.landed_cost import DEFAULT_LANDED_CURRENCY
+    from bera_price_tracker.gui.analysis import parse_price_input
+
+    if not landed_row:
+        return None, DEFAULT_LANDED_CURRENCY
+    raw = str(landed_row.get("landed_cost_per_unit_raw") or "").strip()
+    if raw:
+        try:
+            value = Decimal(raw)
+        except InvalidOperation:
+            value = None
+        if value is not None and value.is_finite():
+            currency = str(landed_row.get("currency") or DEFAULT_LANDED_CURRENCY).strip()
+            return value, currency or DEFAULT_LANDED_CURRENCY
+    parsed, ok = parse_price_input(landed_row.get("landed_cost_per_unit"))
+    if not ok:
+        return None, DEFAULT_LANDED_CURRENCY
+    return parsed, DEFAULT_LANDED_CURRENCY
+
+
+def compare_mercadolibre_with_landed_cost(
+    rows: Sequence[Mapping[str, object]],
+    landed_row: Mapping[str, object] | None,
+    *,
+    min_relevance: int,
+) -> dict[str, str]:
+    from bera_price_tracker.application.mercadolibre_benchmark import (
+        build_market_benchmark,
+        compare_landed_to_local_market,
+    )
+    from bera_price_tracker.application.mercadolibre_statistics import format_mercadolibre_money
+
+    landed, currency = parse_landed_unit_from_display_row(landed_row)
+    empty = {
+        "comparable": "0",
+        "message": MERCADOLIBRE_LANDED_MISSING,
+        "landed": "",
+        "conservative_profit": "",
+        "conservative_margin": "",
+        "typical_profit": "",
+        "typical_margin": "",
+        "high_profit": "",
+        "high_margin": "",
+    }
+    if landed is None:
+        return empty
+    scored = _scored_from_rows(rows)
+    benchmark = build_market_benchmark(scored, min_relevance=min_relevance)
+    comparison = compare_landed_to_local_market(
+        landed_cost_per_unit=landed,
+        landed_currency=currency,
+        benchmark=benchmark,
+    )
+    conservative = comparison.conservative
+    typical = comparison.typical
+    high = comparison.high
+    if not comparison.comparable or conservative is None or typical is None or high is None:
+        return {
+            **empty,
+            "message": comparison.message,
+            "landed": format_mercadolibre_money(landed, currency),
+        }
+
+    def _profit(scenario: Any) -> str:
+        return format_mercadolibre_money(scenario.profit_per_unit, comparison.currency)
+
+    def _margin(scenario: Any) -> str:
+        if scenario.margin_percent is None:
+            return "—"
+        return f"{scenario.margin_percent}%"
+
+    return {
+        "comparable": "1",
+        "message": "",
+        "landed": format_mercadolibre_money(comparison.landed_cost_per_unit, comparison.currency),
+        "conservative_price": format_mercadolibre_money(
+            conservative.local_price, comparison.currency
+        ),
+        "conservative_profit": _profit(conservative),
+        "conservative_margin": _margin(conservative),
+        "typical_price": format_mercadolibre_money(typical.local_price, comparison.currency),
+        "typical_profit": _profit(typical),
+        "typical_margin": _margin(typical),
+        "high_price": format_mercadolibre_money(high.local_price, comparison.currency),
+        "high_profit": _profit(high),
+        "high_margin": _margin(high),
+    }

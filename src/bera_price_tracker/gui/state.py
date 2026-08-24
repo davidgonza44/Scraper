@@ -21,7 +21,11 @@ from bera_price_tracker.application.alibaba_ranking import (
     clamp_weight,
     validate_ranking_weights,
 )
-from bera_price_tracker.application.services import alibaba_credit_warning
+from bera_price_tracker.application.mercadolibre_benchmark import DEFAULT_BENCHMARK_RELEVANCE
+from bera_price_tracker.application.services import (
+    alibaba_credit_warning,
+    mercadolibre_credit_warning,
+)
 from bera_price_tracker.gui import analysis, services
 
 UI_INITIAL = "INITIAL"
@@ -59,6 +63,36 @@ ALIBABA_RANKING_PRESETS = {
     "Mejor oportunidad": PRESET_MORE_OPPORTUNITY,
     "Más reputación": PRESET_MORE_REPUTATION,
 }
+ML_SORT_BY_LABEL = {
+    "Original": analysis.SORT_ORIGINAL,
+    "Precio: menor a mayor": analysis.SORT_PRICE_ASC,
+    "Precio: mayor a menor": analysis.SORT_PRICE_DESC,
+    "Mayor relevancia": analysis.SORT_RELEVANCE_DESC,
+}
+ML_SORT_LABELS = {value: label for label, value in ML_SORT_BY_LABEL.items()}
+ML_MIN_RELEVANCE_BY_LABEL = {"Todos": 0, "30+": 30, "60+": 60, "80+": 80}
+ML_MIN_RELEVANCE_LABELS = {value: label for label, value in ML_MIN_RELEVANCE_BY_LABEL.items()}
+
+
+def _ml_row_mapping(row: MercadoLibreResultRow) -> dict[str, object]:
+    return {
+        "external_id": row.external_id,
+        "title": row.title,
+        "permalink": row.permalink,
+        "price": row.price,
+        "price_raw": row.price_raw,
+        "currency": row.currency,
+        "condition": row.condition,
+        "seller_name": row.seller_name,
+        "shipping": row.shipping,
+        "thumbnail_url": row.thumbnail_url,
+        "country": row.country,
+        "representative": row.representative,
+        "relevance_value": row.relevance_value,
+        "relevance": row.relevance,
+        "relevance_label": row.relevance_label,
+        "is_outlier": row.is_outlier,
+    }
 
 
 def parse_weight_input(value: object, default: int) -> int:
@@ -151,6 +185,34 @@ class AlibabaResultRow(rx.Base):
     reputation_volume: str = ""
 
 
+class MercadoLibreResultRow(rx.Base):
+    external_id: str = ""
+    title: str = ""
+    permalink: str = ""
+    price: str = "—"
+    price_raw: str = ""
+    currency: str = "—"
+    condition: str = "—"
+    seller_name: str = "—"
+    shipping: str = "—"
+    thumbnail_url: str = ""
+    country: str = "—"
+    representative: str = ""
+    relevance_value: int = 0
+    relevance: str = ""
+    relevance_label: str = ""
+    relevance_tokens: str = ""
+    is_outlier: bool = False
+    ranking_value: int = 0
+    ranking: str = ""
+    ranking_low_match: bool = False
+    ranking_tooltip: str = ""
+    ranking_reputation_used: bool = False
+    score_value: int = 0
+    reputation_available: bool = False
+    reputation_value: int = 0
+
+
 class ResultRow(rx.Base):
     title: str = ""
     price: str = ""
@@ -205,6 +267,21 @@ class TrackerState(rx.State):
     alibaba_applied_reputation_weight: int = DEFAULT_REPUTATION_WEIGHT
     alibaba_chart_scope: str = analysis.CHART_SCOPE_ALL
     marketplace_tab: str = "facebook"
+    ml_query: str = ""
+    ml_limit: int = 10
+    ml_results: list[MercadoLibreResultRow] = []
+    ml_is_loading: bool = False
+    ml_error: str = ""
+    ml_summary: dict[str, str] = {}
+    ml_ui_status: str = UI_INITIAL
+    ml_warning: str = ""
+    ml_sort: str = analysis.SORT_ORIGINAL
+    ml_price_min: str = ""
+    ml_price_max: str = ""
+    ml_hide_outliers: bool = False
+    ml_min_relevance: int = DEFAULT_BENCHMARK_RELEVANCE
+    ml_comparison: dict[str, str] = {}
+    ml_has_comparison: bool = False
     alibaba_negotiation_product_key: str = ""
     alibaba_negotiation_quantity: str = "40"
     alibaba_negotiation_resale: str = ""
@@ -333,6 +410,9 @@ class TrackerState(rx.State):
     def show_alibaba_tab(self) -> None:
         self.marketplace_tab = "alibaba"
         self.refresh_alibaba_tracking()
+
+    def show_mercadolibre_tab(self) -> None:
+        self.marketplace_tab = "mercadolibre"
 
     def set_alibaba_negotiation_product_key(self, value: str) -> None:
         key = value.split(" · ", 1)[0].strip()
@@ -613,6 +693,7 @@ class TrackerState(rx.State):
             self.alibaba_landed_supplier_price = opening
 
     def calculate_alibaba_landed_cost(self) -> None:
+        self._invalidate_ml_comparison()
         try:
             row = services.calculate_alibaba_landed_cost(
                 quantity=self.alibaba_landed_quantity,
@@ -818,6 +899,142 @@ class TrackerState(rx.State):
         self.alibaba_min_reputation = 0
         self._set_ranking_weights(DEFAULT_WEIGHTS)
         self.alibaba_chart_scope = analysis.CHART_SCOPE_ALL
+
+    def set_ml_query(self, value: str) -> None:
+        self.ml_query = value
+
+    def set_ml_limit(self, value: str | int) -> None:
+        try:
+            self.ml_limit = int(value)
+        except (TypeError, ValueError):
+            self.ml_limit = 0
+        self.ml_warning = mercadolibre_credit_warning(self.ml_limit) or ""
+
+    def set_ml_sort(self, value: str) -> None:
+        self.ml_sort = ML_SORT_BY_LABEL.get(value, analysis.SORT_ORIGINAL)
+
+    def set_ml_price_min(self, value: str) -> None:
+        self.ml_price_min = value
+        self._invalidate_ml_comparison()
+
+    def set_ml_price_max(self, value: str) -> None:
+        self.ml_price_max = value
+        self._invalidate_ml_comparison()
+
+    def set_ml_hide_outliers(self, value: bool) -> None:
+        self.ml_hide_outliers = bool(value)
+
+    def set_ml_min_relevance(self, value: str) -> None:
+        self.ml_min_relevance = ML_MIN_RELEVANCE_BY_LABEL.get(value, DEFAULT_BENCHMARK_RELEVANCE)
+        self._invalidate_ml_comparison()
+
+    def clear_ml_filters(self) -> None:
+        self.ml_sort = analysis.SORT_ORIGINAL
+        self.ml_price_min = ""
+        self.ml_price_max = ""
+        self.ml_hide_outliers = False
+        self.ml_min_relevance = DEFAULT_BENCHMARK_RELEVANCE
+        self._invalidate_ml_comparison()
+
+    def _invalidate_ml_comparison(self) -> None:
+        self.ml_has_comparison = False
+        self.ml_comparison = {}
+
+    def _ml_benchmark_row_maps(self) -> list[dict[str, object]]:
+        return [
+            _ml_row_mapping(item)
+            for item in services.mercadolibre_benchmark_source_rows(
+                self.ml_results,
+                price_min=self.ml_price_min,
+                price_max=self.ml_price_max,
+            )
+        ]
+
+    @rx.event(background=True)
+    async def search_mercadolibre(self) -> None:
+        async with self:
+            if not services.can_start_mercadolibre_search(self.ml_is_loading):
+                return
+            query = self.ml_query
+            limit = self.ml_limit
+            if not isinstance(query, str) or not query.strip():
+                self.ml_error = services.MERCADOLIBRE_QUERY_ERROR
+                self.ml_results = []
+                self.ml_summary = {}
+                self.ml_ui_status = UI_ERROR
+                self.ml_is_loading = False
+                self._invalidate_ml_comparison()
+                return
+            if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1 or limit > 50:
+                self.ml_error = services.MERCADOLIBRE_LIMIT_ERROR
+                self.ml_results = []
+                self.ml_summary = {}
+                self.ml_ui_status = UI_ERROR
+                self.ml_is_loading = False
+                self._invalidate_ml_comparison()
+                return
+            self.ml_is_loading = True
+            self.ml_error = ""
+            self.ml_warning = mercadolibre_credit_warning(limit) or ""
+            self.ml_ui_status = UI_LOADING
+            self._invalidate_ml_comparison()
+
+        try:
+            payload = await asyncio.to_thread(
+                services.run_mercadolibre_search,
+                query,
+                limit,
+            )
+        except Exception as exc:  # noqa: BLE001 - sanitized before display
+            message = services.sanitize_mercadolibre_error(exc)
+            async with self:
+                self.ml_is_loading = False
+                self.ml_error = message
+                self.ml_results = []
+                self.ml_summary = {}
+                self.ml_ui_status = UI_ERROR
+                self._invalidate_ml_comparison()
+            return
+
+        rows = [
+            MercadoLibreResultRow(
+                external_id=str(item.get("external_id", "")),
+                title=str(item.get("title", "")),
+                permalink=str(item.get("permalink", "")),
+                price=str(item.get("price", "—")),
+                price_raw=str(item.get("price_raw", "")),
+                currency=str(item.get("currency", "—")),
+                condition=str(item.get("condition", "—")),
+                seller_name=str(item.get("seller_name", "—")),
+                shipping=str(item.get("shipping", "—")),
+                thumbnail_url=str(item.get("thumbnail_url", "")),
+                country=str(item.get("country", "—")),
+                representative=str(item.get("representative", "")),
+                relevance_value=int(item.get("relevance_value", 0) or 0),
+                relevance=str(item.get("relevance", "")),
+                relevance_label=str(item.get("relevance_label", "")),
+                relevance_tokens=str(item.get("relevance_tokens", "")),
+                is_outlier=bool(item.get("is_outlier", False)),
+            )
+            for item in payload.get("results") or []
+        ]
+        async with self:
+            self.ml_is_loading = False
+            self.ml_error = ""
+            self.ml_results = rows
+            self.ml_summary = dict(payload.get("summary") or {})
+            self.ml_ui_status = str(payload.get("ui_status") or UI_EMPTY)
+            self._invalidate_ml_comparison()
+
+    def compare_ml_with_landed_cost(self) -> None:
+        landed = self.alibaba_landed_result if self.alibaba_landed_has_result else None
+        row = services.compare_mercadolibre_with_landed_cost(
+            self._ml_benchmark_row_maps(),
+            landed,
+            min_relevance=self.ml_min_relevance,
+        )
+        self.ml_comparison = row
+        self.ml_has_comparison = True
 
     def _apply_tracked_payload(self, rows: list[dict[str, str]]) -> None:
         self.alibaba_tracked_rows = [
@@ -1119,3 +1336,51 @@ class TrackerState(rx.State):
     @rx.var
     def alibaba_negotiation_is_unattractive(self) -> bool:
         return self.alibaba_negotiation_attractiveness == "ECONOMICALLY_UNATTRACTIVE"
+
+    @rx.var
+    def ml_sort_label(self) -> str:
+        return ML_SORT_LABELS.get(self.ml_sort, "Original")
+
+    @rx.var
+    def ml_min_relevance_label(self) -> str:
+        return ML_MIN_RELEVANCE_LABELS.get(self.ml_min_relevance, "60+")
+
+    @rx.var
+    def ml_filter_error(self) -> str:
+        _minimum, _maximum, error = analysis.validate_price_filters(
+            self.ml_price_min, self.ml_price_max
+        )
+        return error
+
+    @rx.var
+    def ml_visible_rows(self) -> list[MercadoLibreResultRow]:
+        minimum, maximum, error = analysis.validate_price_filters(
+            self.ml_price_min, self.ml_price_max
+        )
+        if error:
+            minimum = None
+            maximum = None
+        return analysis.apply_table_view(
+            self.ml_results,
+            sort=self.ml_sort,
+            minimum=minimum,
+            maximum=maximum,
+            hide_outliers=self.ml_hide_outliers,
+            min_relevance=self.ml_min_relevance,
+        )
+
+    @rx.var
+    def ml_counter(self) -> str:
+        return analysis.showing_counter(len(self.ml_visible_rows), len(self.ml_results))
+
+    @rx.var
+    def ml_live_summary(self) -> dict[str, str]:
+        return services.mercadolibre_summary_from_rows(
+            self._ml_benchmark_row_maps(),
+            min_relevance=self.ml_min_relevance,
+            total_results=len(self.ml_results),
+        )
+
+    @rx.var
+    def ml_comparison_comparable(self) -> bool:
+        return self.ml_has_comparison and self.ml_comparison.get("comparable") == "1"

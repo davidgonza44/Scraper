@@ -3,6 +3,7 @@
 import pytest
 
 from bera_price_tracker.config import (
+    DEFAULT_APIFY_MERCADOLIBRE_ACTOR,
     DEFAULT_BRIGHTDATA_BASE_URL,
     DEFAULT_BRIGHTDATA_DATASET_ID,
     DEFAULT_FACEBOOK_CITY,
@@ -68,6 +69,7 @@ def test_settings_are_read_from_a_mapping_without_loading_files() -> None:
     assert settings.apify_alibaba_refresh_actor == "xtracto/alibaba-product-scraper"
     assert settings.apify_alibaba_refresh_retries == 1
     assert settings.apify_alibaba_refresh_concurrency == 3
+    assert settings.apify_mercadolibre_actor == DEFAULT_APIFY_MERCADOLIBRE_ACTOR
     assert "bright-secret" not in repr(settings)
     assert "apify-secret" not in repr(settings)
 

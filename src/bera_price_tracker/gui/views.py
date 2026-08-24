@@ -2146,6 +2146,400 @@ def _alibaba_body() -> rx.Component:
     )
 
 
+def _ml_form() -> rx.Component:
+    return rx.box(
+        rx.vstack(
+            rx.hstack(
+                rx.vstack(
+                    rx.text("Buscar", size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+                    rx.input(
+                        value=TrackerState.ml_query,
+                        on_change=TrackerState.set_ml_query,
+                        placeholder="mouse inalámbrico",
+                        width="100%",
+                        **styles.INPUT_STYLE,
+                    ),
+                    spacing="1",
+                    width="100%",
+                    align_items="start",
+                ),
+                rx.vstack(
+                    rx.text(
+                        "Cantidad de resultados",
+                        size="1",
+                        color=styles.TEXT_SECONDARY,
+                        weight="medium",
+                    ),
+                    rx.input(
+                        type="number",
+                        min=1,
+                        max=50,
+                        value=TrackerState.ml_limit,
+                        on_change=TrackerState.set_ml_limit,
+                        width="100%",
+                        **styles.INPUT_STYLE,
+                    ),
+                    spacing="1",
+                    width="160px",
+                    align_items="start",
+                ),
+                spacing="4",
+                width="100%",
+                align="end",
+            ),
+            rx.cond(
+                TrackerState.ml_warning != "",
+                rx.text(TrackerState.ml_warning, color=BRICK, size="2"),
+            ),
+            rx.hstack(
+                rx.box(
+                    rx.text("Proveedor", size="1", color=styles.TEXT_SECONDARY),
+                    rx.text("Mercado Libre Venezuela", size="3", weight="medium"),
+                ),
+                rx.spacer(),
+                rx.button(
+                    rx.cond(
+                        TrackerState.ml_is_loading,
+                        rx.hstack(
+                            rx.spinner(size="1"),
+                            rx.text("Buscando publicaciones en Mercado Libre Venezuela..."),
+                            spacing="2",
+                        ),
+                        rx.text("Buscar precios publicados"),
+                    ),
+                    on_click=TrackerState.search_mercadolibre,
+                    disabled=TrackerState.ml_is_loading,
+                    **styles.BUTTON_STYLE,
+                    padding_x="18px",
+                    padding_y="10px",
+                ),
+                width="100%",
+                align="center",
+            ),
+            spacing="5",
+            width="100%",
+        ),
+        background_color=CARD,
+        border=f"1px solid {RULE}",
+        padding="22px",
+        width="100%",
+    )
+
+
+def _ml_stat_card(label: str, key: str, *, accent: bool = False) -> rx.Component:
+    return rx.box(
+        rx.text(label, size="1", color=MUTED),
+        rx.text(
+            TrackerState.ml_live_summary[key],
+            size="5",
+            weight="medium",
+            color=BRICK if accent else styles.TEXT_PRIMARY,
+        ),
+        min_width="132px",
+        padding="12px 14px",
+        background_color=CARD,
+        border=f"1px solid {RULE}",
+    )
+
+
+def _ml_summary() -> rx.Component:
+    return rx.vstack(
+        rx.text(
+            "Precios publicados observados en Mercado Libre Venezuela",
+            size="2",
+            weight="medium",
+            color=styles.TEXT_PRIMARY,
+        ),
+        rx.text(
+            "No son precios de venta efectivos. Son precios publicados observados.",
+            size="1",
+            color=MUTED,
+        ),
+        rx.hstack(
+            _ml_stat_card("Comparables", "comparables"),
+            _ml_stat_card("Mínimo", "minimo", accent=True),
+            _ml_stat_card("P25", "p25", accent=True),
+            _ml_stat_card("Mediana", "mediana", accent=True),
+            _ml_stat_card("Precio típico", "precio_tipico", accent=True),
+            _ml_stat_card("P75", "p75", accent=True),
+            _ml_stat_card("Máximo", "maximo", accent=True),
+            spacing="3",
+            padding_y="8px",
+            width="100%",
+            wrap="wrap",
+        ),
+        spacing="2",
+        width="100%",
+    )
+
+
+def _ml_controls() -> rx.Component:
+    return rx.box(
+        rx.hstack(
+            rx.vstack(
+                rx.text("Ordenar por", size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+                rx.select(
+                    [
+                        "Original",
+                        "Precio: menor a mayor",
+                        "Precio: mayor a menor",
+                        "Mayor relevancia",
+                    ],
+                    value=TrackerState.ml_sort_label,
+                    on_change=TrackerState.set_ml_sort,
+                    **styles.SELECT_STYLE,
+                ),
+                spacing="1",
+                align_items="start",
+            ),
+            rx.vstack(
+                rx.text("Precio mínimo", size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+                rx.input(
+                    value=TrackerState.ml_price_min,
+                    on_change=TrackerState.set_ml_price_min,
+                    placeholder="3.00",
+                    width="120px",
+                    **styles.INPUT_STYLE,
+                ),
+                spacing="1",
+                align_items="start",
+            ),
+            rx.vstack(
+                rx.text("Precio máximo", size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+                rx.input(
+                    value=TrackerState.ml_price_max,
+                    on_change=TrackerState.set_ml_price_max,
+                    placeholder="20.00",
+                    width="120px",
+                    **styles.INPUT_STYLE,
+                ),
+                spacing="1",
+                align_items="start",
+            ),
+            rx.vstack(
+                rx.text("Relevancia", size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+                rx.select(
+                    ["Todos", "30+", "60+", "80+"],
+                    value=TrackerState.ml_min_relevance_label,
+                    on_change=TrackerState.set_ml_min_relevance,
+                    **styles.SELECT_STYLE,
+                ),
+                spacing="1",
+                align_items="start",
+            ),
+            rx.hstack(
+                rx.switch(
+                    checked=TrackerState.ml_hide_outliers,
+                    on_change=TrackerState.set_ml_hide_outliers,
+                ),
+                rx.text("Ocultar outliers", size="2", color=styles.TEXT_PRIMARY),
+                spacing="2",
+                align="center",
+                padding_bottom="6px",
+            ),
+            rx.button(
+                "Limpiar filtros",
+                on_click=TrackerState.clear_ml_filters,
+                **styles.BUTTON_STYLE,
+            ),
+            spacing="4",
+            width="100%",
+            align="end",
+            wrap="wrap",
+        ),
+        rx.cond(
+            TrackerState.ml_filter_error != "",
+            rx.text(TrackerState.ml_filter_error, color=BRICK, size="2"),
+        ),
+        rx.text(TrackerState.ml_counter, size="2", color=MUTED),
+        width="100%",
+        padding_y="8px",
+    )
+
+
+def _ml_relevance_cell(row: rx.Var) -> rx.Component:
+    return rx.tooltip(
+        rx.vstack(
+            rx.text(row["relevance"], size="1", weight="medium", color=styles.TEXT_PRIMARY),
+            rx.text(row["relevance_label"], size="1", color=MUTED),
+            spacing="0",
+        ),
+        content=row["relevance_label"] + " · " + row["relevance_tokens"],
+    )
+
+
+def _ml_table() -> rx.Component:
+    return rx.box(
+        rx.table.root(
+            rx.table.header(
+                rx.table.row(
+                    rx.table.column_header_cell("Imagen", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Producto", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Precio", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Moneda", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Condición", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Vendedor", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Envío", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Relevancia", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Link", color=styles.TEXT_PRIMARY),
+                )
+            ),
+            rx.table.body(
+                rx.foreach(
+                    TrackerState.ml_visible_rows,
+                    lambda row: rx.table.row(
+                        rx.table.cell(
+                            rx.cond(
+                                row["thumbnail_url"] != "",
+                                rx.image(src=row["thumbnail_url"], width="48px", height="48px"),
+                                rx.text("—", color=MUTED),
+                            )
+                        ),
+                        rx.table.cell(row["title"], color=styles.TEXT_PRIMARY),
+                        rx.table.cell(row["price"], color=styles.TEXT_PRIMARY),
+                        rx.table.cell(row["currency"], color=styles.TEXT_PRIMARY),
+                        rx.table.cell(row["condition"], color=styles.TEXT_PRIMARY),
+                        rx.table.cell(row["seller_name"], color=styles.TEXT_PRIMARY),
+                        rx.table.cell(row["shipping"], color=styles.TEXT_PRIMARY),
+                        rx.table.cell(_ml_relevance_cell(row)),
+                        rx.table.cell(
+                            rx.cond(
+                                row["permalink"] != "",
+                                rx.link("Ver", href=row["permalink"], is_external=True),
+                                rx.text("—", color=MUTED),
+                            )
+                        ),
+                    ),
+                )
+            ),
+            width="100%",
+        ),
+        overflow_x="auto",
+        width="100%",
+    )
+
+
+def _ml_landed_comparison() -> rx.Component:
+    return rx.box(
+        rx.vstack(
+            rx.text("Costo Venezuela", size="3", weight="medium", color=styles.TEXT_PRIMARY),
+            rx.text(
+                "Compara el costo puesto por unidad con precios publicados. "
+                "No modifica la negociación.",
+                size="1",
+                color=MUTED,
+            ),
+            rx.button(
+                "Comparar con costo Venezuela",
+                on_click=TrackerState.compare_ml_with_landed_cost,
+                **styles.BUTTON_STYLE,
+            ),
+            rx.cond(
+                TrackerState.ml_has_comparison,
+                rx.cond(
+                    TrackerState.ml_comparison_comparable,
+                    rx.vstack(
+                        rx.text(
+                            "Costo puesto / u: " + TrackerState.ml_comparison["landed"],
+                            size="2",
+                            weight="medium",
+                        ),
+                        rx.hstack(
+                            rx.box(
+                                rx.text("Conservador (P25)", size="1", color=MUTED),
+                                rx.text(TrackerState.ml_comparison["conservative_price"], size="3"),
+                                rx.text(
+                                    TrackerState.ml_comparison["conservative_profit"] + "/u",
+                                    size="2",
+                                ),
+                                rx.text(
+                                    TrackerState.ml_comparison["conservative_margin"],
+                                    size="2",
+                                    color=MUTED,
+                                ),
+                            ),
+                            rx.box(
+                                rx.text("Típico (mediana)", size="1", color=MUTED),
+                                rx.text(TrackerState.ml_comparison["typical_price"], size="3"),
+                                rx.text(
+                                    TrackerState.ml_comparison["typical_profit"] + "/u", size="2"
+                                ),
+                                rx.text(
+                                    TrackerState.ml_comparison["typical_margin"],
+                                    size="2",
+                                    color=MUTED,
+                                ),
+                            ),
+                            rx.box(
+                                rx.text("Alto (P75)", size="1", color=MUTED),
+                                rx.text(TrackerState.ml_comparison["high_price"], size="3"),
+                                rx.text(TrackerState.ml_comparison["high_profit"] + "/u", size="2"),
+                                rx.text(
+                                    TrackerState.ml_comparison["high_margin"],
+                                    size="2",
+                                    color=MUTED,
+                                ),
+                            ),
+                            spacing="5",
+                            wrap="wrap",
+                        ),
+                        spacing="2",
+                        width="100%",
+                    ),
+                    rx.text(TrackerState.ml_comparison["message"], color=BRICK, size="2"),
+                ),
+            ),
+            spacing="3",
+            width="100%",
+        ),
+        background_color=CARD,
+        border=f"1px solid {RULE}",
+        padding="22px",
+        width="100%",
+        margin_top="18px",
+    )
+
+
+def _ml_body() -> rx.Component:
+    return rx.box(
+        rx.cond(
+            TrackerState.ml_ui_status == "LOADING",
+            rx.hstack(
+                rx.spinner(),
+                rx.text("Buscando publicaciones en Mercado Libre Venezuela..."),
+                spacing="3",
+                padding_y="20px",
+            ),
+        ),
+        rx.cond(
+            TrackerState.ml_ui_status == "ERROR",
+            rx.box(
+                rx.text(TrackerState.ml_error, color=BRICK),
+                border=f"1px solid {BRICK}",
+                padding="14px 16px",
+                width="100%",
+            ),
+        ),
+        rx.cond(
+            TrackerState.ml_ui_status == "EMPTY",
+            rx.text("No se encontraron publicaciones en Mercado Libre Venezuela.", color=MUTED),
+        ),
+        rx.cond(
+            TrackerState.ml_ui_status == "SUCCESS",
+            rx.vstack(
+                _ml_summary(),
+                _ml_controls(),
+                _ml_table(),
+                _ml_landed_comparison(),
+                spacing="4",
+                width="100%",
+            ),
+        ),
+        width="100%",
+        padding_top="22px",
+    )
+
+
 def _market_tab(label: str, value: str, on_click: object) -> rx.Component:
     active = TrackerState.marketplace_tab == value
     extras = {"padding": "10px 4px 12px", "border_radius": "0", "cursor": "pointer"}
@@ -2167,6 +2561,11 @@ def dashboard() -> rx.Component:
                     TrackerState.show_facebook_tab,
                 ),
                 _market_tab("Alibaba", "alibaba", TrackerState.show_alibaba_tab),
+                _market_tab(
+                    "Mercado Libre Venezuela",
+                    "mercadolibre",
+                    TrackerState.show_mercadolibre_tab,
+                ),
                 spacing="6",
                 width="100%",
                 border_bottom=f"1px solid {RULE}",
@@ -2175,14 +2574,18 @@ def dashboard() -> rx.Component:
             rx.cond(
                 TrackerState.marketplace_tab == "facebook",
                 rx.vstack(_form(), _body(), spacing="0", width="100%"),
-                rx.vstack(
-                    _alibaba_form(),
-                    _alibaba_body(),
-                    _alibaba_tracking(),
-                    _alibaba_negotiation(),
-                    _alibaba_landed_cost(),
-                    spacing="0",
-                    width="100%",
+                rx.cond(
+                    TrackerState.marketplace_tab == "alibaba",
+                    rx.vstack(
+                        _alibaba_form(),
+                        _alibaba_body(),
+                        _alibaba_tracking(),
+                        _alibaba_negotiation(),
+                        _alibaba_landed_cost(),
+                        spacing="0",
+                        width="100%",
+                    ),
+                    rx.vstack(_ml_form(), _ml_body(), spacing="0", width="100%"),
                 ),
             ),
             max_width="1080px",

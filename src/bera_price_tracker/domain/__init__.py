@@ -27,6 +27,7 @@ from bera_price_tracker.domain.h0019 import (
     is_h0019_compatible_application,
     is_h0019_other_application,
 )
+from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
 from bera_price_tracker.domain.models import (
     CollectionBatch,
     CollectionRunInspection,
@@ -73,6 +74,7 @@ __all__ = [
     "H0019_UNBRANDED_APPLICATIONS",
     "NON_H0019_OTHER_COMPATIBILITY",
     "MarketplaceSource",
+    "MercadoLibreListing",
     "NormalizationStatus",
     "NormalizedPrice",
     "ObservedListing",

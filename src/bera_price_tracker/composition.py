@@ -28,6 +28,7 @@ from bera_price_tracker.application import (
     RecordAlibabaPriceSnapshot,
     RefreshTrackedAlibabaProducts,
     SearchAlibabaProducts,
+    SearchMercadoLibreProducts,
     UnfollowAlibabaPrice,
 )
 from bera_price_tracker.config import Settings
@@ -59,6 +60,7 @@ from bera_price_tracker.infrastructure.providers.alibaba import ApifyAlibabaClie
 from bera_price_tracker.infrastructure.providers.alibaba_refresh import (
     ApifyAlibabaProductRefreshClient,
 )
+from bera_price_tracker.infrastructure.providers.mercadolibre_apify import ApifyMercadoLibreClient
 
 _logger = logging.getLogger(__name__)
 
@@ -474,6 +476,17 @@ def build_alibaba_search(settings: Settings | None = None) -> SearchAlibabaProdu
         actor_id=resolved.apify_alibaba_actor,
     )
     return SearchAlibabaProducts(provider=client)
+
+
+def build_mercadolibre_search(settings: Settings | None = None) -> SearchMercadoLibreProducts:
+    """Wire SearchMercadoLibreProducts to Apify without opening a run."""
+
+    resolved = Settings.from_env() if settings is None else settings
+    client = ApifyMercadoLibreClient(
+        _api_token=resolved.apify_api_token,
+        actor_id=resolved.apify_mercadolibre_actor,
+    )
+    return SearchMercadoLibreProducts(provider=client)
 
 
 def build_alibaba_negotiation_drafter(
