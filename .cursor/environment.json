@@ -1,0 +1,11 @@
+{
+  "name": "BERA Price Tracker",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "reflex",
+      "command": ".venv/bin/reflex run"
+    }
+  ],
+  "ports": [3000, 8000]
+}
