@@ -390,6 +390,7 @@ def test_zero_quantity_is_rejected() -> None:
 def test_gui_calculate_uses_ladder_and_does_not_call_network() -> None:
     row = services.calculate_alibaba_negotiation(
         {
+            "product_id": "1601763520797",
             "title": "Wireless Mouse",
             "supplier_name": "Example",
             "source": "tracked",
@@ -404,6 +405,7 @@ def test_gui_calculate_uses_ladder_and_does_not_call_network() -> None:
     assert row["target_price"] == "$4.06"
     assert row["opening_offer"] == "$4.03"
     assert row["ceiling_price"] == "$4.30"
+    assert row["product_id"] == "1601763520797"
     assert "80%" in row["explanation"]
 
 

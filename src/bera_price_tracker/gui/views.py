@@ -1022,6 +1022,19 @@ def _alibaba_relevance_cell(row: rx.Var) -> rx.Component:
     )
 
 
+def _alibaba_venezuela_cell(row: rx.Var) -> rx.Component:
+    return rx.cond(
+        row["product_id"] != "",
+        rx.button(
+            "Buscar comparables en Venezuela",
+            on_click=TrackerState.prepare_ml_comparables_from_alibaba_result(row["product_id"]),
+            size="1",
+            variant="outline",
+        ),
+        rx.text("Sin ID", size="1", color=MUTED),
+    )
+
+
 def _alibaba_follow_cell(row: rx.Var) -> rx.Component:
     return rx.cond(
         row["product_id"] != "",
@@ -1262,6 +1275,14 @@ def _alibaba_tracking() -> rx.Component:
                             rx.button(
                                 "Dejar de seguir",
                                 on_click=TrackerState.unfollow_alibaba_product(item["product_id"]),
+                                size="1",
+                                variant="outline",
+                            ),
+                            rx.button(
+                                "Buscar comparables en Venezuela",
+                                on_click=TrackerState.prepare_ml_comparables_from_alibaba_tracked(
+                                    item["product_id"]
+                                ),
                                 size="1",
                                 variant="outline",
                             ),
@@ -2047,6 +2068,7 @@ def _alibaba_table() -> rx.Component:
                     rx.table.column_header_cell("Ranking", color=styles.TEXT_PRIMARY),
                     rx.table.column_header_cell("Reputación", color=styles.TEXT_PRIMARY),
                     rx.table.column_header_cell("Seguimiento", color=styles.TEXT_PRIMARY),
+                    rx.table.column_header_cell("Venezuela", color=styles.TEXT_PRIMARY),
                     rx.table.column_header_cell("Enlace", color=styles.TEXT_PRIMARY),
                 )
             ),
@@ -2084,6 +2106,7 @@ def _alibaba_table() -> rx.Component:
                         rx.table.cell(_alibaba_ranking_cell(row)),
                         rx.table.cell(_alibaba_reputation_cell(row)),
                         rx.table.cell(_alibaba_follow_cell(row)),
+                        rx.table.cell(_alibaba_venezuela_cell(row)),
                         rx.table.cell(
                             rx.link(
                                 "Ver producto",
@@ -2149,9 +2172,39 @@ def _alibaba_body() -> rx.Component:
 def _ml_form() -> rx.Component:
     return rx.box(
         rx.vstack(
+            rx.cond(
+                TrackerState.ml_has_alibaba_context,
+                rx.vstack(
+                    rx.text("Producto Alibaba seleccionado", size="1", color=MUTED),
+                    rx.text(
+                        TrackerState.ml_alibaba_context["title"],
+                        size="3",
+                        weight="medium",
+                        color=styles.TEXT_PRIMARY,
+                    ),
+                    rx.text(
+                        "Proveedor: " + TrackerState.ml_alibaba_context["supplier"],
+                        size="1",
+                        color=MUTED,
+                    ),
+                    rx.text(
+                        "Precio proveedor: " + TrackerState.ml_alibaba_context["supplier_price"],
+                        size="2",
+                        color=BRICK,
+                    ),
+                    spacing="1",
+                    width="100%",
+                    align_items="start",
+                ),
+            ),
             rx.hstack(
                 rx.vstack(
-                    rx.text("Buscar", size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+                    rx.text(
+                        "Consulta para Mercado Libre Venezuela",
+                        size="1",
+                        color=styles.TEXT_SECONDARY,
+                        weight="medium",
+                    ),
                     rx.input(
                         value=TrackerState.ml_query,
                         on_change=TrackerState.set_ml_query,
@@ -2205,7 +2258,11 @@ def _ml_form() -> rx.Component:
                             rx.text("Buscando publicaciones en Mercado Libre Venezuela..."),
                             spacing="2",
                         ),
-                        rx.text("Buscar precios publicados"),
+                        rx.cond(
+                            TrackerState.ml_has_alibaba_context,
+                            rx.text("Buscar comparables"),
+                            rx.text("Buscar precios publicados"),
+                        ),
                     ),
                     on_click=TrackerState.search_mercadolibre,
                     disabled=TrackerState.ml_is_loading,
@@ -2500,6 +2557,84 @@ def _ml_landed_comparison() -> rx.Component:
     )
 
 
+def _ml_alibaba_association() -> rx.Component:
+    result = TrackerState.ml_alibaba_association
+    return rx.cond(
+        TrackerState.ml_show_alibaba_association,
+        rx.box(
+            rx.vstack(
+                rx.text("Producto Alibaba", size="3", weight="medium", color=styles.TEXT_PRIMARY),
+                rx.text(result["product_title"], size="2", color=styles.TEXT_PRIMARY),
+                rx.text("Precio proveedor: " + result["supplier_price"], size="2", color=BRICK),
+                rx.cond(
+                    result["landed"] != "",
+                    rx.text(
+                        "Costo puesto Venezuela: " + result["landed"] + " / unidad",
+                        size="2",
+                        weight="medium",
+                    ),
+                    rx.text(result["missing_landed_message"], size="2", color=MUTED),
+                ),
+                rx.text(
+                    "Mercado Libre Venezuela",
+                    size="2",
+                    weight="medium",
+                    color=styles.TEXT_PRIMARY,
+                    padding_top="8px",
+                ),
+                rx.text(result["published_note"], size="1", color=MUTED),
+                rx.text(result["quality_note"], size="1", color=MUTED),
+                rx.cond(
+                    result["sparse"] == "1",
+                    rx.text(result["sparse_message"], size="2", color=BRICK),
+                ),
+                rx.hstack(
+                    _landed_card("P25", result["p25"], BRICK),
+                    _landed_card("Mediana", result["median"], BRICK),
+                    _landed_card("P75", result["p75"], BRICK),
+                    spacing="3",
+                    wrap="wrap",
+                ),
+                rx.cond(
+                    result["currency_message"] != "",
+                    rx.text(result["currency_message"], size="2", color=BRICK),
+                ),
+                rx.cond(
+                    result["has_profitability"] == "1",
+                    rx.hstack(
+                        rx.box(
+                            rx.text("Escenario conservador", size="1", color=MUTED),
+                            rx.text(result["conservative_price"], size="3"),
+                            rx.text(result["conservative_profit"] + "/u", size="2"),
+                            rx.text(result["conservative_margin"], size="2", color=MUTED),
+                        ),
+                        rx.box(
+                            rx.text("Escenario típico", size="1", color=MUTED),
+                            rx.text(result["typical_price"], size="3"),
+                            rx.text(result["typical_profit"] + "/u", size="2"),
+                            rx.text(result["typical_margin"], size="2", color=MUTED),
+                        ),
+                        rx.box(
+                            rx.text("Escenario alto", size="1", color=MUTED),
+                            rx.text(result["high_price"], size="3"),
+                            rx.text(result["high_profit"] + "/u", size="2"),
+                            rx.text(result["high_margin"], size="2", color=MUTED),
+                        ),
+                        spacing="5",
+                        wrap="wrap",
+                    ),
+                ),
+                spacing="2",
+                width="100%",
+            ),
+            background_color=CARD,
+            border=f"1px solid {RULE}",
+            padding="22px",
+            width="100%",
+        ),
+    )
+
+
 def _ml_body() -> rx.Component:
     return rx.box(
         rx.cond(
@@ -2528,6 +2663,7 @@ def _ml_body() -> rx.Component:
             TrackerState.ml_ui_status == "SUCCESS",
             rx.vstack(
                 _ml_summary(),
+                _ml_alibaba_association(),
                 _ml_controls(),
                 _ml_table(),
                 _ml_landed_comparison(),

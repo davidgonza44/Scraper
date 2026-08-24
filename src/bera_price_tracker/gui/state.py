@@ -282,6 +282,10 @@ class TrackerState(rx.State):
     ml_min_relevance: int = DEFAULT_BENCHMARK_RELEVANCE
     ml_comparison: dict[str, str] = {}
     ml_has_comparison: bool = False
+    ml_has_alibaba_context: bool = False
+    ml_alibaba_context: dict[str, str] = {}
+    ml_last_search_query: str = ""
+    ml_association_product_id: str = ""
     alibaba_negotiation_product_key: str = ""
     alibaba_negotiation_quantity: str = "40"
     alibaba_negotiation_resale: str = ""
@@ -337,6 +341,8 @@ class TrackerState(rx.State):
     alibaba_landed_error: str = ""
     alibaba_landed_has_result: bool = False
     alibaba_landed_result: dict[str, str] = {}
+    alibaba_landed_draft_product_id: str = ""
+    alibaba_landed_product_id: str = ""
 
     def set_query(self, value: str) -> None:
         self.query = value
@@ -687,6 +693,7 @@ class TrackerState(rx.State):
         payload = self.alibaba_negotiation_plan_payload
         if not payload:
             return
+        self.alibaba_landed_draft_product_id = str(payload.get("product_id") or "").strip()
         self.alibaba_landed_quantity = payload.get("desired_quantity", self.alibaba_landed_quantity)
         opening = payload.get("opening_offer", "")
         if opening:
@@ -720,10 +727,12 @@ class TrackerState(rx.State):
             self.alibaba_landed_error = services.sanitize_alibaba_landed_cost_error(exc)
             self.alibaba_landed_has_result = False
             self.alibaba_landed_result = {}
+            self.alibaba_landed_product_id = ""
             return
         self.alibaba_landed_error = ""
         self.alibaba_landed_has_result = True
         self.alibaba_landed_result = row
+        self.alibaba_landed_product_id = self.alibaba_landed_draft_product_id
 
     def set_alibaba_query(self, value: str) -> None:
         self.alibaba_query = value
@@ -902,6 +911,75 @@ class TrackerState(rx.State):
 
     def set_ml_query(self, value: str) -> None:
         self.ml_query = value
+        if value.strip() != self.ml_last_search_query.strip():
+            self._invalidate_ml_comparison()
+
+    def prepare_ml_comparables_from_alibaba_result(self, product_id: str) -> None:
+        row = next((item for item in self.alibaba_results if item.product_id == product_id), None)
+        if row is None:
+            return
+        self._prepare_ml_comparables(
+            external_id=row.product_id,
+            title=row.title,
+            supplier=row.supplier_name,
+            supplier_price=row.price or row.representative,
+            currency=row.currency,
+        )
+
+    def prepare_ml_comparables_from_alibaba_tracked(self, product_id: str) -> None:
+        row = next(
+            (item for item in self.alibaba_tracked_rows if item.product_id == product_id), None
+        )
+        if row is None:
+            return
+        self._prepare_ml_comparables(
+            external_id=row.product_id,
+            title=row.title,
+            supplier=row.supplier_name,
+            supplier_price=row.current_price or row.last_price,
+            currency="",
+        )
+
+    def _prepare_ml_comparables(
+        self,
+        *,
+        external_id: str,
+        title: str,
+        supplier: str,
+        supplier_price: str,
+        currency: str,
+    ) -> None:
+        stable_external_id = external_id.strip()
+        if not stable_external_id:
+            return
+        previous_id = self.ml_alibaba_context.get("external_id", "")
+        landed = self._landed_for_ml_product(stable_external_id)
+        context = services.build_alibaba_ml_context(
+            external_id=stable_external_id,
+            title=title,
+            supplier=supplier,
+            supplier_price=supplier_price,
+            currency=currency,
+            desired_quantity=self.alibaba_landed_quantity or self.alibaba_negotiation_quantity,
+            landed_row=landed,
+        )
+        if not context["external_id"]:
+            return
+        self.ml_alibaba_context = context
+        self.ml_has_alibaba_context = True
+        self.ml_query = services.suggest_mercadolibre_query(
+            current_query=self.ml_query,
+            fallback_query=self.alibaba_query,
+        )
+        self.marketplace_tab = "mercadolibre"
+        if previous_id != context["external_id"]:
+            self.ml_results = []
+            self.ml_summary = {}
+            self.ml_ui_status = UI_INITIAL
+            self.ml_error = ""
+            self.ml_last_search_query = ""
+            self.ml_association_product_id = ""
+            self._invalidate_ml_comparison()
 
     def set_ml_limit(self, value: str | int) -> None:
         try:
@@ -940,6 +1018,14 @@ class TrackerState(rx.State):
         self.ml_has_comparison = False
         self.ml_comparison = {}
 
+    def _landed_for_ml_product(self, external_id: str) -> dict[str, str] | None:
+        stable_external_id = external_id.strip()
+        if not stable_external_id or stable_external_id != self.alibaba_landed_product_id:
+            return None
+        if not self.alibaba_landed_has_result:
+            return None
+        return self.alibaba_landed_result
+
     def _ml_benchmark_row_maps(self) -> list[dict[str, object]]:
         return [
             _ml_row_mapping(item)
@@ -950,6 +1036,45 @@ class TrackerState(rx.State):
             )
         ]
 
+    def _ml_active_search_product_id(self) -> str:
+        if not self.ml_has_alibaba_context:
+            return ""
+        return str(self.ml_alibaba_context.get("external_id", "") or "")
+
+    def _finalize_mercadolibre_search(
+        self,
+        *,
+        search_product_id: str,
+        query: str,
+        rows: list[MercadoLibreResultRow] | None = None,
+        summary: dict[str, str] | None = None,
+        ui_status: str = "",
+        error_message: str | None = None,
+    ) -> None:
+        # A second search cannot start while ml_is_loading is True, so this
+        # in-flight request still owns the loading flag when context/query changed.
+        current_product_id = self._ml_active_search_product_id()
+        if search_product_id != current_product_id or query.strip() != self.ml_query.strip():
+            self.ml_is_loading = False
+            if self.ml_ui_status == UI_LOADING:
+                self.ml_ui_status = UI_INITIAL
+            return
+        self.ml_is_loading = False
+        if error_message is not None:
+            self.ml_error = error_message
+            self.ml_results = []
+            self.ml_summary = {}
+            self.ml_ui_status = UI_ERROR
+            self._invalidate_ml_comparison()
+            return
+        self.ml_error = ""
+        self.ml_results = list(rows or [])
+        self.ml_summary = dict(summary or {})
+        self.ml_ui_status = ui_status or UI_EMPTY
+        self.ml_last_search_query = query.strip()
+        self.ml_association_product_id = search_product_id
+        self._invalidate_ml_comparison()
+
     @rx.event(background=True)
     async def search_mercadolibre(self) -> None:
         async with self:
@@ -957,6 +1082,7 @@ class TrackerState(rx.State):
                 return
             query = self.ml_query
             limit = self.ml_limit
+            search_product_id = self._ml_active_search_product_id()
             if not isinstance(query, str) or not query.strip():
                 self.ml_error = services.MERCADOLIBRE_QUERY_ERROR
                 self.ml_results = []
@@ -988,12 +1114,11 @@ class TrackerState(rx.State):
         except Exception as exc:  # noqa: BLE001 - sanitized before display
             message = services.sanitize_mercadolibre_error(exc)
             async with self:
-                self.ml_is_loading = False
-                self.ml_error = message
-                self.ml_results = []
-                self.ml_summary = {}
-                self.ml_ui_status = UI_ERROR
-                self._invalidate_ml_comparison()
+                self._finalize_mercadolibre_search(
+                    search_product_id=search_product_id,
+                    query=query,
+                    error_message=message,
+                )
             return
 
         rows = [
@@ -1019,15 +1144,20 @@ class TrackerState(rx.State):
             for item in payload.get("results") or []
         ]
         async with self:
-            self.ml_is_loading = False
-            self.ml_error = ""
-            self.ml_results = rows
-            self.ml_summary = dict(payload.get("summary") or {})
-            self.ml_ui_status = str(payload.get("ui_status") or UI_EMPTY)
-            self._invalidate_ml_comparison()
+            self._finalize_mercadolibre_search(
+                search_product_id=search_product_id,
+                query=query,
+                rows=rows,
+                summary=dict(payload.get("summary") or {}),
+                ui_status=str(payload.get("ui_status") or UI_EMPTY),
+            )
 
     def compare_ml_with_landed_cost(self) -> None:
-        landed = self.alibaba_landed_result if self.alibaba_landed_has_result else None
+        if self.ml_has_alibaba_context:
+            selected_id = self.ml_alibaba_context.get("external_id", "")
+            landed = self._landed_for_ml_product(selected_id)
+        else:
+            landed = self.alibaba_landed_result if self.alibaba_landed_has_result else None
         row = services.compare_mercadolibre_with_landed_cost(
             self._ml_benchmark_row_maps(),
             landed,
@@ -1384,3 +1514,35 @@ class TrackerState(rx.State):
     @rx.var
     def ml_comparison_comparable(self) -> bool:
         return self.ml_has_comparison and self.ml_comparison.get("comparable") == "1"
+
+    @rx.var
+    def ml_show_alibaba_association(self) -> bool:
+        if not self.ml_has_alibaba_context or self.ml_ui_status != UI_SUCCESS:
+            return False
+        if self.ml_query.strip() != self.ml_last_search_query.strip():
+            return False
+        return self.ml_alibaba_context.get("external_id", "") == self.ml_association_product_id
+
+    @rx.var
+    def ml_alibaba_association(self) -> dict[str, str]:
+        if not self.ml_show_alibaba_association:
+            return services.empty_alibaba_ml_association()
+        selected_id = self.ml_alibaba_context.get("external_id", "")
+        landed = self._landed_for_ml_product(selected_id)
+        context = services.build_alibaba_ml_context(
+            external_id=selected_id,
+            title=self.ml_alibaba_context.get("title", ""),
+            supplier=self.ml_alibaba_context.get("supplier", ""),
+            supplier_price=self.ml_alibaba_context.get("supplier_price", ""),
+            currency=self.ml_alibaba_context.get("currency", ""),
+            desired_quantity=self.ml_alibaba_context.get("desired_quantity", ""),
+            landed_row=landed,
+        )
+        comparison = None
+        if context["has_landed"] == "1":
+            comparison = services.compare_mercadolibre_with_landed_cost(
+                self._ml_benchmark_row_maps(),
+                landed,
+                min_relevance=self.ml_min_relevance,
+            )
+        return services.build_alibaba_ml_association(context, self.ml_live_summary, comparison)

@@ -845,6 +845,7 @@ def calculate_alibaba_negotiation(
     row = negotiation_plan_to_row(plan)
     row.update(
         {
+            "product_id": str(catalog_row.get("product_id") or "").strip(),
             "ladder_text": ladder_text if isinstance(ladder_text, str) else "",
             "expected_resale_price": (
                 ""
@@ -1242,6 +1243,14 @@ MERCADOLIBRE_QUERY_ERROR = "Indica un término de búsqueda."
 MERCADOLIBRE_LIMIT_ERROR = "La cantidad debe estar entre 1 y 50."
 MERCADOLIBRE_LANDED_MISSING = "Calcula el costo Venezuela en Alibaba antes de comparar."
 MERCADOLIBRE_PUBLISHED_NOTE = "Precios publicados observados en Mercado Libre Venezuela"
+MERCADOLIBRE_NEED_LANDED_FOR_PROFIT = (
+    "Calcula primero el costo puesto en Venezuela para este producto."
+)
+MERCADOLIBRE_SPARSE_BENCHMARK = "Muy pocos comparables para una referencia robusta."
+MERCADOLIBRE_BENCHMARK_QUALITY_NOTE = (
+    "La calidad del benchmark depende de qué tan comparables sean los resultados encontrados."
+)
+MERCADOLIBRE_CURRENCY_MISMATCH = "Las monedas no son comparables sin una fuente de conversión."
 
 
 def can_start_mercadolibre_search(is_loading: bool) -> bool:
@@ -1383,6 +1392,7 @@ def build_mercadolibre_summary(
     currency = benchmark.currency
     return {
         "comparables": f"{benchmark.comparable_count} de {benchmark.total_results}",
+        "comparable_count": str(benchmark.comparable_count),
         "minimo": format_mercadolibre_money(benchmark.minimum, currency),
         "p25": format_mercadolibre_money(benchmark.p25, currency),
         "mediana": format_mercadolibre_money(benchmark.median, currency),
@@ -1585,3 +1595,137 @@ def compare_mercadolibre_with_landed_cost(
         "high_profit": _profit(high),
         "high_margin": _margin(high),
     }
+
+
+def suggest_mercadolibre_query(*, current_query: object, fallback_query: object) -> str:
+    """Reuse a user-entered query. Never derive the suggestion from a product title."""
+
+    for value in (current_query, fallback_query):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def build_alibaba_ml_context(
+    *,
+    external_id: object,
+    title: object,
+    supplier: object = "",
+    supplier_price: object = "",
+    currency: object = "",
+    desired_quantity: object = "",
+    landed_row: Mapping[str, object] | None = None,
+) -> dict[str, str]:
+    """Public Alibaba fields plus current landed unit cost. No raw provider payload."""
+
+    from bera_price_tracker.application.mercadolibre_statistics import format_mercadolibre_money
+
+    product_id = str(external_id or "").strip()
+    landed, landed_currency = parse_landed_unit_from_display_row(landed_row)
+    has_landed = landed is not None
+    currency_text = str(currency or "").strip().upper()
+    return {
+        "external_id": product_id,
+        "title": str(title or "").strip() or "Sin título",
+        "supplier": str(supplier or "").strip() or "—",
+        "supplier_price": str(supplier_price or "").strip() or "—",
+        "currency": currency_text,
+        "desired_quantity": str(desired_quantity or "").strip(),
+        "has_landed": "1" if has_landed else "0",
+        "landed": format_mercadolibre_money(landed, landed_currency) if has_landed else "",
+        "landed_raw": f"{landed:f}" if has_landed else "",
+        "landed_currency": landed_currency if has_landed else "",
+    }
+
+
+def empty_alibaba_ml_association() -> dict[str, str]:
+    return {
+        "visible": "0",
+        "product_title": "",
+        "supplier": "",
+        "supplier_price": "",
+        "landed": "",
+        "p25": "",
+        "median": "",
+        "p75": "",
+        "min": "",
+        "max": "",
+        "comparable_count": "0",
+        "has_profitability": "0",
+        "sparse": "0",
+        "sparse_message": "",
+        "missing_landed_message": "",
+        "currency_message": "",
+        "quality_note": MERCADOLIBRE_BENCHMARK_QUALITY_NOTE,
+        "published_note": MERCADOLIBRE_PUBLISHED_NOTE,
+        "conservative_price": "",
+        "conservative_profit": "",
+        "conservative_margin": "",
+        "typical_price": "",
+        "typical_profit": "",
+        "typical_margin": "",
+        "high_price": "",
+        "high_profit": "",
+        "high_margin": "",
+        "uses_min_as_scenario": "0",
+        "uses_max_as_scenario": "0",
+    }
+
+
+def _summary_comparable_count(summary: Mapping[str, object]) -> int:
+    raw = summary.get("comparable_count")
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    text = str(raw or summary.get("comparables") or "").strip()
+    head = text.split(" ", 1)[0]
+    try:
+        return int(head)
+    except ValueError:
+        return 0
+
+
+def build_alibaba_ml_association(
+    context: Mapping[str, object],
+    summary: Mapping[str, object],
+    comparison: Mapping[str, object] | None,
+) -> dict[str, str]:
+    """Associate the current published-price benchmark with one Alibaba product."""
+
+    row = empty_alibaba_ml_association()
+    if not context or not str(context.get("external_id") or "").strip():
+        return row
+    comparable_count = _summary_comparable_count(summary)
+    has_landed = str(context.get("has_landed") or "") == "1"
+    comparison_row = dict(comparison or {})
+    comparable = comparison_row.get("comparable") == "1"
+    mismatch = comparison_row.get("message") == MERCADOLIBRE_CURRENCY_MISMATCH
+    row.update(
+        {
+            "visible": "1",
+            "product_title": str(context.get("title") or ""),
+            "supplier": str(context.get("supplier") or "—"),
+            "supplier_price": str(context.get("supplier_price") or "—"),
+            "landed": str(context.get("landed") or comparison_row.get("landed") or ""),
+            "p25": str(summary.get("p25") or ""),
+            "median": str(summary.get("mediana") or ""),
+            "p75": str(summary.get("p75") or ""),
+            "min": str(summary.get("minimo") or ""),
+            "max": str(summary.get("maximo") or ""),
+            "comparable_count": str(comparable_count),
+            "has_profitability": "1" if comparable else "0",
+            "sparse": "1" if comparable_count < 3 else "0",
+            "sparse_message": MERCADOLIBRE_SPARSE_BENCHMARK if comparable_count < 3 else "",
+            "missing_landed_message": ("" if has_landed else MERCADOLIBRE_NEED_LANDED_FOR_PROFIT),
+            "currency_message": MERCADOLIBRE_CURRENCY_MISMATCH if mismatch else "",
+            "conservative_price": str(comparison_row.get("conservative_price") or ""),
+            "conservative_profit": str(comparison_row.get("conservative_profit") or ""),
+            "conservative_margin": str(comparison_row.get("conservative_margin") or ""),
+            "typical_price": str(comparison_row.get("typical_price") or ""),
+            "typical_profit": str(comparison_row.get("typical_profit") or ""),
+            "typical_margin": str(comparison_row.get("typical_margin") or ""),
+            "high_price": str(comparison_row.get("high_price") or ""),
+            "high_profit": str(comparison_row.get("high_profit") or ""),
+            "high_margin": str(comparison_row.get("high_margin") or ""),
+        }
+    )
+    return row
