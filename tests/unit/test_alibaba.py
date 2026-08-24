@@ -967,6 +967,8 @@ def test_missing_max_price_is_treated_as_simple_price() -> None:
     product = SimpleNamespace(min_price=Decimal("4.03"), currency="USD")
     assert alibaba_price_bounds(product) == (Decimal("4.03"), Decimal("4.03"))
     assert alibaba_representative_price(product) == Decimal("4.03")
+    assert alibaba_price_bounds(SimpleNamespace(currency="USD")) is None
+    assert alibaba_representative_price(SimpleNamespace(currency="USD")) is None
 
 
 def test_typical_range_unavailable_if_either_percentile_is_missing() -> None:
@@ -1007,6 +1009,14 @@ def test_duplicate_prices_keep_median_and_percentiles() -> None:
 
 
 def test_five_prices_hit_exact_percentile_index() -> None:
+    """Exact P25/P75 indexes, plus documentation of remaining equivalent mutants.
+
+    Survivors left in this module are equivalent or defensive: TypeError/ValueError
+    punctuation, ``localcontext(None)``/``rounding=None`` (Decimal defaults are
+    already ``ROUND_HALF_EVEN``), ``sum(values, Decimal("0"))`` vs ``sum(values)``,
+    calculation-context digit padding under the prec=50 floor, and the inner
+    ``bounds is None`` continue after USD usability already required bounds.
+    """
     ordered = [Decimal(str(value)) for value in (1, 2, 3, 4, 5)]
     assert alibaba_percentile(ordered, Decimal("0.25")) == Decimal("2")
     assert alibaba_percentile(ordered, Decimal("0.75")) == Decimal("4")
