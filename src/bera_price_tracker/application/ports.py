@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         AIClassification,
         SanitizedProductCandidate,
     )
+    from bera_price_tracker.application.facebook_products import FacebookProductSearchResult
     from bera_price_tracker.application.product_translation import (
         ProductTranslationRequest,
         ProductTranslationResult,
@@ -121,6 +122,16 @@ class MercadoLibreSearchProvider(Protocol):
 
     def search(self, query: str, limit: int) -> list[MercadoLibreListing]:
         """Return mapped Mercado Libre listings for one query."""
+
+        ...
+
+
+@runtime_checkable
+class FacebookMarketplaceProductSearchProvider(Protocol):
+    """Read-only generic Facebook Marketplace Venezuela search."""
+
+    def search(self, query: str, city: str, limit: int) -> FacebookProductSearchResult:
+        """Return only explicitly priced, sanitized listings for one Actor run."""
 
         ...
 

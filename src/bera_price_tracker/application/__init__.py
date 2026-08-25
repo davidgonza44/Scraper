@@ -93,6 +93,16 @@ from bera_price_tracker.application.diagnostics import (
     DiagnosticReport,
     DiagnosticStatus,
 )
+from bera_price_tracker.application.facebook_products import (
+    FacebookPriceDecision,
+    FacebookProductSearchMetrics,
+    FacebookProductSearchResult,
+    FacebookRejectionReason,
+    SearchFacebookMarketplaceProducts,
+    classify_explicit_facebook_price,
+    is_explicitly_priced_listing,
+    validate_facebook_product_search,
+)
 from bera_price_tracker.application.facebook_venezuela_price import (
     normalize_facebook_venezuela_price,
 )
@@ -125,6 +135,7 @@ from bera_price_tracker.application.ports import (
     AlibabaSearchProvider,
     CollectionInspectionRepository,
     ExchangeRateProvider,
+    FacebookMarketplaceProductSearchProvider,
     ListingHistoryRepository,
     ListingRepository,
     MarketplaceProvider,
@@ -246,6 +257,7 @@ __all__ = [
     "AlibabaPriceStatistics",
     "AlibabaSearchProvider",
     "MercadoLibreSearchProvider",
+    "FacebookMarketplaceProductSearchProvider",
     "ClassificationSource",
     "CollectionClock",
     "CollectionInspectionRepository",
@@ -281,6 +293,14 @@ __all__ = [
     "StatisticsUnavailableError",
     "calculate_listing_statistics",
     "normalize_facebook_venezuela_price",
+    "FacebookPriceDecision",
+    "FacebookProductSearchMetrics",
+    "FacebookProductSearchResult",
+    "FacebookRejectionReason",
+    "SearchFacebookMarketplaceProducts",
+    "classify_explicit_facebook_price",
+    "is_explicitly_priced_listing",
+    "validate_facebook_product_search",
     "CargoPackagingInput",
     "ImportOtherCosts",
     "LandedCostAnalysis",

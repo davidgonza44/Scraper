@@ -1317,6 +1317,205 @@ MERCADOLIBRE_BENCHMARK_QUALITY_NOTE = (
 MERCADOLIBRE_CURRENCY_MISMATCH = "Las monedas no son comparables sin una fuente de conversión."
 
 
+FACEBOOK_PRODUCTS_GENERIC_USER_MESSAGE = (
+    "No se pudo completar la búsqueda en Facebook Marketplace Venezuela."
+)
+FACEBOOK_PRODUCTS_EMPTY_MESSAGE = (
+    "No se encontraron publicaciones con precio explícito en Facebook Marketplace Venezuela."
+)
+FACEBOOK_PRODUCTS_LOADING_MESSAGE = (
+    "Buscando productos con precio en Facebook Marketplace Venezuela..."
+)
+FACEBOOK_PRODUCTS_QUERY_ERROR = "Indica un término de búsqueda."
+FACEBOOK_PRODUCTS_CITY_ERROR = "Indica una ciudad de Venezuela."
+FACEBOOK_PRODUCTS_LIMIT_ERROR = "La cantidad debe estar entre 1 y 5."
+FACEBOOK_PRODUCTS_PUBLISHED_NOTE = (
+    "Solo precios explícitos, finitos y mayores que cero. Precio fuente preservado; "
+    "USD Facebook-Venezuela usa el mismo valor numérico, con evidencia y sin FX."
+)
+
+
+def sanitize_facebook_product_error(exc: BaseException) -> str:
+    logger.info("Generic Facebook product search failed: %s", type(exc).__name__)
+    if isinstance(exc, ValueError) and "query" in str(exc):
+        return FACEBOOK_PRODUCTS_QUERY_ERROR
+    if isinstance(exc, ValueError) and "city" in str(exc):
+        return FACEBOOK_PRODUCTS_CITY_ERROR
+    if isinstance(exc, (TypeError, ValueError)) and "limit" in str(exc):
+        return FACEBOOK_PRODUCTS_LIMIT_ERROR
+    return FACEBOOK_PRODUCTS_GENERIC_USER_MESSAGE
+
+
+def _facebook_product_money(value: Decimal | None, currency: str | None) -> str:
+    if value is None:
+        return "unavailable"
+    amount = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
+    if not isinstance(currency, str) or not currency.strip() or currency == "UNKNOWN":
+        return f"{amount} · moneda no disponible"
+    return f"{amount} {currency.strip().upper()}"
+
+
+def facebook_product_listing_to_row(listing: object, relevance: object) -> dict[str, Any]:
+    score = int(getattr(relevance, "relevance_score", 0) or 0)
+    matched = int(getattr(relevance, "matched_tokens", 0) or 0)
+    total = int(getattr(relevance, "total_query_tokens", 0) or 0)
+    price = getattr(listing, "price", None)
+    currency = str(getattr(listing, "currency", "") or "UNKNOWN")
+    formatted_price = str(getattr(listing, "formatted_amount", "") or "")
+    usd_amount = getattr(listing, "usd_amount", None)
+    usd_status = str(getattr(listing, "usd_normalization_status", "") or "")
+    usd_evidence = _as_tuple(getattr(listing, "usd_evidence", ()))
+    from bera_price_tracker.application.facebook_relevance import (
+        format_relevance_display,
+        relevance_label,
+    )
+    from bera_price_tracker.domain.money import (
+        FACEBOOK_VENEZUELA_EVIDENCE,
+        NormalizationStatus,
+        format_usd_line,
+    )
+
+    usd_price = format_usd_line(usd_amount) if isinstance(usd_amount, Decimal) else ""
+    if FACEBOOK_VENEZUELA_EVIDENCE in usd_evidence:
+        usd_basis = "facebook_venezuela_normalized_usd"
+        usd_provenance = "Facebook Venezuela · mismo valor numérico · sin FX"
+    elif usd_status == NormalizationStatus.ALREADY_USD.value:
+        usd_basis = "source_usd"
+        usd_provenance = "USD explícito del proveedor"
+    else:
+        usd_basis = ""
+        usd_provenance = ""
+
+    return {
+        "external_id": str(getattr(listing, "external_id", "") or ""),
+        "title": str(getattr(listing, "title", "") or ""),
+        "permalink": str(getattr(listing, "url", "") or ""),
+        "price": _facebook_product_money(price, currency),
+        "price_raw": f"{price:f}" if isinstance(price, Decimal) else "",
+        "currency": currency,
+        "formatted_price": formatted_price,
+        "source_price_note": (
+            f"{formatted_price} · etiqueta fuente del proveedor Facebook"
+            if formatted_price
+            else "Etiqueta fuente del proveedor Facebook"
+        ),
+        "usd_price": usd_price,
+        "usd_amount": f"{usd_amount:f}" if isinstance(usd_amount, Decimal) else "",
+        "usd_normalization_status": usd_status,
+        "usd_evidence": ", ".join(usd_evidence),
+        "usd_basis": usd_basis,
+        "usd_provenance": usd_provenance,
+        "location": str(getattr(listing, "location", "") or "—"),
+        "representative": f"{price:f}" if isinstance(price, Decimal) else "",
+        "relevance_value": score,
+        "relevance": format_relevance_display(score),
+        "relevance_label": relevance_label(score),
+        "relevance_tokens": f"{matched}/{total} términos de la búsqueda",
+        "is_outlier": False,
+    }
+
+
+def _facebook_statistics_rows(listings: Sequence[object]) -> list[dict[str, str]]:
+    from bera_price_tracker.application.facebook_statistics import (
+        FacebookStatisticsBasis,
+        calculate_facebook_statistics,
+    )
+    from bera_price_tracker.domain.money import format_usd_display
+
+    rows: list[dict[str, str]] = []
+    for stats in calculate_facebook_statistics(listings):
+        currency = stats.currency
+        normalized_facebook_usd = (
+            stats.basis is FacebookStatisticsBasis.FACEBOOK_VENEZUELA_NORMALIZED_USD
+        )
+
+        def money(
+            value: Decimal | None,
+            normalized: bool = normalized_facebook_usd,
+            row_currency: str | None = currency,
+        ) -> str:
+            if normalized and value is not None:
+                return format_usd_display(value)
+            return _facebook_product_money(value, row_currency)
+
+        rows.append(
+            {
+                "currency": currency or "",
+                "label": (
+                    "USD normalizado · Facebook Venezuela"
+                    if normalized_facebook_usd
+                    else f"{currency or 'UNKNOWN'} · moneda fuente"
+                ),
+                "basis": stats.basis.value,
+                "source_currencies": ", ".join(stats.source_currencies),
+                "normalization_status": ", ".join(stats.normalization_statuses),
+                "evidence": ", ".join(stats.evidence),
+                "provenance": (
+                    "Mismo valor numérico de la etiqueta VEF del proveedor; sin FX."
+                    if normalized_facebook_usd
+                    else "Benchmark de moneda fuente explícita; sin conversión."
+                ),
+                "count": str(stats.priced_listings),
+                "minimum": money(stats.minimum),
+                "average": money(stats.average),
+                "median": money(stats.median),
+                "maximum": money(stats.maximum),
+                "p25": money(stats.p25),
+                "p75": money(stats.p75),
+                "iqr": money(stats.iqr),
+            }
+        )
+    return rows
+
+
+def run_facebook_product_search(
+    query_text: str,
+    city: str,
+    limit: int,
+    *,
+    search_service: Any | None = None,
+) -> dict[str, Any]:
+    """Run one generic read-only Facebook search; invalid prices never reach scoring."""
+
+    from bera_price_tracker.application.facebook_products import (
+        SearchFacebookMarketplaceProducts,
+    )
+    from bera_price_tracker.application.facebook_relevance import score_facebook_relevance
+    from bera_price_tracker.composition import build_facebook_product_search
+
+    service = search_service if search_service is not None else build_facebook_product_search()
+    if not isinstance(service, SearchFacebookMarketplaceProducts) and not hasattr(
+        service, "execute"
+    ):
+        raise TypeError("search_service must implement execute")
+    result = service.execute(query_text, city, limit)
+    listings = list(result.listings)
+    relevances = score_facebook_relevance(query_text, listings)
+    rows = [
+        facebook_product_listing_to_row(listing, relevance)
+        for listing, relevance in zip(listings, relevances, strict=True)
+    ]
+    metrics = result.metrics
+    return {
+        "ui_status": "SUCCESS" if rows else "EMPTY",
+        "results": rows,
+        "summary": {
+            "fetched": str(metrics.fetched),
+            "usable": str(metrics.usable),
+            "free_price": str(metrics.free_price),
+            "invalid_price": str(metrics.invalid_price),
+            "out_of_scope_location": str(metrics.out_of_scope_location),
+            "missing_product_id": str(metrics.missing_product_id),
+            "empty_title": str(metrics.empty_title),
+            "duplicate_product_id": str(metrics.duplicate_product_id),
+            "source_error": str(metrics.source_error),
+            "note": FACEBOOK_PRODUCTS_PUBLISHED_NOTE,
+        },
+        "statistics": _facebook_statistics_rows(listings),
+        "error_message": "",
+    }
+
+
 def can_start_mercadolibre_search(is_loading: bool) -> bool:
     return not is_loading
 

@@ -1025,11 +1025,23 @@ def _alibaba_relevance_cell(row: rx.Var) -> rx.Component:
 def _alibaba_venezuela_cell(row: rx.Var) -> rx.Component:
     return rx.cond(
         row["product_id"] != "",
-        rx.button(
-            "Buscar comparables en Venezuela",
-            on_click=TrackerState.prepare_ml_comparables_from_alibaba_result(row["product_id"]),
-            size="1",
-            variant="outline",
+        rx.vstack(
+            rx.button(
+                "Comparables Mercado Libre",
+                on_click=TrackerState.prepare_ml_comparables_from_alibaba_result(row["product_id"]),
+                size="1",
+                variant="outline",
+            ),
+            rx.button(
+                "Buscar comparables en Facebook",
+                on_click=TrackerState.prepare_facebook_comparables_from_alibaba_result(
+                    row["product_id"]
+                ),
+                size="1",
+                variant="outline",
+            ),
+            spacing="2",
+            align_items="start",
         ),
         rx.text("Sin ID", size="1", color=MUTED),
     )
@@ -1282,6 +1294,16 @@ def _alibaba_tracking() -> rx.Component:
                                 "Buscar comparables en Venezuela",
                                 on_click=TrackerState.prepare_ml_comparables_from_alibaba_tracked(
                                     item["product_id"]
+                                ),
+                                size="1",
+                                variant="outline",
+                            ),
+                            rx.button(
+                                "Buscar comparables en Facebook",
+                                on_click=(
+                                    TrackerState.prepare_facebook_comparables_from_alibaba_tracked(
+                                        item["product_id"]
+                                    )
                                 ),
                                 size="1",
                                 variant="outline",
@@ -2169,6 +2191,320 @@ def _alibaba_body() -> rx.Component:
     )
 
 
+def _facebook_products_form() -> rx.Component:
+    return rx.box(
+        rx.vstack(
+            rx.cond(
+                TrackerState.facebook_product_has_alibaba_context,
+                rx.vstack(
+                    rx.text("Producto Alibaba seleccionado", size="1", color=MUTED),
+                    rx.text(
+                        TrackerState.facebook_product_alibaba_context["title"],
+                        size="3",
+                        weight="medium",
+                        color=styles.TEXT_PRIMARY,
+                    ),
+                    rx.cond(
+                        TrackerState.facebook_product_translation_is_loading,
+                        rx.hstack(
+                            rx.spinner(size="1"),
+                            rx.text("Preparando consulta editable...", size="2", color=MUTED),
+                            spacing="2",
+                        ),
+                        rx.cond(
+                            TrackerState.facebook_product_translated_title != "",
+                            rx.text(
+                                "Título traducido: "
+                                + TrackerState.facebook_product_translated_title,
+                                size="2",
+                                color=MUTED,
+                            ),
+                            rx.text(
+                                TrackerState.facebook_product_translation_error,
+                                size="2",
+                                color=MUTED,
+                            ),
+                        ),
+                    ),
+                    rx.cond(
+                        TrackerState.facebook_product_translation_warning != "",
+                        rx.text(
+                            TrackerState.facebook_product_translation_warning,
+                            size="1",
+                            color=BRICK,
+                        ),
+                    ),
+                    spacing="1",
+                    width="100%",
+                    align_items="start",
+                ),
+            ),
+            rx.hstack(
+                rx.vstack(
+                    rx.text(
+                        "Consulta Facebook",
+                        size="1",
+                        color=styles.TEXT_SECONDARY,
+                        weight="medium",
+                    ),
+                    rx.input(
+                        value=TrackerState.facebook_product_query,
+                        on_change=TrackerState.set_facebook_product_query,
+                        placeholder="mouse inalámbrico",
+                        width="100%",
+                        **styles.INPUT_STYLE,
+                    ),
+                    spacing="1",
+                    width="100%",
+                    align_items="start",
+                ),
+                rx.vstack(
+                    rx.text("Ciudad", size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+                    rx.input(
+                        value=TrackerState.facebook_product_city,
+                        on_change=TrackerState.set_facebook_product_city,
+                        placeholder="caracas",
+                        width="150px",
+                        **styles.INPUT_STYLE,
+                    ),
+                    spacing="1",
+                    align_items="start",
+                ),
+                rx.vstack(
+                    rx.text("Límite", size="1", color=styles.TEXT_SECONDARY, weight="medium"),
+                    rx.select(
+                        ["1", "2", "3", "4", "5"],
+                        value=TrackerState.facebook_product_limit.to_string(),
+                        on_change=TrackerState.set_facebook_product_limit,
+                        width="88px",
+                        **styles.SELECT_STYLE,
+                    ),
+                    spacing="1",
+                    align_items="start",
+                ),
+                spacing="4",
+                width="100%",
+                align="end",
+            ),
+            rx.hstack(
+                rx.box(
+                    rx.text("Proveedor", size="1", color=styles.TEXT_SECONDARY),
+                    rx.text("Facebook Marketplace Venezuela", size="3", weight="medium"),
+                    rx.text(
+                        "Solo publicaciones con precio explícito",
+                        size="1",
+                        color=GREEN,
+                    ),
+                ),
+                rx.spacer(),
+                rx.button(
+                    rx.cond(
+                        TrackerState.facebook_product_is_loading,
+                        rx.hstack(
+                            rx.spinner(size="1"),
+                            rx.text("Buscando productos..."),
+                            spacing="2",
+                        ),
+                        rx.text("Buscar productos"),
+                    ),
+                    on_click=TrackerState.search_facebook_products,
+                    disabled=TrackerState.facebook_product_is_loading,
+                    **styles.BUTTON_STYLE,
+                    padding_x="18px",
+                    padding_y="10px",
+                ),
+                width="100%",
+                align="center",
+            ),
+            spacing="5",
+            width="100%",
+        ),
+        background_color=CARD,
+        border=f"1px solid {RULE}",
+        padding="22px",
+        width="100%",
+    )
+
+
+def _facebook_products_metric(label: str, key: str, *, accent: bool = False) -> rx.Component:
+    return rx.box(
+        rx.text(label, size="1", color=MUTED),
+        rx.text(
+            TrackerState.facebook_product_summary[key],
+            size="5",
+            weight="medium",
+            color=BRICK if accent else styles.TEXT_PRIMARY,
+        ),
+        min_width="128px",
+        padding="12px 14px",
+        background_color=CARD,
+        border=f"1px solid {RULE}",
+    )
+
+
+def _facebook_currency_stats(row: rx.Var) -> rx.Component:
+    return rx.box(
+        rx.text(row["label"], size="2", weight="medium", color=GREEN),
+        rx.text(row["count"] + " comparables", size="1", color=MUTED),
+        rx.text(row["provenance"], size="1", color=MUTED),
+        rx.hstack(
+            rx.text("Mín " + row["minimum"], size="1"),
+            rx.text("P25 " + row["p25"], size="1"),
+            rx.text("Mediana " + row["median"], size="1"),
+            rx.text("Promedio " + row["average"], size="1"),
+            rx.text("P75 " + row["p75"], size="1"),
+            rx.text("Máx " + row["maximum"], size="1"),
+            rx.text("IQR " + row["iqr"], size="1"),
+            spacing="3",
+            wrap="wrap",
+        ),
+        padding="12px 14px",
+        background_color=CARD,
+        border=f"1px solid {RULE}",
+        width="100%",
+    )
+
+
+def _facebook_products_summary() -> rx.Component:
+    return rx.vstack(
+        rx.text(
+            TrackerState.facebook_product_summary["note"],
+            size="2",
+            color=MUTED,
+        ),
+        rx.hstack(
+            _facebook_products_metric("Obtenidos", "fetched"),
+            _facebook_products_metric("Usables", "usable"),
+            _facebook_products_metric("Gratis excluidos", "free_price", accent=True),
+            _facebook_products_metric("Precio inválido", "invalid_price", accent=True),
+            spacing="3",
+            wrap="wrap",
+            width="100%",
+        ),
+        rx.foreach(TrackerState.facebook_product_statistics, _facebook_currency_stats),
+        spacing="3",
+        width="100%",
+    )
+
+
+def _facebook_products_provenance() -> rx.Component:
+    return rx.cond(
+        TrackerState.facebook_product_show_provenance,
+        rx.box(
+            rx.text("Contexto Alibaba vigente", size="2", weight="medium", color=GREEN),
+            rx.text(
+                TrackerState.facebook_product_provenance["title"],
+                size="2",
+                color=styles.TEXT_PRIMARY,
+            ),
+            rx.text(
+                "ID: " + TrackerState.facebook_product_provenance["external_id"],
+                size="1",
+                color=MUTED,
+            ),
+            rx.text(
+                "Consulta Facebook: " + TrackerState.facebook_product_provenance["facebook_query"],
+                size="1",
+                color=MUTED,
+            ),
+            padding="12px 14px",
+            border=f"1px solid {GREEN}",
+            width="100%",
+        ),
+    )
+
+
+def _facebook_products_table() -> rx.Component:
+    return rx.box(
+        rx.table.root(
+            rx.table.header(
+                rx.table.row(
+                    rx.table.column_header_cell("Producto"),
+                    rx.table.column_header_cell("Precio"),
+                    rx.table.column_header_cell("Moneda"),
+                    rx.table.column_header_cell("Ubicación"),
+                    rx.table.column_header_cell("Relevancia"),
+                    rx.table.column_header_cell("Link"),
+                )
+            ),
+            rx.table.body(
+                rx.foreach(
+                    TrackerState.facebook_product_results,
+                    lambda row: rx.table.row(
+                        rx.table.cell(row["title"]),
+                        rx.table.cell(
+                            rx.vstack(
+                                rx.text(row["price"], color=BRICK, weight="medium"),
+                                rx.text(row["source_price_note"], size="1", color=MUTED),
+                                rx.text(row["usd_price"], size="2", color=GREEN, weight="medium"),
+                                rx.text(row["usd_provenance"], size="1", color=MUTED),
+                                spacing="1",
+                                align="start",
+                            )
+                        ),
+                        rx.table.cell(row["currency"]),
+                        rx.table.cell(row["location"]),
+                        rx.table.cell(_ml_relevance_cell(row)),
+                        rx.table.cell(rx.link("Ver", href=row["permalink"], is_external=True)),
+                    ),
+                )
+            ),
+            width="100%",
+        ),
+        overflow_x="auto",
+        width="100%",
+    )
+
+
+def _facebook_products_body() -> rx.Component:
+    return rx.box(
+        rx.cond(
+            TrackerState.facebook_product_ui_status == "INITIAL",
+            rx.text(
+                "Escribe cualquier producto. Facebook se consulta solo al pulsar Buscar productos.",
+                color=MUTED,
+            ),
+        ),
+        rx.cond(
+            TrackerState.facebook_product_ui_status == "LOADING",
+            rx.hstack(
+                rx.spinner(),
+                rx.text("Buscando productos con precio en Facebook Marketplace Venezuela..."),
+                spacing="3",
+                padding_y="20px",
+            ),
+        ),
+        rx.cond(
+            TrackerState.facebook_product_ui_status == "ERROR",
+            rx.box(
+                rx.text(TrackerState.facebook_product_error, color=BRICK),
+                border=f"1px solid {BRICK}",
+                padding="14px 16px",
+                width="100%",
+            ),
+        ),
+        rx.cond(
+            TrackerState.facebook_product_ui_status == "EMPTY",
+            rx.text(
+                "No se encontraron publicaciones con precio explícito.",
+                color=MUTED,
+            ),
+        ),
+        rx.cond(
+            TrackerState.facebook_product_ui_status == "SUCCESS",
+            rx.vstack(
+                _facebook_products_summary(),
+                _facebook_products_provenance(),
+                _facebook_products_table(),
+                spacing="4",
+                width="100%",
+            ),
+        ),
+        width="100%",
+        padding_top="22px",
+    )
+
+
 def _ml_form() -> rx.Component:
     return rx.box(
         rx.vstack(
@@ -2727,9 +3063,14 @@ def dashboard() -> rx.Component:
             _header(),
             rx.hstack(
                 _market_tab(
-                    "Facebook Marketplace",
+                    "Facebook H0019",
                     "facebook",
                     TrackerState.show_facebook_tab,
+                ),
+                _market_tab(
+                    "Facebook Marketplace Venezuela",
+                    "facebook_products",
+                    TrackerState.show_facebook_products_tab,
                 ),
                 _market_tab("Alibaba", "alibaba", TrackerState.show_alibaba_tab),
                 _market_tab(
@@ -2746,17 +3087,26 @@ def dashboard() -> rx.Component:
                 TrackerState.marketplace_tab == "facebook",
                 rx.vstack(_form(), _body(), spacing="0", width="100%"),
                 rx.cond(
-                    TrackerState.marketplace_tab == "alibaba",
+                    TrackerState.marketplace_tab == "facebook_products",
                     rx.vstack(
-                        _alibaba_form(),
-                        _alibaba_body(),
-                        _alibaba_tracking(),
-                        _alibaba_negotiation(),
-                        _alibaba_landed_cost(),
+                        _facebook_products_form(),
+                        _facebook_products_body(),
                         spacing="0",
                         width="100%",
                     ),
-                    rx.vstack(_ml_form(), _ml_body(), spacing="0", width="100%"),
+                    rx.cond(
+                        TrackerState.marketplace_tab == "alibaba",
+                        rx.vstack(
+                            _alibaba_form(),
+                            _alibaba_body(),
+                            _alibaba_tracking(),
+                            _alibaba_negotiation(),
+                            _alibaba_landed_cost(),
+                            spacing="0",
+                            width="100%",
+                        ),
+                        rx.vstack(_ml_form(), _ml_body(), spacing="0", width="100%"),
+                    ),
                 ),
             ),
             max_width="1080px",
