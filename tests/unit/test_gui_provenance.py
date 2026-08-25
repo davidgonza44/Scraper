@@ -265,21 +265,104 @@ def test_fallback_row_does_not_reuse_another_product_landed_cost() -> None:
     assert "6.10" not in str(rows[0]["analysis_detail"])
 
 
-def test_tracker_state_hides_landed_cost_from_unrelated_product() -> None:
+def test_landed_context_applies_only_to_exact_product_ids() -> None:
+    assert comparison.landed_context_applies(PRODUCT_A, PRODUCT_A) is True
+    assert comparison.landed_context_applies(PRODUCT_A, PRODUCT_B) is False
+    assert comparison.landed_context_applies("", PRODUCT_A) is False
+    assert comparison.landed_context_applies(PRODUCT_A, "") is False
+    assert comparison.landed_context_applies("", "") is False
+    assert comparison.landed_context_applies("  ", "  ") is False
+    assert comparison.landed_context_applies(PRODUCT_A, f"{PRODUCT_A} ") is True
+
+
+def test_ml_comparison_landed_cost_does_not_attach_to_another_product() -> None:
+    rows = comparison.build_comparison_rows(
+        alibaba_rows=[
+            _alibaba(PRODUCT_A, "Mouse A"),
+            _alibaba(PRODUCT_B, "Headphones B"),
+        ],
+        ml_rows=[_ml("Headphones ML B")],
+        alibaba_status=UI_SUCCESS,
+        ml_status=UI_SUCCESS,
+        ml_association_id=PRODUCT_B,
+        ml_comparison={
+            "comparable": "1",
+            "landed": "$99.99",
+            "typical_price": "$12.00",
+            "typical_profit": "$2.00",
+        },
+        landed={"unit_landed": "$99.99"},
+        landed_product_id=PRODUCT_A,
+    )
+    by_id = {row["product_id"]: row for row in rows}
+    assert "99.99" in str(by_id[PRODUCT_A]["analysis_detail"])
+    assert "99.99" not in str(by_id[PRODUCT_B]["analysis_detail"])
+    assert by_id[PRODUCT_B]["analysis_heading"] != "Costo puesto"
+
+
+def test_completed_search_views_keep_product_a_landed_off_product_b() -> None:
+    from bera_price_tracker.gui import marketplace_summary, search_session
+
     state = TrackerState()
     state.alibaba_results = [
-        _alibaba(PRODUCT_A, "Mouse A"),
-        _alibaba(PRODUCT_B, "Headphones B"),
+        AlibabaResultRow(
+            product_id=PRODUCT_A,
+            title="Mouse A",
+            price="$4.00",
+            score="72",
+            score_value=72,
+            score_label="Buena",
+            relevance_value=90,
+        ),
+        AlibabaResultRow(
+            product_id=PRODUCT_B,
+            title="Headphones B",
+            price="$8.00",
+            score="88",
+            score_value=88,
+            score_label="Excelente",
+            relevance_value=80,
+        ),
     ]
     state.alibaba_ui_status = UI_SUCCESS
-    state.ml_alibaba_context = {"external_id": PRODUCT_B, "title": "Headphones B"}
-    state.ml_has_alibaba_context = True
+    state.alibaba_summary = {"resultados": "2", "minimo": "USD 4.00", "maximo": "USD 8.00"}
+    state.search_session_active = True
     state.alibaba_landed_has_result = True
     state.alibaba_landed_product_id = PRODUCT_A
-    state.alibaba_landed_result = {"unit_landed": "$6.10"}
+    state.alibaba_landed_result = {"unit_landed": "$99.99", "landed_cost_per_unit": "$99.99"}
+
     by_id = {row.product_id: row for row in state.comparison_rows}
-    assert "6.10" in by_id[PRODUCT_A].analysis_detail
-    assert "6.10" not in by_id[PRODUCT_B].analysis_detail
+    assert "99.99" in by_id[PRODUCT_A].analysis_detail
+    assert "99.99" not in by_id[PRODUCT_B].analysis_detail
+    assert by_id[PRODUCT_B].analysis_heading != "Costo puesto"
+
+    opportunity = search_session.best_opportunity_copy(state._best_alibaba_row())
+    assert opportunity["available"] == "1"
+    assert "Headphones B" in opportunity["detail"]
+    assert "99.99" not in opportunity["detail"]
+    assert "99.99" not in state.best_opportunity_detail
+
+    cards = marketplace_summary.build_marketplace_summaries(
+        alibaba_ui_status=state.alibaba_ui_status,
+        alibaba_summary=state.alibaba_summary,
+        alibaba_rows=state.alibaba_results,
+        facebook_ui_status="INITIAL",
+        facebook_summary={},
+        ml_ui_status="INITIAL",
+        ml_summary={},
+    )
+    assert "99.99" not in str(cards)
+
+    state.ml_alibaba_context = {"external_id": PRODUCT_B, "title": "Headphones B"}
+    state.ml_has_alibaba_context = True
+    by_id = {row.product_id: row for row in state.comparison_rows}
+    assert "99.99" in by_id[PRODUCT_A].analysis_detail
+    assert "99.99" not in by_id[PRODUCT_B].analysis_detail
+
+    state.ml_alibaba_context = {"external_id": PRODUCT_A, "title": "Mouse A"}
+    by_id = {row.product_id: row for row in state.comparison_rows}
+    assert "99.99" in by_id[PRODUCT_A].analysis_detail
+    assert "99.99" not in by_id[PRODUCT_B].analysis_detail
 
 
 def test_shared_association_requires_all_three_ids() -> None:

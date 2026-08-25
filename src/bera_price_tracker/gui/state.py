@@ -793,7 +793,7 @@ class TrackerState(rx.State):
         landed_product_id = self.alibaba_landed_product_id.strip()
         if not self.alibaba_landed_has_result:
             landed = None
-        elif not plan_product_id or not landed_product_id or plan_product_id != landed_product_id:
+        elif not comparison.landed_context_applies(plan_product_id, landed_product_id):
             self.alibaba_negotiation_profitability_hint = (
                 services.ALIBABA_PROFITABILITY_PRODUCT_MISMATCH
             )
