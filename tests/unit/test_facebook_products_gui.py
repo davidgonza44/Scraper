@@ -251,6 +251,10 @@ def test_sanitize_facebook_product_error_is_generic() -> None:
         == services.FACEBOOK_PRODUCTS_CITY_ERROR
     )
     assert (
+        services.sanitize_facebook_product_error(TypeError("limit must be an integer"))
+        == services.FACEBOOK_PRODUCTS_LIMIT_ERROR
+    )
+    assert (
         services.sanitize_facebook_product_error(RuntimeError("Apify token missing"))
         == services.FACEBOOK_PRODUCTS_GENERIC_USER_MESSAGE
     )

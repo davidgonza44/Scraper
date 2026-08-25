@@ -16,6 +16,7 @@ from bera_price_tracker.application.facebook_products import (
     FacebookRejectionReason,
     SearchFacebookMarketplaceProducts,
     classify_explicit_facebook_price,
+    is_explicitly_priced_listing,
     validate_facebook_product_search,
 )
 from bera_price_tracker.application.facebook_statistics import (
@@ -113,6 +114,9 @@ def test_explicit_price_policy(
     expected: FacebookPriceDecision,
 ) -> None:
     assert classify_explicit_facebook_price(amount, formatted) is expected
+    assert is_explicitly_priced_listing(amount, formatted) is (
+        expected is FacebookPriceDecision.PRICED
+    )
 
 
 def test_mapper_never_reconstructs_amount_from_formatted_text() -> None:
@@ -304,6 +308,25 @@ def test_mapped_dollar_symbol_never_becomes_usd() -> None:
     result, _ = _search(mapped)
     assert result.listings[0].currency == "UNKNOWN"
     assert result.listings[0].usd_amount is None
+
+
+def test_invalid_listing_url_after_price_filter_is_source_error() -> None:
+    result, _ = _search(_record(url="not-a-url"))
+    assert result.listings == ()
+    assert result.metrics.source_error == 1
+    assert result.rejection_reasons == (FacebookRejectionReason.SOURCE_ERROR,)
+
+
+def test_default_clock_is_timezone_aware() -> None:
+    fake = FakeFacebookClient(
+        ApifyFacebookResult(records=(_record(),), fetched=1),
+        [],
+    )
+    provider = FacebookMarketplaceProductSearch(cast(ApifyFacebookMarketplaceClient, fake))
+    result = SearchFacebookMarketplaceProducts(
+        cast(FacebookMarketplaceProductSearchProvider, provider)
+    ).execute("wireless mouse", "caracas", 1)
+    assert result.listings[0].collected_at.tzinfo is not None
 
 
 def test_h0019_provider_contract_remains_specialized() -> None:
