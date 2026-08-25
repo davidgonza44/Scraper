@@ -15,6 +15,9 @@ MODE_SINGLE = "single-market"
 
 SEARCH_LIMIT_OPTIONS: tuple[int, ...] = (1, 3, 5)
 DEFAULT_SEARCH_LIMIT = 3
+SEARCH_MODE_LAYOUT = "two-columns"
+SEARCH_SETUP_TITLE = "Buscar productos"
+SEARCH_SETUP_SUBTITLE = "Encuentra y compara precios en diferentes plataformas"
 
 ALL_PLATFORMS: tuple[str, ...] = (PLATFORM_ALIBABA, PLATFORM_FACEBOOK, PLATFORM_ML)
 
@@ -28,8 +31,8 @@ MODE_LABELS = {
     MODE_SINGLE: "Una sola plataforma",
 }
 MODE_DESCRIPTIONS = {
-    MODE_MULTI: "Busca en Alibaba, Facebook y Mercado Libre",
-    MODE_SINGLE: "Busca solo en la plataforma que elijas",
+    MODE_MULTI: "Busca en Alibaba, Facebook y Mercado Libre.",
+    MODE_SINGLE: "Busca en la plataforma que elijas.",
 }
 PLATFORM_LABELS = {
     PLATFORM_ALIBABA: "Alibaba",

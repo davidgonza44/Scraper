@@ -14,10 +14,16 @@ from bera_price_tracker.gui.brands import (
 )
 
 
-def marketplace_brand(platform: str, *, size: int = 28) -> rx.Component:
+def marketplace_brand(
+    platform: str,
+    *,
+    size: int = 24,
+    show_name: bool = True,
+    name_weight: str = "medium",
+) -> rx.Component:
     spec = brand_spec(platform)
-    if spec.kind == "image":
-        return rx.image(
+    mark = (
+        rx.image(
             src=spec.src,
             alt=spec.alt,
             width=f"{size}px",
@@ -25,25 +31,56 @@ def marketplace_brand(platform: str, *, size: int = 28) -> rx.Component:
             min_width=f"{size}px",
             object_fit="contain",
         )
-    return rx.text(
-        spec.label,
-        size="2",
-        weight="bold",
-        color="#2D3277",
-        line_height="1.2",
+        if spec.kind == "image"
+        else rx.text(
+            spec.label,
+            size="2",
+            weight="bold",
+            color="#2D3277",
+            line_height="1.2",
+            white_space="nowrap",
+        )
+    )
+    if spec.kind == "text":
+        return mark
+    if not show_name:
+        return mark
+    return rx.hstack(
+        mark,
+        rx.text(
+            spec.label,
+            size="2",
+            weight=name_weight,
+            color=styles.TEXT_PRIMARY,
+            white_space="nowrap",
+        ),
+        spacing="2",
+        align="center",
     )
 
 
-def marketplace_brand_alibaba(*, size: int = 28) -> rx.Component:
-    return marketplace_brand(PLATFORM_ALIBABA, size=size)
+def marketplace_brand_alibaba(*, size: int = 24, show_name: bool = True) -> rx.Component:
+    return marketplace_brand(PLATFORM_ALIBABA, size=size, show_name=show_name)
 
 
-def marketplace_brand_facebook(*, size: int = 28) -> rx.Component:
-    return marketplace_brand(PLATFORM_FACEBOOK, size=size)
+def marketplace_brand_facebook(*, size: int = 24, show_name: bool = True) -> rx.Component:
+    return marketplace_brand(PLATFORM_FACEBOOK, size=size, show_name=show_name)
 
 
-def marketplace_brand_ml(*, size: int = 28) -> rx.Component:
-    return marketplace_brand(PLATFORM_ML, size=size)
+def marketplace_brand_ml(*, size: int = 24, show_name: bool = True) -> rx.Component:
+    return marketplace_brand(PLATFORM_ML, size=size, show_name=show_name)
+
+
+def marketplace_brand_switch(platform_id: object, *, size: int = 24) -> rx.Component:
+    return rx.cond(
+        platform_id == PLATFORM_ALIBABA,
+        marketplace_brand_alibaba(size=size),
+        rx.cond(
+            platform_id == PLATFORM_FACEBOOK,
+            marketplace_brand_facebook(size=size),
+            marketplace_brand_ml(size=size),
+        ),
+    )
 
 
 def _tile_card(
@@ -59,7 +96,7 @@ def _tile_card(
         rx.vstack(
             rx.cond(
                 title != "",
-                rx.text(title, size="3", weight="medium", color=styles.TEXT_PRIMARY),
+                rx.text(title, size="2", weight="medium", color=styles.TEXT_PRIMARY),
                 rx.fragment(),
             ),
             rx.cond(
@@ -75,15 +112,15 @@ def _tile_card(
         rx.cond(
             selected,
             rx.center(
-                rx.icon("check", size=14, color=styles.PRIMARY_TEXT),
-                width="22px",
-                height="22px",
+                rx.icon("check", size=12, color=styles.PRIMARY_TEXT),
+                width="20px",
+                height="20px",
                 background=styles.PRIMARY,
                 border_radius="999px",
             ),
             rx.box(
-                width="22px",
-                height="22px",
+                width="20px",
+                height="20px",
                 border=f"1px solid {styles.BORDER_STRONG}",
                 border_radius="999px",
                 background=styles.SURFACE,
@@ -98,7 +135,7 @@ def _tile_card(
         rx.box(
             inner,
             on_click=on_click,
-            padding="14px 16px",
+            padding="12px 14px",
             cursor="pointer",
             width="100%",
             **styles.SELECTED_CARD_STYLE,
@@ -106,7 +143,7 @@ def _tile_card(
         rx.box(
             inner,
             on_click=on_click,
-            padding="14px 16px",
+            padding="12px 14px",
             cursor="pointer",
             width="100%",
             **styles.UNSELECTED_CARD_STYLE,

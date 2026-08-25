@@ -211,7 +211,7 @@ def test_comparison_matrix_renders_all_three_marketplace_columns() -> None:
     assert row["alibaba_image_url"] == "https://s.alicdn.com/a.jpg"
     assert row["facebook_image_url"] == ""
     assert row["ml_image_url"] == "https://http2.mlstatic.com/b.jpg"
-    assert row["alibaba_image_url"] != row["ml_image_url"]
+    assert str(row["alibaba_image_url"]) != str(row["ml_image_url"])
     assert "VEF10" in str(row["facebook_source_note"])
     assert "sin FX" in str(row["facebook_usd_note"])
     assert row["alibaba_match_label"] == comparison.MATCH_HIGH
@@ -297,10 +297,10 @@ def test_summary_cards_use_real_ready_data_only() -> None:
         ml_rows=[MercadoLibreResultRow(condition="Nuevo", seller_name="Tienda")],
     )
     assert cards[0]["result_count"] == "3"
-    assert cards[0]["meta_one"] == "MOQ: 10"
+    assert cards[0]["meta_one"] == "MOQ típico: 10"
     assert cards[1]["meta_one"] == "USD normalizado · Facebook Venezuela"
     assert cards[2]["meta_one"] == "Nuevo"
-    assert cards[2]["meta_two"] == "Tienda"
+    assert cards[2]["meta_two"] == "Mejor vendedor: Tienda"
 
 
 def test_analysis_unavailable_when_no_context() -> None:
@@ -403,9 +403,12 @@ def test_toggle_history_opens_only_selected_product() -> None:
 
 def test_views_declare_three_marketplace_columns() -> None:
     source = (SRC / "bera_price_tracker/gui/components/comparison.py").read_text(encoding="utf-8")
-    assert "Alibaba" in source
-    assert "Facebook Marketplace" in source
-    assert "Mercado Libre" in source
+    assert "marketplace_brand_alibaba" in source
+    assert "marketplace_brand_facebook" in source
+    assert "marketplace_brand_ml" in source
+    assert "Sin resultado Alibaba" in source
+    assert "Sin resultado Facebook" in source
+    assert "Sin resultado Mercado Libre" in source
     assert "Sin imagen" in (SRC / "bera_price_tracker/gui/components/media.py").read_text(
         encoding="utf-8"
     )
@@ -542,7 +545,7 @@ def test_marketplace_summary_range_helpers() -> None:
         rows=[],
     )
     assert card["range"] == "$1.00 – $2.00"
-    empty = marketplace_summary.empty_marketplace_card("Alibaba")
+    empty = marketplace_summary.empty_marketplace_card("Alibaba", "alibaba")
     assert empty["status"] == "empty"
     facebook = marketplace_summary.facebook_summary_card(
         ui_status=UI_SUCCESS,
@@ -582,6 +585,7 @@ def test_component_builders_execute_offline() -> None:
         primitives.action_button("Ver", href="https://example.com", icon="external-link")
         is not None
     )
+    assert primitives.action_button("Nueva búsqueda", variant="outline", icon="search") is not None
     assert header.page_header() is not None
     assert search.compact_alibaba_search() is not None
     assert shell.sidebar() is not None
@@ -591,4 +595,9 @@ def test_component_builders_execute_offline() -> None:
     assert comparison_ui._empty_cell("Sin resultado Alibaba") is not None
     assert views.dashboard() is not None
     assert views._executive_dashboard() is not None
+    from bera_price_tracker.gui.components.search_results import search_results_view
+    from bera_price_tracker.gui.components.search_scope import search_setup_view
+
+    assert search_setup_view() is not None
+    assert search_results_view() is not None
     assert tracking_ui.history_accordion is not None

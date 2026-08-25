@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -27,7 +29,14 @@ from bera_price_tracker.application.services import (
     alibaba_credit_warning,
     mercadolibre_credit_warning,
 )
-from bera_price_tracker.gui import analysis, comparison, marketplace_summary, search_scope, services
+from bera_price_tracker.gui import (
+    analysis,
+    comparison,
+    marketplace_summary,
+    search_scope,
+    search_session,
+    services,
+)
 from bera_price_tracker.gui.brands import PLATFORM_ALIBABA, PLATFORM_FACEBOOK, PLATFORM_ML
 from bera_price_tracker.gui.images import safe_public_image_url
 from bera_price_tracker.gui.navigation import (
@@ -44,6 +53,7 @@ from bera_price_tracker.gui.navigation import (
 )
 from bera_price_tracker.gui.search_scope import (
     DEFAULT_SEARCH_LIMIT,
+    MODE_LABELS,
     MODE_MULTI,
     MODE_SINGLE,
 )
@@ -207,6 +217,7 @@ class AlibabaResultRow(rx.Base):
     reputation_reviews: str = ""
     reputation_years: str = ""
     reputation_volume: str = ""
+    review_score: str = ""
 
 
 class MercadoLibreResultRow(rx.Base):
@@ -293,12 +304,14 @@ class ResultRow(rx.Base):
 
 
 class SearchProgressRow(rx.Base):
+    platform: str = ""
     label: str = ""
     detail: str = ""
 
 
 class MarketplaceSummaryCard(rx.Base):
     platform: str = ""
+    platform_id: str = ""
     status: str = "empty"
     status_label: str = "Sin búsqueda"
     result_count: str = "0"
@@ -306,10 +319,18 @@ class MarketplaceSummaryCard(rx.Base):
     median: str = "—"
     average: str = "—"
     maximum: str = "—"
+    p25: str = "—"
+    p75: str = "—"
     range: str = "—"
+    currency: str = ""
+    basis: str = ""
     meta_one: str = ""
     meta_two: str = ""
     note: str = ""
+    rating_available: bool = False
+    rating_value: str = ""
+    rating_label: str = "Sin calificación"
+    rating_filled: int = 0
 
 
 class ComparisonRow(rx.Base):
@@ -327,6 +348,15 @@ class ComparisonRow(rx.Base):
     alibaba_relevance: str = ""
     alibaba_match_label: str = ""
     alibaba_url: str = ""
+    alibaba_score_value: int = 0
+    alibaba_score: str = ""
+    alibaba_rating_available: bool = False
+    alibaba_rating_filled: int = 0
+    alibaba_rating_label: str = "Sin calificación"
+    opportunity_available: bool = False
+    opportunity_score: str = "0"
+    opportunity_percent: str = "0%"
+    opportunity_ring: str = ""
     facebook_has_listing: bool = False
     facebook_image_url: str = ""
     facebook_title: str = ""
@@ -337,6 +367,9 @@ class ComparisonRow(rx.Base):
     facebook_relevance: str = ""
     facebook_match_label: str = ""
     facebook_url: str = ""
+    facebook_rating_available: bool = False
+    facebook_rating_filled: int = 0
+    facebook_rating_label: str = "Sin calificación"
     ml_has_listing: bool = False
     ml_image_url: str = ""
     ml_title: str = ""
@@ -346,6 +379,9 @@ class ComparisonRow(rx.Base):
     ml_relevance: str = ""
     ml_match_label: str = ""
     ml_url: str = ""
+    ml_rating_available: bool = False
+    ml_rating_filled: int = 0
+    ml_rating_label: str = "Sin calificación"
     analysis_available: bool = False
     analysis_heading: str = "Análisis no disponible"
     analysis_detail: str = ""
@@ -449,6 +485,11 @@ class TrackerState(rx.State):
     search_limit: int = DEFAULT_SEARCH_LIMIT
     search_error: str = ""
     search_generation: int = 0
+    search_session_active: bool = False
+    search_started_monotonic: str = ""
+    search_elapsed_ms: int = 0
+    search_completed_at: str = ""
+    search_session_query: str = ""
     alibaba_negotiation_product_key: str = ""
     alibaba_negotiation_quantity: str = "40"
     alibaba_negotiation_resale: str = ""
@@ -947,6 +988,10 @@ class TrackerState(rx.State):
         self.search_query = value
         self.search_error = ""
 
+    def clear_search_query(self) -> None:
+        self.search_query = ""
+        self.search_error = ""
+
     def set_search_mode_multi(self) -> None:
         self.search_mode = MODE_MULTI
         self.search_error = ""
@@ -1062,6 +1107,7 @@ class TrackerState(rx.State):
                 reputation_reviews=str(item.get("reputation_reviews", "")),
                 reputation_years=str(item.get("reputation_years", "")),
                 reputation_volume=str(item.get("reputation_volume", "")),
+                review_score=str(item.get("review_score", "")),
             )
             for item in payload.get("results") or []
         ]
@@ -1906,6 +1952,7 @@ class TrackerState(rx.State):
                 reputation_reviews=str(item.get("reputation_reviews", "")),
                 reputation_years=str(item.get("reputation_years", "")),
                 reputation_volume=str(item.get("reputation_volume", "")),
+                review_score=str(item.get("review_score", "")),
             )
             for item in self._payload_maps(payload, "results")
         ]
@@ -1989,35 +2036,46 @@ class TrackerState(rx.State):
     def _prepare_scoped_search(self, plan: search_scope.SearchPlan) -> None:
         self.search_query = plan.query
         self.search_limit = plan.limit
-        if PLATFORM_ALIBABA in plan.providers:
+        selected = set(plan.providers)
+        self.alibaba_results = []
+        self.alibaba_summary = {}
+        self.alibaba_stats_raw = {}
+        self.alibaba_error = ""
+        if PLATFORM_ALIBABA in selected:
             self.alibaba_query = plan.query
             self.alibaba_limit = plan.limit
-            self.alibaba_results = []
-            self.alibaba_summary = {}
-            self.alibaba_stats_raw = {}
-            self.alibaba_error = ""
             self.alibaba_is_loading = True
             self.alibaba_ui_status = UI_LOADING
-        if PLATFORM_FACEBOOK in plan.providers:
+        else:
+            self.alibaba_is_loading = False
+            self.alibaba_ui_status = UI_INITIAL
+        self.facebook_product_results = []
+        self.facebook_product_statistics = []
+        self.facebook_product_summary = {}
+        self.facebook_product_error = ""
+        self.facebook_product_provenance = {}
+        if PLATFORM_FACEBOOK in selected:
             self.facebook_product_query = plan.query
             self.facebook_product_limit = plan.limit
             self.facebook_product_query_origin = services.ML_QUERY_ORIGIN_USER
-            self.facebook_product_results = []
-            self.facebook_product_statistics = []
-            self.facebook_product_summary = {}
-            self.facebook_product_error = ""
-            self.facebook_product_provenance = {}
             self.facebook_product_is_loading = True
             self.facebook_product_ui_status = UI_LOADING
-        if PLATFORM_ML in plan.providers:
+        else:
+            self.facebook_product_is_loading = False
+            self.facebook_product_ui_status = UI_INITIAL
+        self.ml_results = []
+        self.ml_summary = {}
+        self.ml_error = ""
+        if PLATFORM_ML in selected:
             self.ml_query = plan.query
             self.ml_limit = plan.limit
             self.ml_query_origin = services.ML_QUERY_ORIGIN_USER
-            self.ml_results = []
-            self.ml_summary = {}
-            self.ml_error = ""
             self.ml_is_loading = True
             self.ml_ui_status = UI_LOADING
+            self._invalidate_ml_comparison()
+        else:
+            self.ml_is_loading = False
+            self.ml_ui_status = UI_INITIAL
             self._invalidate_ml_comparison()
 
     @rx.event(background=True)
@@ -2037,6 +2095,11 @@ class TrackerState(rx.State):
             generation = self.search_generation + 1
             self.search_generation = generation
             self.search_error = ""
+            self.search_session_active = True
+            self.search_session_query = plan.query
+            self.search_started_monotonic = str(time.monotonic())
+            self.search_elapsed_ms = 0
+            self.search_completed_at = ""
             self._prepare_scoped_search(plan)
 
         async def run_provider(provider: str) -> None:
@@ -2117,6 +2180,15 @@ class TrackerState(rx.State):
                     )
 
         await asyncio.gather(*[run_provider(provider) for provider in plan.providers])
+        async with self:
+            if generation != self.search_generation:
+                return
+            started = float(self.search_started_monotonic or "0")
+            if started:
+                self.search_elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
+            self.search_completed_at = search_session.format_session_timestamp(
+                datetime.now().astimezone()
+            )
 
     def apply_partial_search_fixture(self) -> None:
         """Isolated visual fixture. Not used by production search."""
@@ -2124,26 +2196,157 @@ class TrackerState(rx.State):
         self.search_mode = MODE_MULTI
         self.search_limit = DEFAULT_SEARCH_LIMIT
         self.search_query = "fixture mouse"
+        self.search_session_query = "fixture mouse"
+        self.search_session_active = True
+        self.search_elapsed_ms = 12400
+        self.search_completed_at = search_session.format_session_timestamp(
+            datetime.now().astimezone()
+        )
         self.alibaba_query = "fixture mouse"
         self.alibaba_ui_status = UI_SUCCESS
         self.alibaba_is_loading = False
         self.alibaba_error = ""
-        self.alibaba_summary = {"resultados": "1"}
+        self.alibaba_summary = {
+            "resultados": "1",
+            "minimo": "USD 4.00",
+            "mediana": "USD 4.00",
+            "promedio": "USD 4.00",
+            "maximo": "USD 4.00",
+            "p25": "USD 4.00",
+            "p75": "USD 4.00",
+        }
+        self.alibaba_stats_raw = {
+            "minimum": "4.00",
+            "p25": "4.00",
+            "median": "4.00",
+            "p75": "4.00",
+            "maximum": "4.00",
+        }
         self.alibaba_results = [
-            AlibabaResultRow(title="Fixture Alibaba", price="$4.00", product_id="fixture-ali")
+            AlibabaResultRow(
+                title="Fixture Alibaba",
+                price="USD 4.00",
+                product_id="fixture-ali",
+                score_value=72,
+                score="72",
+                review_score="4.6",
+                supplier_name="Fixture Supplier",
+                moq="50",
+                currency="USD",
+            )
         ]
         self.facebook_product_ui_status = UI_ERROR
         self.facebook_product_is_loading = False
         self.facebook_product_results = []
+        self.facebook_product_statistics = []
         self.facebook_product_error = "No se pudo consultar Facebook Marketplace."
         self.ml_query = "fixture mouse"
         self.ml_ui_status = UI_SUCCESS
         self.ml_is_loading = False
         self.ml_error = ""
-        self.ml_summary = {"comparables": "1"}
+        self.ml_summary = {
+            "comparables": "1 de 1",
+            "comparable_count": "1",
+            "minimo": "USD 9.00",
+            "mediana": "USD 9.00",
+            "precio_tipico": "USD 9.00",
+            "maximo": "USD 9.00",
+            "p25": "USD 9.00",
+            "p75": "USD 9.00",
+            "currency": "USD",
+        }
         self.ml_results = [
-            MercadoLibreResultRow(title="Fixture ML", price="$9.00", relevance_value=90)
+            MercadoLibreResultRow(
+                title="Fixture ML",
+                price="USD 9.00",
+                currency="USD",
+                relevance_value=90,
+                seller_name="Fixture Seller",
+            )
         ]
+
+    def apply_complete_search_fixture(self) -> None:
+        """Isolated visual fixture for a completed 3-platform search."""
+
+        self.apply_partial_search_fixture()
+        self.search_query = "Mouse inalámbrico"
+        self.search_session_query = "Mouse inalámbrico"
+        self.alibaba_query = "Mouse inalámbrico"
+        self.ml_query = "Mouse inalámbrico"
+        self.facebook_product_query = "Mouse inalámbrico"
+        self.facebook_product_ui_status = UI_SUCCESS
+        self.facebook_product_error = ""
+        self.facebook_product_results = [
+            FacebookProductResultRow(
+                title="Fixture Facebook",
+                usd_price="USD 6.50",
+                usd_provenance="Facebook VE · USD",
+                location="Caracas",
+                currency="USD",
+            )
+        ]
+        self.facebook_product_statistics = [
+            FacebookCurrencyStatsRow(
+                currency="USD",
+                label="USD normalizado",
+                basis="USD",
+                provenance="Facebook VE",
+                count="1",
+                minimum="6.50",
+                average="6.50",
+                median="6.50",
+                maximum="6.50",
+                p25="6.50",
+                p75="6.50",
+            )
+        ]
+        self.facebook_product_summary = {"usable": "1"}
+
+    def apply_running_search_fixture(self) -> None:
+        """Isolated visual fixture for in-progress search."""
+
+        self.search_mode = MODE_MULTI
+        self.search_limit = DEFAULT_SEARCH_LIMIT
+        self.search_query = "Mouse inalámbrico"
+        self.search_session_query = "Mouse inalámbrico"
+        self.search_session_active = True
+        self.search_completed_at = ""
+        self.search_elapsed_ms = 0
+        self.alibaba_ui_status = UI_LOADING
+        self.alibaba_is_loading = True
+        self.facebook_product_ui_status = UI_LOADING
+        self.facebook_product_is_loading = True
+        self.ml_ui_status = UI_LOADING
+        self.ml_is_loading = True
+
+    def start_new_search(self) -> None:
+        """Return to setup. Clears session presentation. Does not call providers."""
+
+        self.search_generation += 1
+        self.search_session_active = False
+        self.search_error = ""
+        self.search_elapsed_ms = 0
+        self.search_completed_at = ""
+        self.search_started_monotonic = ""
+        self.search_session_query = ""
+        self.alibaba_results = []
+        self.alibaba_summary = {}
+        self.alibaba_stats_raw = {}
+        self.alibaba_error = ""
+        self.alibaba_is_loading = False
+        self.alibaba_ui_status = UI_INITIAL
+        self.facebook_product_results = []
+        self.facebook_product_statistics = []
+        self.facebook_product_summary = {}
+        self.facebook_product_error = ""
+        self.facebook_product_is_loading = False
+        self.facebook_product_ui_status = UI_INITIAL
+        self.ml_results = []
+        self.ml_summary = {}
+        self.ml_error = ""
+        self.ml_is_loading = False
+        self.ml_ui_status = UI_INITIAL
+        self._invalidate_ml_comparison()
 
     def compare_ml_with_landed_cost(self) -> None:
         if self.ml_has_alibaba_context:
@@ -2626,8 +2829,118 @@ class TrackerState(rx.State):
                 count = str(self.ml_summary.get("comparables") or len(self.ml_results))
                 detail = search_scope.progress_label(self.ml_ui_status, count)
                 label = search_scope.PLATFORM_LABELS[PLATFORM_ML]
-            rows.append(SearchProgressRow(label=label, detail=detail))
+            rows.append(SearchProgressRow(platform=provider, label=label, detail=detail))
         return rows
+
+    def _search_providers(self) -> tuple[str, ...]:
+        try:
+            return search_scope.providers_for(self.search_mode, self.search_platform)
+        except ValueError:
+            return search_scope.ALL_PLATFORMS
+
+    @rx.var
+    def search_session_phase(self) -> str:
+        return search_session.session_phase(
+            session_active=self.search_session_active,
+            providers=self._search_providers(),
+            loading={
+                PLATFORM_ALIBABA: self.alibaba_is_loading,
+                PLATFORM_FACEBOOK: self.facebook_product_is_loading,
+                PLATFORM_ML: self.ml_is_loading,
+            },
+            statuses={
+                PLATFORM_ALIBABA: self.alibaba_ui_status,
+                PLATFORM_FACEBOOK: self.facebook_product_ui_status,
+                PLATFORM_ML: self.ml_ui_status,
+            },
+        )
+
+    @rx.var
+    def search_shows_setup(self) -> bool:
+        return search_session.shows_setup(self.search_session_phase)
+
+    @rx.var
+    def search_shows_results(self) -> bool:
+        return search_session.shows_results(self.search_session_phase)
+
+    @rx.var
+    def search_mode_label(self) -> str:
+        return MODE_LABELS.get(self.search_mode, MODE_LABELS[MODE_MULTI])
+
+    @rx.var
+    def search_duration_label(self) -> str:
+        return search_session.format_session_duration(self.search_elapsed_ms)
+
+    @rx.var
+    def search_total_results(self) -> str:
+        return str(
+            len(self.alibaba_visible_rows)
+            + len(self.facebook_product_results)
+            + len(self.ml_visible_rows)
+        )
+
+    @rx.var
+    def price_distribution_tracks(self) -> list[dict[str, str]]:
+        facebook_stats = (
+            self.facebook_product_statistics[0] if self.facebook_product_statistics else None
+        )
+        tracks = [
+            search_session.boxplot_track(
+                platform=PLATFORM_ALIBABA,
+                minimum=self.alibaba_stats_raw.get("minimum", ""),
+                p25=self.alibaba_stats_raw.get("p25", ""),
+                median=self.alibaba_stats_raw.get("median", ""),
+                p75=self.alibaba_stats_raw.get("p75", ""),
+                maximum=self.alibaba_stats_raw.get("maximum", ""),
+                currency="USD",
+                basis="USD",
+            ),
+            search_session.boxplot_track(
+                platform=PLATFORM_FACEBOOK,
+                minimum=getattr(facebook_stats, "minimum", ""),
+                p25=getattr(facebook_stats, "p25", ""),
+                median=getattr(facebook_stats, "median", ""),
+                p75=getattr(facebook_stats, "p75", ""),
+                maximum=getattr(facebook_stats, "maximum", ""),
+                currency=getattr(facebook_stats, "currency", ""),
+                basis=getattr(facebook_stats, "basis", ""),
+            ),
+            search_session.boxplot_track(
+                platform=PLATFORM_ML,
+                minimum=self.ml_live_summary.get("minimo", ""),
+                p25=self.ml_live_summary.get("p25", ""),
+                median=self.ml_live_summary.get("mediana", ""),
+                p75=self.ml_live_summary.get("p75", ""),
+                maximum=self.ml_live_summary.get("maximo", ""),
+                currency=self.ml_live_summary.get("currency", ""),
+                basis=self.ml_live_summary.get("currency", ""),
+            ),
+        ]
+        return search_session.align_boxplot_tracks(tracks)
+
+    @rx.var
+    def search_quick_insight(self) -> str:
+        return search_session.quick_insight(self.price_distribution_tracks)
+
+    @rx.var
+    def best_opportunity_available(self) -> bool:
+        return (
+            search_session.best_opportunity_copy(self._best_alibaba_row()).get("available") == "1"
+        )
+
+    @rx.var
+    def best_opportunity_heading(self) -> str:
+        return search_session.best_opportunity_copy(self._best_alibaba_row())["heading"]
+
+    @rx.var
+    def best_opportunity_detail(self) -> str:
+        return search_session.best_opportunity_copy(self._best_alibaba_row())["detail"]
+
+    def _best_alibaba_row(self) -> AlibabaResultRow | None:
+        rows = list(self.alibaba_visible_rows)
+        if not rows:
+            return None
+        return max(rows, key=lambda item: item.score_value)
 
     @rx.var
     def page_heading(self) -> str:
