@@ -38,14 +38,15 @@ def test_node_pin_files_are_tracked() -> None:
     )
     files = set(listed.stdout.split())
     assert files == {".node-version", ".nvmrc"}
-    ignored = subprocess.run(
-        ["git", "check-ignore", "-q", ".node-version", ".nvmrc"],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert ignored.returncode == 1
+    for pin in (".node-version", ".nvmrc"):
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", pin],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert ignored.returncode == 1, pin
 
 
 def test_web_and_node_modules_are_gitignored() -> None:
@@ -60,7 +61,7 @@ def test_web_and_node_modules_are_gitignored() -> None:
     )
     assert web_ignored.returncode == 0
     modules_ignored = subprocess.run(
-        ["git", "check-ignore", "-q", "node_modules"],
+        ["git", "check-ignore", "-q", "node_modules/pkg"],
         cwd=ROOT,
         check=False,
     )
