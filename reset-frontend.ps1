@@ -7,7 +7,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$RepoRoot = $PSScriptRoot
+$RepoRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)
 Set-Location -LiteralPath $RepoRoot
 
 function Write-ResetError {
@@ -41,8 +41,15 @@ function Test-CommandLineContainsPath {
         $PathValue.Replace('\', '/')
         $PathValue.Replace('/', '\')
     ) | Select-Object -Unique
+    $LeadingBoundary = '(?:^|[\s''"])'
+    $TrailingBoundary = '(?=$|[\s''"]|[\\/])'
     foreach ($Variant in $Variants) {
-        if ($CommandLine.IndexOf($Variant, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        $Pattern = $LeadingBoundary + [System.Text.RegularExpressions.Regex]::Escape($Variant) + $TrailingBoundary
+        if ([System.Text.RegularExpressions.Regex]::IsMatch(
+            $CommandLine,
+            $Pattern,
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )) {
             return $true
         }
     }
@@ -63,8 +70,8 @@ function Stop-MatchingProcess {
     }
 }
 
-$WebDir = Join-Path $RepoRoot '.web'
-$VenvPython = Join-Path $RepoRoot '.venv\Scripts\python.exe'
+$WebDir = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot '.web'))
+$VenvPython = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot '.venv\Scripts\python.exe'))
 
 Write-Host 'Recuperacion excepcional del frontend Reflex.'
 Write-Host 'Este script no forma parte del arranque diario. No lo ejecuta .\dev.ps1.'

@@ -120,9 +120,57 @@ def test_reset_frontend_ps1_is_exceptional_and_targeted() -> None:
     assert "reconstru" in lower
 
 
+def test_reset_frontend_path_matching_has_argument_boundaries() -> None:
+    text = _read("reset-frontend.ps1")
+    function = text.split("function Test-CommandLineContainsPath", 1)[1].split(
+        "function Stop-MatchingProcess", 1
+    )[0]
+    assert "[System.Text.RegularExpressions.Regex]::Escape($Variant)" in function
+    assert "$LeadingBoundary = '(?:^|[\\s''\"])'" in function
+    assert "$TrailingBoundary = '(?=$|[\\s''\"]|[\\\\/])'" in function
+    assert ".IndexOf($Variant" not in function
+
+
+def test_reset_frontend_path_boundary_examples() -> None:
+    import re
+
+    def contains_path(command_line: str, path: str) -> bool:
+        variants = {path, path.replace("\\", "/"), path.replace("/", "\\")}
+        return any(
+            re.search(
+                r"(?:^|[\s\'\"])" + re.escape(variant) + r"(?=$|[\s\'\"]|[\\/])",
+                command_line,
+                re.I,
+            )
+            for variant in variants
+        )
+
+    assert contains_path(r'node.exe "D:\Scraper\.web\server.js"', r"D:\Scraper\.web")
+    assert contains_path(r"python.exe -m reflex run D:\Scraper", r"D:\Scraper")
+    assert not contains_path(r"node.exe D:\Scraper-copy\.web", r"D:\Scraper")
+    assert not contains_path(r"node.exe D:\Scraper2\.web", r"D:\Scraper")
+    assert not contains_path(
+        r"node.exe D:\Scraper\.web-old\server.js", r"D:\Scraper\.web"
+    )
+
+
+def test_reset_frontend_normalizes_process_paths() -> None:
+    text = _read("reset-frontend.ps1")
+    assert "$RepoRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)" in text
+    assert (
+        "$WebDir = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot '.web'))" in text
+    )
+    assert (
+        "$VenvPython = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot '.venv\\Scripts\\python.exe'))"
+        in text
+    )
+
+
 def test_dev_ps1_does_not_invoke_reset_frontend() -> None:
     text = _read("dev.ps1")
-    mentions = [line.strip() for line in text.splitlines() if "reset-frontend.ps1" in line]
+    mentions = [
+        line.strip() for line in text.splitlines() if "reset-frontend.ps1" in line
+    ]
     assert mentions
     for line in mentions:
         assert line.startswith("Write-Host") or line.startswith("#")
