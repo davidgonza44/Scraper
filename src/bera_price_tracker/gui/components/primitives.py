@@ -92,17 +92,17 @@ def rating_stars(available: object, filled: object, label: object) -> rx.Compone
             rx.icon("star", size=12, color=styles.STAR_EMPTY),
         )
 
-    return rx.hstack(
-        star(1),
-        star(2),
-        star(3),
-        star(4),
-        star(5),
-        rx.cond(
-            available,
+    return rx.cond(
+        available,
+        rx.hstack(
+            star(1),
+            star(2),
+            star(3),
+            star(4),
+            star(5),
             rx.text(label, size="1", color=styles.TEXT_SECONDARY),
-            rx.text("Sin calificación", size="1", color=styles.TEXT_MUTED),
+            spacing="1",
+            align="center",
         ),
-        spacing="1",
-        align="center",
+        rx.text("Sin calificación", size="1", color=styles.TEXT_MUTED),
     )

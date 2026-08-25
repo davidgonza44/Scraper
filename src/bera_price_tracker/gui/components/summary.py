@@ -108,10 +108,9 @@ def marketplace_summary_card(card: rx.Var) -> rx.Component:
                 rx.button(
                     rx.cond(card["details_open"], "Ocultar detalles", "Ver detalles"),
                     on_click=TrackerState.toggle_provider_diagnostic(card["platform_id"]),
-                    size="1",
                     variant="ghost",
                     color=styles.PRIMARY,
-                    padding="0",
+                    padding="4px 0",
                     height="auto",
                     min_height="auto",
                 ),

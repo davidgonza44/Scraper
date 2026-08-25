@@ -2316,7 +2316,7 @@ class TrackerState(rx.State):
                 supplier_name="Fixture Supplier",
                 moq="50",
                 currency="USD",
-                image_url="https://s.alicdn.com/kf/fixture-alibaba-bat.jpg",
+                image_url="http://127.0.0.1:3000/fixture-alibaba.png",
             )
         ]
         self.facebook_product_ui_status = UI_ERROR
@@ -2351,7 +2351,7 @@ class TrackerState(rx.State):
                 relevance_value=90,
                 seller_name="Fixture Seller",
                 condition="Nuevo",
-                thumbnail_url="https://http2.mlstatic.com/fixture-ml-bat.jpg",
+                thumbnail_url="http://127.0.0.1:3000/fixture-ml.png",
                 rating_average="4.8",
                 review_count="742",
                 seller_reputation="green_power",
@@ -2382,7 +2382,7 @@ class TrackerState(rx.State):
                 price="USD 150.00",
                 price_raw="150.00",
                 permalink="https://www.facebook.com/marketplace/item/fixture-bat",
-                image_url="https://scontent.xx.fbcdn.net/v/t1/fixture-facebook-bat.jpg",
+                image_url="http://127.0.0.1:3000/fixture-facebook.png",
                 relevance_value=88,
                 relevance="88/100",
             )
@@ -3133,6 +3133,14 @@ class TrackerState(rx.State):
             parts.append(f"Alibaba · {self.alibaba_summary['resultados']} resultados")
         return " · ".join(parts)
 
+    def _ml_diagnostic_summary(self) -> dict[str, str]:
+        summary = dict(self.ml_live_summary)
+        for key in ("requested", "fetched", "usable", "rejected"):
+            value = self.ml_summary.get(key, "")
+            if value:
+                summary[key] = value
+        return summary
+
     @rx.var
     def marketplace_summaries(self) -> list[MarketplaceSummaryCard]:
         raw = marketplace_summary.build_marketplace_summaries(
@@ -3145,7 +3153,7 @@ class TrackerState(rx.State):
             facebook_rows=self.facebook_product_results,
             facebook_error=self.facebook_product_error,
             ml_ui_status=self.ml_ui_status,
-            ml_summary=self.ml_live_summary,
+            ml_summary=self._ml_diagnostic_summary(),
             ml_rows=self.ml_visible_rows,
         )
         attached = search_diagnostics.attach_diagnostics(
@@ -3167,7 +3175,7 @@ class TrackerState(rx.State):
                 ),
                 search_diagnostics.mercadolibre_diagnostic(
                     ui_status=self.ml_ui_status,
-                    summary=self.ml_live_summary,
+                    summary=self._ml_diagnostic_summary(),
                     requested_limit=self.search_limit,
                     usable_rows=len(self.ml_visible_rows),
                     error=self.ml_error,
@@ -3256,7 +3264,7 @@ class TrackerState(rx.State):
         )
         ml_diag = search_diagnostics.mercadolibre_diagnostic(
             ui_status=self.ml_ui_status,
-            summary=self.ml_live_summary,
+            summary=self._ml_diagnostic_summary(),
             requested_limit=self.search_limit,
             usable_rows=len(self.ml_visible_rows),
             error=self.ml_error,
