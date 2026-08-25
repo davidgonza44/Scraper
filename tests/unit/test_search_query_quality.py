@@ -119,6 +119,21 @@ def test_hyphenated_technical_token_is_preserved() -> None:
     assert "M10x1.25" in query
 
 
+def test_trailing_plus_in_model_identifier_is_preserved() -> None:
+    query = _query("Samsung Galaxy S24+", "Samsung Galaxy S24+")
+    assert query == "Samsung Galaxy S24+"
+
+
+def test_plus_inside_model_identifier_is_preserved() -> None:
+    query = _query("Galaxy S24+ 5G", "Galaxy S24+ 5G")
+    assert query == "Galaxy S24+ 5G"
+
+
+def test_trailing_symbols_in_language_identifiers_are_preserved() -> None:
+    for identifier in ("C#", "C++"):
+        assert _query(identifier, identifier) == identifier
+
+
 def test_number_unit_spacing_equivalence_is_deduplicated() -> None:
     query = _query(
         "Impact Wrench 21V 800Nm",

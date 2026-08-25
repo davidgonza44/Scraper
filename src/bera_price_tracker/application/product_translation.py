@@ -74,7 +74,7 @@ _NUMBER_UNIT_PATTERN = re.compile(
 _MATERIAL_GRADE_PATTERN = re.compile(r"\b\d{3}L\b", re.IGNORECASE)
 _STANDALONE_GRADE_PATTERN = re.compile(r"\b\d{3}\b")
 _MODEL_CODE_PATTERN = re.compile(
-    r"\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z]{1,5}\d{2,8}[A-Z0-9]{0,4}\b",
+    r"\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z]{1,5}\d{2,8}[A-Z0-9]{0,4}\b[+#]?",
     re.IGNORECASE,
 )
 _HYPHENATED_MODEL_PATTERN = re.compile(
@@ -595,7 +595,7 @@ def _merge_required_technical_tokens(query: str, original_text: str) -> str:
 
 
 def _normalize_search_whitespace(text: str) -> str:
-    return " ".join(text.split()).strip(" -+#")
+    return " ".join(text.split()).strip(" -")
 
 
 @dataclass(slots=True)
