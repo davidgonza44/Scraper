@@ -12,6 +12,11 @@ de recolección y precios. No realiza scraping HTML ni automatización de navega
 
 - Python 3.12 o superior.
 - `uv` es opcional, pero simplifica la creación del entorno de desarrollo.
+- Node.js **24 LTS** para la GUI Reflex. No uses Node 25 (Current): Reflex 0.8
+  genera un frontend con React Router 7.13 / Vite 6, que esperan una LTS
+  (`>=20.19`). Node 25 provoca fallos de `react-router dev` en Windows
+  (`EPERM` al hacer `scandir` de `.web/.react-router/types/app/routes`).
+  El repositorio fija la major en `.nvmrc` y `.node-version`.
 
 ## Instalación de desarrollo
 
@@ -22,8 +27,38 @@ uv venv --python 3.12 .venv
 uv pip install --python .venv\Scripts\python.exe -e ".[dev]"
 ```
 
-La única dependencia de runtime es `httpx`. Las herramientas de calidad se instalan
-mediante el extra `dev`.
+La única dependencia de runtime Python documentada históricamente era `httpx`.
+Hoy el extra de GUI también instala Reflex. Las herramientas de calidad se
+instalan mediante el extra `dev`.
+
+## GUI Reflex (Windows PowerShell)
+
+La carpeta `.web` la genera Reflex y **no** se versiona. Si el frontend falla
+al arrancar (`Starting frontend failed`, `EPERM` / `scandir` en
+`.web/.react-router\\types\\app\\routes`), regenera desde un árbol limpio con
+Node 24 y npm (Bun no es necesario; Reflex hace fallback a npm si Bun falla).
+
+```powershell
+# 1. Cierra cualquier `reflex run` / `node` / `react-router` de esta carpeta.
+
+# 2. Instala y activa Node 24 LTS (elige una herramienta):
+#    fnm:  fnm install 24; fnm use
+#    nvm-windows: nvm install 24; nvm use 24
+node -v   # debe empezar por v24.
+
+# 3. Borra el frontend generado (seguro: está en .gitignore).
+if (Test-Path .web) { Remove-Item -LiteralPath .web -Recurse -Force }
+
+# 4. Arranca. PYTHONPATH=src es obligatorio. Prefiere npm en Windows.
+$env:PYTHONPATH = "src"
+$env:REFLEX_USE_NPM = "1"
+.\.venv\Scripts\python.exe -m reflex run
+```
+
+URL típica: http://localhost:3000
+
+No dejes `reflex run` abierto después de una comprobación. No lances búsquedas
+reales contra proveedores durante el arranque.
 
 ## CLI
 

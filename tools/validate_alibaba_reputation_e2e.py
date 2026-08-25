@@ -537,7 +537,7 @@ def main() -> int:  # noqa: PLR0915
         )
 
         min_reputation_by_label = dict(ALIBABA_MIN_REPUTATION_BY_LABEL)
-        known_fields = set(AlibabaResultRow.__fields__)
+        known_fields = set(AlibabaResultRow.model_fields)
         model_rows = [
             AlibabaResultRow(**{key: value for key, value in row.items() if key in known_fields})
             for row in rows

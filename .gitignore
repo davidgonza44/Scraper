@@ -1,6 +1,8 @@
 assets/external/
 .states
 .web
+.react-router/
+node_modules/
 *.db
 # Python bytecode and caches
 __pycache__/

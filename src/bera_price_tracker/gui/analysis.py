@@ -144,8 +144,8 @@ def _copy_with_fields[RowT](row: RowT, fields: dict[str, object]) -> RowT:
     copier = getattr(row, "model_copy", None)
     if callable(copier):
         return cast(RowT, copier(update=fields))
-    # rx.Base rows wrap pydantic v1, which exposes copy(update=...) instead of
-    # model_copy. Without this branch the GUI read model loses ranking fields.
+    # Older pydantic v1 models exposed copy(update=...). Keep the fallback so
+    # ranking fields are not dropped if a legacy row type appears.
     legacy_copier = getattr(row, "copy", None)
     if callable(legacy_copier):
         try:
