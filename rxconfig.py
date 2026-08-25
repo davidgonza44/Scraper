@@ -6,7 +6,7 @@ Run from this directory (or from D:\\Scraper after copy):
 
 Typical URL: http://localhost:3000
 
-Frontend requires Node.js 24 LTS. See README for Windows PowerShell steps.
+Frontend requires Node.js 24 LTS via fnm. On Windows run dev.ps1.
 
 Do not leave reflex run running after checks. Do not collect live data.
 """
