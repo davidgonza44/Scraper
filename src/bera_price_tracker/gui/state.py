@@ -2259,9 +2259,11 @@ class TrackerState(rx.State):
             MercadoLibreResultRow(
                 title="Fixture ML",
                 price="USD 9.00",
+                price_raw="9.00",
                 currency="USD",
                 relevance_value=90,
                 seller_name="Fixture Seller",
+                condition="Nuevo",
             )
         ]
 
@@ -2986,6 +2988,7 @@ class TrackerState(rx.State):
             facebook_summary=self.facebook_product_summary,
             facebook_statistics=self.facebook_product_statistics,
             facebook_rows=self.facebook_product_results,
+            facebook_error=self.facebook_product_error,
             ml_ui_status=self.ml_ui_status,
             ml_summary=self.ml_live_summary,
             ml_rows=self.ml_visible_rows,

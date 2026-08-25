@@ -22,6 +22,7 @@ def _status_overlay(card: dict[str, Any], ui_status: str) -> dict[str, Any] | No
     if ui_status == UI_ERROR:
         card["status"] = "error"
         card["status_label"] = "Error"
+        card["note"] = _text(card.get("note"))
         return card
     return None
 
@@ -64,6 +65,16 @@ def empty_marketplace_card(platform: str, platform_id: str) -> dict[str, str | i
         "rating_label": "Sin calificación",
         "rating_filled": 0,
     }
+
+
+def _money(value: object, currency: object = "") -> str:
+    text = _text(value)
+    if not text or text == EMPTY_METRIC:
+        return EMPTY_METRIC
+    code = _text(currency).upper()
+    if code and code not in text.upper() and not text.startswith(code):
+        return f"{code} {text}"
+    return text
 
 
 def _range(minimum: object, maximum: object) -> str:
@@ -143,8 +154,11 @@ def facebook_summary_card(
     summary: Mapping[str, object],
     statistics: Sequence[Any] = (),
     rows: Sequence[Any] = (),
+    error: str = "",
 ) -> dict[str, Any]:
     card = empty_marketplace_card("Facebook Marketplace", PLATFORM_FACEBOOK)
+    if error:
+        card["note"] = error
     overlay = _status_overlay(card, ui_status)
     if overlay is not None:
         return overlay
@@ -204,6 +218,13 @@ def facebook_summary_card(
         card["basis"] = _text(first_stats.get("basis"))
         card["p25"] = _metric(first_stats, "p25")
         card["p75"] = _metric(first_stats, "p75")
+    currency = card["currency"]
+    card["minimum"] = _money(card["minimum"], currency)
+    card["median"] = _money(card["median"], currency)
+    card["average"] = _money(card["average"], currency)
+    card["maximum"] = _money(card["maximum"], currency)
+    card["p25"] = _money(card["p25"], currency)
+    card["p75"] = _money(card["p75"], currency)
     card["range"] = _range(card["minimum"], card["maximum"])
     return card
 
@@ -225,7 +246,10 @@ def mercadolibre_summary_card(
     count = _metric(summary, "comparable_count")
     if count == EMPTY_METRIC:
         count = _metric(summary, "comparables")
-    card["result_count"] = count if count != EMPTY_METRIC else str(len(rows))
+    if count == EMPTY_METRIC or (count == "0" and rows):
+        card["result_count"] = str(len(rows))
+    else:
+        card["result_count"] = count
     card["minimum"] = _metric(summary, "minimo")
     card["median"] = _metric(summary, "mediana")
     card["average"] = _metric(summary, "precio_tipico")
@@ -260,6 +284,7 @@ def build_marketplace_summaries(
     facebook_summary: Mapping[str, object],
     facebook_statistics: Sequence[Any] = (),
     facebook_rows: Sequence[Any] = (),
+    facebook_error: str = "",
     ml_ui_status: str,
     ml_summary: Mapping[str, object],
     ml_rows: Sequence[Any] = (),
@@ -273,6 +298,7 @@ def build_marketplace_summaries(
             summary=facebook_summary,
             statistics=facebook_statistics,
             rows=facebook_rows,
+            error=facebook_error,
         ),
         mercadolibre_summary_card(ui_status=ml_ui_status, summary=ml_summary, rows=ml_rows),
     ]

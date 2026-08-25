@@ -560,6 +560,21 @@ def test_marketplace_summary_range_helpers() -> None:
         ],
     )
     assert facebook["minimum"] == "—"
+    labeled = marketplace_summary.facebook_summary_card(
+        ui_status=UI_SUCCESS,
+        summary={"usable": "1"},
+        statistics=[
+            {
+                "minimum": "6.50",
+                "median": "6.50",
+                "average": "6.50",
+                "maximum": "6.50",
+                "currency": "USD",
+            }
+        ],
+    )
+    assert labeled["minimum"] == "USD 6.50"
+    assert labeled["range"] == "USD 6.50"
 
 
 def test_navigation_tab_mapping() -> None:

@@ -315,6 +315,13 @@ def test_summary_cards_show_loading_and_error() -> None:
     assert cards[1]["status_label"] == "Error"
     assert cards[2]["status_label"] == "Buscando..."
     assert cards[0]["minimum"] == "—"
+    errored = marketplace_summary.facebook_summary_card(
+        ui_status="ERROR",
+        summary={},
+        error="No se pudo consultar Facebook Marketplace.",
+    )
+    assert errored["status"] == "error"
+    assert errored["note"] == "No se pudo consultar Facebook Marketplace."
 
 
 def test_prepare_scoped_search_clears_selected_providers() -> None:

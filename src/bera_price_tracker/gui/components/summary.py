@@ -34,12 +34,20 @@ def marketplace_summary_card(card: rx.Var) -> rx.Component:
             _platform_mark(card),
             rx.spacer(),
             rx.cond(
-                card["platform_id"] == PLATFORM_ALIBABA,
-                status_badge(card["result_count"] + " resultados", tone="alibaba"),
+                card["status"] == "error",
+                status_badge(card["status_label"], tone="danger"),
                 rx.cond(
-                    card["platform_id"] == PLATFORM_FACEBOOK,
-                    status_badge(card["result_count"] + " resultados", tone="facebook"),
-                    status_badge(card["result_count"] + " resultados", tone="mercadolibre"),
+                    card["status"] == "loading",
+                    status_badge(card["status_label"], tone="neutral"),
+                    rx.cond(
+                        card["platform_id"] == PLATFORM_ALIBABA,
+                        status_badge(card["result_count"] + " resultados", tone="alibaba"),
+                        rx.cond(
+                            card["platform_id"] == PLATFORM_FACEBOOK,
+                            status_badge(card["result_count"] + " resultados", tone="facebook"),
+                            status_badge(card["result_count"] + " resultados", tone="mercadolibre"),
+                        ),
+                    ),
                 ),
             ),
             width="100%",
