@@ -441,6 +441,8 @@ def test_match_label_and_page_heading_variants() -> None:
         "Resultados para: pastillas sbr"
     )
     assert comparison.page_heading() == "Inteligencia de compras e importación"
+    assert comparison.page_heading(workspace_view="tools") == "Facebook H0019"
+    assert comparison.page_heading(workspace_view="searches") == "Búsquedas Alibaba"
 
 
 def test_analysis_uses_landed_and_ml_comparison_without_inventing_score() -> None:

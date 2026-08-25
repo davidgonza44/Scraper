@@ -244,6 +244,7 @@ def page_heading(
     facebook_status: str = "",
     ml_status: str = "",
     h0019_status: str = "",
+    workspace_view: str = "",
 ) -> str:
     """Show a real search query only when a search has actually run."""
 
@@ -255,7 +256,17 @@ def page_heading(
         return f"Resultados para: {ml_query.strip()}"
     if h0019_status in {UI_SUCCESS, "EMPTY", "ERROR"} and h0019_query.strip():
         return f"Resultados para: {h0019_query.strip()}"
-    return "Inteligencia de compras e importación"
+    idle_titles = {
+        "dashboard": "Inteligencia de compras e importación",
+        "searches": "Búsquedas Alibaba",
+        "products": "Facebook Marketplace Venezuela",
+        "comparisons": "Comparaciones de mercado",
+        "tracking": "Seguimiento Alibaba",
+        "import": "Importación y costo puesto",
+        "tools": "Facebook H0019",
+        "settings": "Ranking y filtros",
+    }
+    return idle_titles.get(workspace_view, "Inteligencia de compras e importación")
 
 
 def build_comparison_rows(

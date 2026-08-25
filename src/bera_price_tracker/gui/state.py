@@ -2236,6 +2236,7 @@ class TrackerState(rx.State):
             facebook_status=self.facebook_product_ui_status,
             ml_status=self.ml_ui_status,
             h0019_status=self.ui_status,
+            workspace_view=self.workspace_view,
         )
 
     @rx.var

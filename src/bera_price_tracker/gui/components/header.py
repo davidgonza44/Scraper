@@ -38,7 +38,7 @@ def page_header() -> rx.Component:
             rx.button(
                 rx.hstack(
                     rx.icon("download", size=16),
-                    rx.text("Exportar"),
+                    rx.text("Exportar · no disponible"),
                     spacing="2",
                     align="center",
                 ),
