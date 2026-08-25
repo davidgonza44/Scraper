@@ -20,6 +20,9 @@ from bera_price_tracker.infrastructure.providers.facebook_marketplace import (
     FacebookCollectionMetrics,
     FacebookMarketplaceProvider,
 )
+from bera_price_tracker.infrastructure.providers.facebook_products import (
+    FacebookMarketplaceProductSearch,
+)
 from bera_price_tracker.infrastructure.providers.mercado_libre import MercadoLibreProvider
 from bera_price_tracker.infrastructure.providers.mercado_libre_errors import (
     MercadoLibreAuthenticationError,
@@ -48,6 +51,7 @@ __all__ = [
     "FacebookCandidateOutcome",
     "FacebookCollectionMetrics",
     "FacebookMarketplaceProvider",
+    "FacebookMarketplaceProductSearch",
     "MercadoLibreAuthenticationError",
     "MercadoLibreConfigurationError",
     "MercadoLibreConnectionError",

@@ -29,6 +29,7 @@ from bera_price_tracker.application import (
     RecordAlibabaPriceSnapshot,
     RefreshTrackedAlibabaProducts,
     SearchAlibabaProducts,
+    SearchFacebookMarketplaceProducts,
     SearchMercadoLibreProducts,
     TranslateProductTitle,
     UnfollowAlibabaPrice,
@@ -61,6 +62,7 @@ from bera_price_tracker.infrastructure.providers import (
     BrightDataFacebookMarketplaceClient,
     FacebookCandidateExplanation,
     FacebookCollectionMetrics,
+    FacebookMarketplaceProductSearch,
     FacebookMarketplaceProvider,
     MercadoLibreProvider,
 )
@@ -505,6 +507,16 @@ def build_mercadolibre_search(settings: Settings | None = None) -> SearchMercado
         actor_id=resolved.apify_mercadolibre_actor,
     )
     return SearchMercadoLibreProducts(provider=client)
+
+
+def build_facebook_product_search(
+    settings: Settings | None = None,
+) -> SearchFacebookMarketplaceProducts:
+    """Wire generic priced-only Facebook search to the existing Apify client."""
+
+    resolved = resolve_process_settings(settings)
+    client = ApifyFacebookMarketplaceClient(api_token=resolved.apify_api_token)
+    return SearchFacebookMarketplaceProducts(provider=FacebookMarketplaceProductSearch(client))
 
 
 def build_product_translator(

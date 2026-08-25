@@ -215,6 +215,35 @@ class MercadoLibreResultRow(rx.Base):
     reputation_value: int = 0
 
 
+class FacebookProductResultRow(rx.Base):
+    external_id: str = ""
+    title: str = ""
+    permalink: str = ""
+    price: str = ""
+    price_raw: str = ""
+    currency: str = "UNKNOWN"
+    formatted_price: str = ""
+    location: str = "—"
+    representative: str = ""
+    relevance_value: int = 0
+    relevance: str = ""
+    relevance_label: str = ""
+    relevance_tokens: str = ""
+    is_outlier: bool = False
+
+
+class FacebookCurrencyStatsRow(rx.Base):
+    currency: str = ""
+    count: str = "0"
+    minimum: str = "unavailable"
+    average: str = "unavailable"
+    median: str = "unavailable"
+    maximum: str = "unavailable"
+    p25: str = "unavailable"
+    p75: str = "unavailable"
+    iqr: str = "unavailable"
+
+
 class ResultRow(rx.Base):
     title: str = ""
     price: str = ""
@@ -296,6 +325,27 @@ class TrackerState(rx.State):
     ml_translation_generation: int = 0
     ml_translation_source_language: str = ""
     ml_query_origin: str = ""
+    facebook_product_query: str = ""
+    facebook_product_city: str = "caracas"
+    facebook_product_limit: int = 5
+    facebook_product_results: list[FacebookProductResultRow] = []
+    facebook_product_statistics: list[FacebookCurrencyStatsRow] = []
+    facebook_product_summary: dict[str, str] = {}
+    facebook_product_ui_status: str = UI_INITIAL
+    facebook_product_error: str = ""
+    facebook_product_is_loading: bool = False
+    facebook_product_alibaba_context: dict[str, str] = {}
+    facebook_product_has_alibaba_context: bool = False
+    facebook_product_provenance: dict[str, str] = {}
+    facebook_product_last_search_query: str = ""
+    facebook_product_association_product_id: str = ""
+    facebook_product_translated_title: str = ""
+    facebook_product_translation_ui_status: str = UI_INITIAL
+    facebook_product_translation_error: str = ""
+    facebook_product_translation_warning: str = ""
+    facebook_product_translation_is_loading: bool = False
+    facebook_product_translation_generation: int = 0
+    facebook_product_query_origin: str = ""
     alibaba_negotiation_product_key: str = ""
     alibaba_negotiation_quantity: str = "40"
     alibaba_negotiation_resale: str = ""
@@ -422,6 +472,9 @@ class TrackerState(rx.State):
 
     def show_facebook_tab(self) -> None:
         self.marketplace_tab = "facebook"
+
+    def show_facebook_products_tab(self) -> None:
+        self.marketplace_tab = "facebook_products"
 
     def show_alibaba_tab(self) -> None:
         self.marketplace_tab = "alibaba"
@@ -956,6 +1009,287 @@ class TrackerState(rx.State):
         self.alibaba_summary = dict(summary or {})
         self.alibaba_stats_raw = dict(stats_raw or {})
         self.alibaba_ui_status = ui_status or UI_EMPTY
+
+    def _clear_facebook_product_results(self) -> None:
+        self.facebook_product_results = []
+        self.facebook_product_statistics = []
+        self.facebook_product_summary = {}
+        self.facebook_product_ui_status = UI_INITIAL
+        self.facebook_product_error = ""
+        self.facebook_product_is_loading = False
+        self.facebook_product_provenance = {}
+        self.facebook_product_last_search_query = ""
+        self.facebook_product_association_product_id = ""
+
+    def set_facebook_product_query(self, value: str) -> None:
+        self.facebook_product_query = value
+        self.facebook_product_query_origin = services.ML_QUERY_ORIGIN_USER
+        if value.strip() != self.facebook_product_last_search_query.strip():
+            self.facebook_product_provenance = {}
+
+    def set_facebook_product_city(self, value: str) -> None:
+        self.facebook_product_city = value
+
+    def set_facebook_product_limit(self, value: str | int) -> None:
+        self.facebook_product_limit = clamp_limit(value)
+
+    def prepare_facebook_comparables_from_alibaba_result(self, product_id: str) -> object | None:
+        row = next((item for item in self.alibaba_results if item.product_id == product_id), None)
+        if row is None:
+            return None
+        self._prepare_facebook_comparables(external_id=row.product_id, title=row.title)
+        return TrackerState.translate_selected_alibaba_title_for_facebook
+
+    def prepare_facebook_comparables_from_alibaba_tracked(self, product_id: str) -> object | None:
+        row = next(
+            (item for item in self.alibaba_tracked_rows if item.product_id == product_id), None
+        )
+        if row is None:
+            return None
+        self._prepare_facebook_comparables(external_id=row.product_id, title=row.title)
+        return TrackerState.translate_selected_alibaba_title_for_facebook
+
+    def _prepare_facebook_comparables(self, *, external_id: str, title: str) -> None:
+        stable_id = external_id.strip()
+        if not stable_id:
+            return
+        previous_id = self.facebook_product_alibaba_context.get("external_id", "")
+        product_changed = previous_id != stable_id
+        self.facebook_product_translation_generation += 1
+        self.facebook_product_alibaba_context = {
+            "external_id": stable_id,
+            "title": title.strip() or "Sin título",
+        }
+        self.facebook_product_has_alibaba_context = True
+        self.marketplace_tab = "facebook_products"
+        self._clear_facebook_product_results()
+        if product_changed:
+            self.facebook_product_query = self.alibaba_query.strip()
+            self.facebook_product_query_origin = (
+                services.ML_QUERY_ORIGIN_FALLBACK if self.facebook_product_query else ""
+            )
+        self.facebook_product_translated_title = ""
+        self.facebook_product_translation_warning = ""
+        configured = services.product_translator_is_configured()
+        self.facebook_product_translation_is_loading = configured
+        self.facebook_product_translation_ui_status = (
+            UI_LOADING if configured else UI_NOT_CONFIGURED
+        )
+        self.facebook_product_translation_error = (
+            "" if configured else services.TRANSLATION_NOT_CONFIGURED_MESSAGE
+        )
+
+    def _facebook_product_active_id(self) -> str:
+        if not self.facebook_product_has_alibaba_context:
+            return ""
+        return self.facebook_product_alibaba_context.get("external_id", "")
+
+    def _finalize_facebook_product_translation(
+        self,
+        *,
+        product_id: str,
+        title: str,
+        generation: int,
+        translated_title: str = "",
+        search_query: str = "",
+        warning: str = "",
+        error_message: str | None = None,
+        configured: bool = True,
+    ) -> None:
+        if (
+            product_id != self._facebook_product_active_id()
+            or title != self.facebook_product_alibaba_context.get("title", "")
+            or generation != self.facebook_product_translation_generation
+        ):
+            return
+        self.facebook_product_translation_is_loading = False
+        if error_message is not None:
+            self.facebook_product_translated_title = ""
+            self.facebook_product_translation_warning = ""
+            self.facebook_product_translation_error = error_message
+            self.facebook_product_translation_ui_status = (
+                UI_ERROR if configured else UI_NOT_CONFIGURED
+            )
+            return
+        self.facebook_product_translated_title = translated_title
+        self.facebook_product_translation_warning = warning
+        self.facebook_product_translation_error = ""
+        self.facebook_product_translation_ui_status = UI_SUCCESS
+        if (
+            services.should_replace_generated_query(self.facebook_product_query_origin)
+            and search_query.strip()
+        ):
+            self.facebook_product_query = search_query.strip()
+            self.facebook_product_query_origin = services.ML_QUERY_ORIGIN_GENERATED
+
+    @rx.event(background=True)
+    async def translate_selected_alibaba_title_for_facebook(self) -> None:
+        async with self:
+            if (
+                not self.facebook_product_has_alibaba_context
+                or self.facebook_product_translation_ui_status == UI_NOT_CONFIGURED
+            ):
+                return
+            product_id = self._facebook_product_active_id()
+            title = self.facebook_product_alibaba_context.get("title", "")
+            generation = self.facebook_product_translation_generation
+            self.facebook_product_translation_is_loading = True
+            self.facebook_product_translation_ui_status = UI_LOADING
+            self.facebook_product_translation_error = ""
+        try:
+            payload = await asyncio.to_thread(services.translate_product_title, title)
+        except Exception as exc:  # noqa: BLE001 - sanitized before display
+            from bera_price_tracker.application.ports import ProductTranslatorNotConfiguredError
+
+            async with self:
+                self._finalize_facebook_product_translation(
+                    product_id=product_id,
+                    title=title,
+                    generation=generation,
+                    error_message=services.sanitize_translation_error(exc),
+                    configured=not isinstance(exc, ProductTranslatorNotConfiguredError),
+                )
+            return
+        async with self:
+            self._finalize_facebook_product_translation(
+                product_id=product_id,
+                title=title,
+                generation=generation,
+                translated_title=str(payload.get("translated_text", "") or ""),
+                search_query=str(payload.get("search_query", "") or ""),
+                warning=str(payload.get("warning", "") or ""),
+            )
+
+    def _finalize_facebook_product_search(
+        self,
+        *,
+        product_id: str,
+        query: str,
+        city: str,
+        rows: list[FacebookProductResultRow] | None = None,
+        statistics: list[FacebookCurrencyStatsRow] | None = None,
+        summary: dict[str, str] | None = None,
+        ui_status: str = "",
+        error_message: str | None = None,
+    ) -> None:
+        if (
+            product_id != self._facebook_product_active_id()
+            or query.strip() != self.facebook_product_query.strip()
+            or city.strip().casefold() != self.facebook_product_city.strip().casefold()
+        ):
+            self.facebook_product_is_loading = False
+            if self.facebook_product_ui_status == UI_LOADING:
+                self.facebook_product_ui_status = UI_INITIAL
+            return
+        self.facebook_product_is_loading = False
+        if error_message is not None:
+            self.facebook_product_results = []
+            self.facebook_product_statistics = []
+            self.facebook_product_summary = {}
+            self.facebook_product_provenance = {}
+            self.facebook_product_error = error_message
+            self.facebook_product_ui_status = UI_ERROR
+            return
+        self.facebook_product_results = list(rows or [])
+        self.facebook_product_statistics = list(statistics or [])
+        self.facebook_product_summary = dict(summary or {})
+        self.facebook_product_error = ""
+        self.facebook_product_ui_status = ui_status or UI_EMPTY
+        self.facebook_product_last_search_query = query.strip()
+        self.facebook_product_association_product_id = product_id
+        self.facebook_product_provenance = (
+            {
+                "external_id": product_id,
+                "title": self.facebook_product_alibaba_context.get("title", ""),
+                "facebook_query": query.strip(),
+            }
+            if product_id
+            else {}
+        )
+
+    @rx.event(background=True)
+    async def search_facebook_products(self) -> None:
+        async with self:
+            if self.facebook_product_is_loading:
+                return
+            query = self.facebook_product_query
+            city = self.facebook_product_city
+            limit = clamp_limit(self.facebook_product_limit)
+            product_id = self._facebook_product_active_id()
+            if not query.strip():
+                self._clear_facebook_product_results()
+                self.facebook_product_error = services.FACEBOOK_PRODUCTS_QUERY_ERROR
+                self.facebook_product_ui_status = UI_ERROR
+                return
+            if not city.strip():
+                self._clear_facebook_product_results()
+                self.facebook_product_error = services.FACEBOOK_PRODUCTS_CITY_ERROR
+                self.facebook_product_ui_status = UI_ERROR
+                return
+            self.facebook_product_limit = limit
+            self.facebook_product_is_loading = True
+            self.facebook_product_error = ""
+            self.facebook_product_ui_status = UI_LOADING
+            self.facebook_product_provenance = {}
+        try:
+            payload = await asyncio.to_thread(
+                services.run_facebook_product_search,
+                query,
+                city,
+                limit,
+            )
+        except Exception as exc:  # noqa: BLE001 - sanitized before display
+            async with self:
+                self._finalize_facebook_product_search(
+                    product_id=product_id,
+                    query=query,
+                    city=city,
+                    error_message=services.sanitize_facebook_product_error(exc),
+                )
+            return
+        rows = [
+            FacebookProductResultRow(
+                external_id=str(item.get("external_id", "")),
+                title=str(item.get("title", "")),
+                permalink=str(item.get("permalink", "")),
+                price=str(item.get("price", "")),
+                price_raw=str(item.get("price_raw", "")),
+                currency=str(item.get("currency", "UNKNOWN")),
+                formatted_price=str(item.get("formatted_price", "")),
+                location=str(item.get("location", "—")),
+                representative=str(item.get("representative", "")),
+                relevance_value=int(item.get("relevance_value", 0) or 0),
+                relevance=str(item.get("relevance", "")),
+                relevance_label=str(item.get("relevance_label", "")),
+                relevance_tokens=str(item.get("relevance_tokens", "")),
+                is_outlier=bool(item.get("is_outlier", False)),
+            )
+            for item in payload.get("results") or []
+        ]
+        statistics = [
+            FacebookCurrencyStatsRow(
+                currency=str(item.get("currency", "")),
+                count=str(item.get("count", "0")),
+                minimum=str(item.get("minimum", "unavailable")),
+                average=str(item.get("average", "unavailable")),
+                median=str(item.get("median", "unavailable")),
+                maximum=str(item.get("maximum", "unavailable")),
+                p25=str(item.get("p25", "unavailable")),
+                p75=str(item.get("p75", "unavailable")),
+                iqr=str(item.get("iqr", "unavailable")),
+            )
+            for item in payload.get("statistics") or []
+        ]
+        async with self:
+            self._finalize_facebook_product_search(
+                product_id=product_id,
+                query=query,
+                city=city,
+                rows=rows,
+                statistics=statistics,
+                summary=dict(payload.get("summary") or {}),
+                ui_status=str(payload.get("ui_status") or UI_EMPTY),
+            )
 
     def set_ml_query(self, value: str) -> None:
         self.ml_query = value
@@ -1698,6 +2032,19 @@ class TrackerState(rx.State):
         if self.ml_query.strip() != self.ml_last_search_query.strip():
             return False
         return self.ml_alibaba_context.get("external_id", "") == self.ml_association_product_id
+
+    @rx.var
+    def facebook_product_show_provenance(self) -> bool:
+        if self.facebook_product_ui_status != UI_SUCCESS:
+            return False
+        if self.facebook_product_query.strip() != self.facebook_product_last_search_query.strip():
+            return False
+        return (
+            bool(self.facebook_product_association_product_id)
+            and self.facebook_product_association_product_id == self._facebook_product_active_id()
+            and self.facebook_product_provenance.get("external_id", "")
+            == self.facebook_product_association_product_id
+        )
 
     @rx.var
     def ml_alibaba_association(self) -> dict[str, str]:
