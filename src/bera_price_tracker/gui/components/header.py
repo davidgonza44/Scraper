@@ -15,10 +15,10 @@ def page_header() -> rx.Component:
         rx.vstack(
             rx.heading(
                 TrackerState.page_heading,
-                size="7",
+                size="6",
                 weight="medium",
                 color=styles.TEXT_PRIMARY,
-                style={"font_size": "28px", "letter_spacing": "-0.03em", "line_height": "1.2"},
+                style={"font_size": "24px", "letter_spacing": "-0.03em", "line_height": "1.2"},
             ),
             rx.cond(
                 TrackerState.page_subtitle != "",
@@ -62,7 +62,7 @@ def page_header() -> rx.Component:
         ),
         width="100%",
         align="start",
-        padding_bottom="22px",
+        padding_bottom="14px",
         spacing="4",
         flex_wrap="wrap",
     )

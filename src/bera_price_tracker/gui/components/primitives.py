@@ -48,7 +48,12 @@ def action_button(
     disabled: object = False,
     icon: str | None = None,
 ) -> rx.Component:
-    style = styles.BUTTON_STYLE if variant == "primary" else styles.SECONDARY_BUTTON_STYLE
+    if variant == "primary":
+        style = styles.BUTTON_STYLE
+    elif variant == "outline":
+        style = styles.OUTLINE_BUTTON_STYLE
+    else:
+        style = styles.SECONDARY_BUTTON_STYLE
     content = (
         rx.hstack(rx.icon(icon, size=16), rx.text(label), spacing="2", align="center")
         if icon
@@ -76,4 +81,28 @@ def empty_state(title: str, detail: str) -> rx.Component:
         rx.text(detail, size="2", color=styles.TEXT_MUTED, padding_top="4px"),
         padding="28px 8px",
         width="100%",
+    )
+
+
+def rating_stars(available: object, filled: object, label: object) -> rx.Component:
+    def star(index: int) -> rx.Component:
+        return rx.cond(
+            filled >= index,
+            rx.icon("star", size=12, color=styles.STAR),
+            rx.icon("star", size=12, color=styles.STAR_EMPTY),
+        )
+
+    return rx.hstack(
+        star(1),
+        star(2),
+        star(3),
+        star(4),
+        star(5),
+        rx.cond(
+            available,
+            rx.text(label, size="1", color=styles.TEXT_SECONDARY),
+            rx.text("Sin calificación", size="1", color=styles.TEXT_MUTED),
+        ),
+        spacing="1",
+        align="center",
     )

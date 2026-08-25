@@ -6,26 +6,31 @@ One system — no mixed radii, no decorative gradients.
 
 from __future__ import annotations
 
-# Sidebar
-SIDEBAR_BG = "#141824"
-SIDEBAR_SURFACE = "#1B2030"
-SIDEBAR_TEXT = "#F3F4F6"
-SIDEBAR_MUTED = "#9AA3B5"
-SIDEBAR_ACTIVE_BG = "#3F3D99"
-SIDEBAR_ACTIVE_TEXT = "#FFFFFF"
-SIDEBAR_BORDER = "#2A3044"
-SIDEBAR_WIDTH = "240px"
+# Sidebar — light shell (reference A/B)
+SIDEBAR_BG = "#F8FAFC"
+SIDEBAR_SURFACE = "#EEF2FF"
+SIDEBAR_TEXT = "#0F172A"
+SIDEBAR_MUTED = "#64748B"
+SIDEBAR_ACTIVE_BG = "#EEF2FF"
+SIDEBAR_ACTIVE_TEXT = "#4F46E5"
+SIDEBAR_BORDER = "#E5E7EB"
+SIDEBAR_WIDTH = "220px"
 SIDEBAR_WIDTH_COLLAPSED = "72px"
+TOPBAR_HEIGHT = "56px"
+TOPBAR_BG = "#FFFFFF"
 
 # Workspace
-WORKSPACE_BG = "#F8F9FB"
+WORKSPACE_BG = "#F8FAFC"
 SURFACE = "#FFFFFF"
 BORDER = "#E5E7EB"
 BORDER_STRONG = "#D1D5DB"
-SHADOW = "0 1px 2px rgba(15, 23, 42, 0.05)"
-RADIUS = "10px"
+SHADOW = "0 1px 2px rgba(15, 23, 42, 0.04)"
+RADIUS = "8px"
 RADIUS_SM = "8px"
-CONTROL_HEIGHT = "42px"
+CONTROL_HEIGHT = "44px"
+STAR = "#F59E0B"
+STAR_EMPTY = "#D1D5DB"
+RANGE_STRIP_BG = "#F1F5F9"
 
 # Text
 TEXT_PRIMARY = "#111827"
@@ -139,6 +144,28 @@ BUTTON_STYLE: dict[str, object] = {
     },
 }
 
+OUTLINE_BUTTON_STYLE: dict[str, object] = {
+    "background": SURFACE,
+    "color": PRIMARY,
+    "border": f"1px solid {PRIMARY}",
+    "border_radius": RADIUS_SM,
+    "height": CONTROL_HEIGHT,
+    "min_height": CONTROL_HEIGHT,
+    "font_size": "14px",
+    "font_weight": "600",
+    "cursor": "pointer",
+    "transition": "background-color 160ms ease, border-color 160ms ease",
+    "_hover": {
+        "background": "#EEF2FF",
+        "border_color": PRIMARY_HOVER,
+        "color": PRIMARY_HOVER,
+    },
+    "_focus": {
+        "box_shadow": f"0 0 0 2px {WORKSPACE_BG}, 0 0 0 4px {FOCUS}",
+        "outline": "none",
+    },
+}
+
 SECONDARY_BUTTON_STYLE: dict[str, object] = {
     "background": SURFACE,
     "color": TEXT_PRIMARY,
@@ -165,7 +192,7 @@ CARD_STYLE: dict[str, object] = {
     "border": f"1px solid {BORDER}",
     "border_radius": RADIUS,
     "box_shadow": SHADOW,
-    "padding": "20px",
+    "padding": "14px 16px",
 }
 
 SURFACE_STYLE: dict[str, object] = {
@@ -173,4 +200,25 @@ SURFACE_STYLE: dict[str, object] = {
     "border": f"1px solid {BORDER}",
     "border_radius": RADIUS,
     "box_shadow": SHADOW,
+}
+
+SELECTED_CARD_STYLE: dict[str, object] = {
+    "background_color": "rgba(79, 70, 229, 0.06)",
+    "border": f"1px solid {PRIMARY}",
+    "border_radius": RADIUS_SM,
+    "box_shadow": "none",
+}
+
+UNSELECTED_CARD_STYLE: dict[str, object] = {
+    "background_color": SURFACE,
+    "border": f"1px solid {BORDER_STRONG}",
+    "border_radius": RADIUS_SM,
+    "box_shadow": "none",
+}
+
+CALLOUT_STYLE: dict[str, object] = {
+    "background_color": "#EEF2FF",
+    "border": "1px solid #C7D2FE",
+    "border_radius": RADIUS_SM,
+    "padding": "10px 12px",
 }

@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from bera_price_tracker.gui.images import safe_public_image_url
+from bera_price_tracker.gui.search_session import opportunity_gauge, seller_rating
 
 UI_SUCCESS = "SUCCESS"
 
@@ -77,7 +78,7 @@ def _published_range(row: Any) -> str:
     return ""
 
 
-def _alibaba_cell(row: Any) -> dict[str, str | bool]:
+def _alibaba_cell(row: Any) -> dict[str, object]:
     if row is None:
         return {
             "alibaba_has_listing": False,
@@ -90,9 +91,20 @@ def _alibaba_cell(row: Any) -> dict[str, str | bool]:
             "alibaba_relevance": "",
             "alibaba_match_label": "",
             "alibaba_url": "",
+            "alibaba_score_value": 0,
+            "alibaba_score": "",
+            "alibaba_rating_available": False,
+            "alibaba_rating_filled": 0,
+            "alibaba_rating_label": "Sin calificación",
+            "opportunity_available": False,
+            "opportunity_score": "0",
+            "opportunity_percent": "0%",
+            "opportunity_ring": "conic-gradient(#E5E7EB 0, #E5E7EB 100%)",
         }
     relevance_value = _int_attr(row, "relevance_value")
     moq = _attr(row, "moq")
+    rating = seller_rating(_attr(row, "review_score"))
+    gauge = opportunity_gauge(_int_attr(row, "score_value"), _attr(row, "score"))
     return {
         "alibaba_has_listing": True,
         "alibaba_image_url": safe_public_image_url(_attr(row, "image_url")),
@@ -104,10 +116,23 @@ def _alibaba_cell(row: Any) -> dict[str, str | bool]:
         "alibaba_relevance": _attr(row, "relevance"),
         "alibaba_match_label": match_label(relevance_value, has_listing=True),
         "alibaba_url": _attr(row, "url"),
+        "alibaba_score_value": _int_attr(row, "score_value"),
+        "alibaba_score": _attr(row, "score"),
+        "alibaba_rating_available": bool(rating["available"]),
+        "alibaba_rating_filled": int(rating["filled"]),
+        "alibaba_rating_label": str(rating["label"]),
+        "opportunity_available": bool(gauge["available"]),
+        "opportunity_score": str(gauge["score"]),
+        "opportunity_percent": str(gauge["percent"]),
+        "opportunity_ring": (
+            f"conic-gradient(#15803D {gauge['percent']}, #E5E7EB 0)"
+            if gauge["available"]
+            else "conic-gradient(#E5E7EB 0, #E5E7EB 100%)"
+        ),
     }
 
 
-def _facebook_cell(row: Any) -> dict[str, str | bool]:
+def _facebook_cell(row: Any) -> dict[str, object]:
     if row is None:
         return {
             "facebook_has_listing": False,
@@ -120,6 +145,9 @@ def _facebook_cell(row: Any) -> dict[str, str | bool]:
             "facebook_relevance": "",
             "facebook_match_label": "",
             "facebook_url": "",
+            "facebook_rating_available": False,
+            "facebook_rating_filled": 0,
+            "facebook_rating_label": "Sin calificación",
         }
     relevance_value = _int_attr(row, "relevance_value")
     usd_price = _attr(row, "usd_price")
@@ -138,10 +166,13 @@ def _facebook_cell(row: Any) -> dict[str, str | bool]:
         "facebook_relevance": _attr(row, "relevance"),
         "facebook_match_label": match_label(relevance_value, has_listing=True),
         "facebook_url": _attr(row, "permalink"),
+        "facebook_rating_available": False,
+        "facebook_rating_filled": 0,
+        "facebook_rating_label": "Sin calificación",
     }
 
 
-def _ml_cell(row: Any) -> dict[str, str | bool]:
+def _ml_cell(row: Any) -> dict[str, object]:
     if row is None:
         return {
             "ml_has_listing": False,
@@ -153,6 +184,9 @@ def _ml_cell(row: Any) -> dict[str, str | bool]:
             "ml_relevance": "",
             "ml_match_label": "",
             "ml_url": "",
+            "ml_rating_available": False,
+            "ml_rating_filled": 0,
+            "ml_rating_label": "Sin calificación",
         }
     relevance_value = _int_attr(row, "relevance_value")
     condition = _attr(row, "condition")
@@ -167,6 +201,9 @@ def _ml_cell(row: Any) -> dict[str, str | bool]:
         "ml_relevance": _attr(row, "relevance"),
         "ml_match_label": match_label(relevance_value, has_listing=True),
         "ml_url": _attr(row, "permalink"),
+        "ml_rating_available": False,
+        "ml_rating_filled": 0,
+        "ml_rating_label": "Sin calificación",
     }
 
 
@@ -220,8 +257,8 @@ def build_analysis(
     }
 
 
-def _empty_row() -> dict[str, str | bool]:
-    row: dict[str, str | bool] = {
+def _empty_row() -> dict[str, object]:
+    row: dict[str, object] = {
         "product_title": "",
         "product_image_url": "",
         "product_subtitle": "Producto comparable en distintas plataformas",
@@ -238,7 +275,7 @@ _RESULT_STATUSES = frozenset({UI_SUCCESS, "EMPTY", "ERROR"})
 
 IDLE_HEADINGS = {
     "dashboard": "Inteligencia de compras e importación",
-    "searches": "Búsquedas Alibaba",
+    "searches": "Buscar productos",
     "products": "Facebook Marketplace Venezuela",
     "comparisons": "Comparaciones de mercado",
     "tracking": "Seguimiento Alibaba",
@@ -337,7 +374,7 @@ def _fill_product_row(
     product_subtitle: str = "",
     ml_comparison: Mapping[str, object] | None = None,
     landed: Mapping[str, object] | None = None,
-) -> dict[str, str | bool]:
+) -> dict[str, object]:
     row = _empty_row()
     row["product_id"] = product_id
     row["product_title"] = product_title
@@ -360,7 +397,7 @@ def _fill_product_row(
     return row
 
 
-def _standalone_facebook_row(facebook_row: Any, fallback_title: str = "") -> dict[str, str | bool]:
+def _standalone_facebook_row(facebook_row: Any, fallback_title: str = "") -> dict[str, object]:
     title = _attr(facebook_row, "title") or fallback_title
     return _fill_product_row(
         alibaba_row=None,
@@ -371,7 +408,7 @@ def _standalone_facebook_row(facebook_row: Any, fallback_title: str = "") -> dic
     )
 
 
-def _standalone_ml_row(ml_row: Any, fallback_title: str = "") -> dict[str, str | bool]:
+def _standalone_ml_row(ml_row: Any, fallback_title: str = "") -> dict[str, object]:
     title = _attr(ml_row, "title") or fallback_title
     return _fill_product_row(
         alibaba_row=None,
@@ -396,7 +433,7 @@ def build_comparison_rows(
     ml_comparison: Mapping[str, object] | None = None,
     landed: Mapping[str, object] | None = None,
     fallback_title: str = "",
-) -> list[dict[str, str | bool]]:
+) -> list[dict[str, object]]:
     """Fill FB/ML cells only when an explicit Alibaba association proves identity."""
 
     facebook_best = _best_by_relevance(facebook_rows) if facebook_status == UI_SUCCESS else None
@@ -407,7 +444,7 @@ def build_comparison_rows(
     facebook_id = _text(facebook_association_id)
     ml_id = _text(ml_association_id)
 
-    rows: list[dict[str, str | bool]] = []
+    rows: list[dict[str, object]] = []
     facebook_placed = False
     ml_placed = False
 

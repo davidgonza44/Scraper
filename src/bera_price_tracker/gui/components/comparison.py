@@ -6,8 +6,18 @@ from __future__ import annotations
 import reflex as rx
 
 from bera_price_tracker.gui import styles
+from bera_price_tracker.gui.components.brands import (
+    marketplace_brand_alibaba,
+    marketplace_brand_facebook,
+    marketplace_brand_ml,
+)
 from bera_price_tracker.gui.components.media import product_thumbnail
-from bera_price_tracker.gui.components.primitives import empty_state, price_metric, status_badge
+from bera_price_tracker.gui.components.primitives import (
+    empty_state,
+    price_metric,
+    rating_stars,
+    status_badge,
+)
 from bera_price_tracker.gui.state import TrackerState
 
 
@@ -43,6 +53,11 @@ def product_cell(row: rx.Var) -> rx.Component:
         rx.vstack(
             rx.text(row["product_title"], size="2", weight="medium", color=styles.TEXT_PRIMARY),
             rx.text(row["product_subtitle"], size="1", color=styles.TEXT_MUTED),
+            rx.cond(
+                row["product_id"] != "",
+                rx.text(row["product_id"], size="1", color=styles.TEXT_MUTED),
+            ),
+            _listing_link(row["alibaba_url"], "Ver detalles"),
             spacing="1",
             align_items="start",
             min_width="0",
@@ -67,6 +82,9 @@ def marketplace_cell(
     match_label: object,
     url: object,
     empty_label: str,
+    rating_available: object = False,
+    rating_filled: object = 0,
+    rating_label: object = "Sin calificación",
 ) -> rx.Component:
     return rx.cond(
         has_listing,
@@ -76,6 +94,7 @@ def marketplace_cell(
             rx.cond(line_one != "", rx.text(line_one, size="1", color=styles.TEXT_MUTED)),
             rx.cond(line_two != "", rx.text(line_two, size="1", color=styles.TEXT_SECONDARY)),
             rx.cond(line_three != "", rx.text(line_three, size="1", color=styles.TEXT_SECONDARY)),
+            rating_stars(rating_available, rating_filled, rating_label),
             rx.cond(
                 match_label != "",
                 status_badge(match_label, tone="neutral"),
@@ -97,18 +116,36 @@ def marketplace_cell(
     )
 
 
-def analysis_cell(row: rx.Var) -> rx.Component:
+def opportunity_gauge(row: rx.Var) -> rx.Component:
     return rx.cond(
-        row["analysis_available"],
+        row["opportunity_available"],
         rx.vstack(
-            rx.text(row["analysis_heading"], size="2", weight="medium", color=styles.TEXT_PRIMARY),
-            rx.text(row["analysis_detail"], size="1", color=styles.TEXT_SECONDARY),
+            rx.box(
+                rx.box(
+                    rx.text(
+                        row["opportunity_score"], size="3", weight="bold", color=styles.TEXT_PRIMARY
+                    ),
+                    rx.text("/100", size="1", color=styles.TEXT_MUTED),
+                    class_name="bera-opportunity-inner",
+                ),
+                class_name="bera-opportunity-ring",
+                style={"background": row["opportunity_ring"]},
+            ),
+            rx.text("Oportunidad Alibaba", size="1", color=styles.TEXT_MUTED),
+            rx.cond(
+                row["analysis_detail"] != "",
+                rx.text(row["analysis_detail"], size="1", color=styles.TEXT_SECONDARY),
+            ),
             spacing="1",
-            align_items="start",
-            min_width="160px",
+            align_items="center",
+            min_width="120px",
         ),
         rx.text("Análisis no disponible", size="2", color=styles.TEXT_MUTED),
     )
+
+
+def analysis_cell(row: rx.Var) -> rx.Component:
+    return opportunity_gauge(row)
 
 
 def comparison_row(row: rx.Var) -> rx.Component:
@@ -127,6 +164,9 @@ def comparison_row(row: rx.Var) -> rx.Component:
             match_label=row["alibaba_match_label"],
             url=row["alibaba_url"],
             empty_label="Sin resultado Alibaba",
+            rating_available=row["alibaba_rating_available"],
+            rating_filled=row["alibaba_rating_filled"],
+            rating_label=row["alibaba_rating_label"],
         ),
         marketplace_cell(
             has_listing=row["facebook_has_listing"],
@@ -141,6 +181,9 @@ def comparison_row(row: rx.Var) -> rx.Component:
             match_label=row["facebook_match_label"],
             url=row["facebook_url"],
             empty_label="Sin resultado Facebook",
+            rating_available=row["facebook_rating_available"],
+            rating_filled=row["facebook_rating_filled"],
+            rating_label=row["facebook_rating_label"],
         ),
         marketplace_cell(
             has_listing=row["ml_has_listing"],
@@ -155,60 +198,47 @@ def comparison_row(row: rx.Var) -> rx.Component:
             match_label=row["ml_match_label"],
             url=row["ml_url"],
             empty_label="Sin resultado Mercado Libre",
+            rating_available=row["ml_rating_available"],
+            rating_filled=row["ml_rating_filled"],
+            rating_label=row["ml_rating_label"],
         ),
         analysis_cell(row),
         display="grid",
-        grid_template_columns="minmax(220px, 1.2fr) repeat(3, minmax(190px, 1fr)) minmax(160px, 0.8fr)",
-        column_gap="20px",
+        grid_template_columns="minmax(200px, 1.1fr) repeat(3, minmax(170px, 1fr)) minmax(130px, 0.7fr)",
+        column_gap="16px",
         align_items="start",
-        padding="18px 20px",
+        padding="14px 16px",
         border_top=f"1px solid {styles.BORDER}",
-        min_width="1100px",
+        min_width="1040px",
     )
 
 
 def comparison_matrix() -> rx.Component:
+    header = rx.box(
+        rx.text("Producto", size="1", weight="medium", color=styles.TEXT_MUTED),
+        marketplace_brand_alibaba(size=16),
+        marketplace_brand_facebook(size=16),
+        marketplace_brand_ml(size=16),
+        rx.text("Oportunidad", size="1", weight="medium", color=styles.TEXT_MUTED),
+        display="grid",
+        grid_template_columns="minmax(200px, 1.1fr) repeat(3, minmax(170px, 1fr)) minmax(130px, 0.7fr)",
+        column_gap="16px",
+        padding="10px 16px",
+        min_width="1040px",
+        align_items="center",
+    )
     return rx.box(
-        rx.hstack(
-            rx.vstack(
-                rx.text(
-                    "Comparación de mercado", size="4", weight="medium", color=styles.TEXT_PRIMARY
-                ),
-                rx.text(
-                    "Productos comparables en distintas plataformas",
-                    size="2",
-                    color=styles.TEXT_MUTED,
-                ),
-                spacing="1",
-                align_items="start",
-            ),
-            width="100%",
-            padding="18px 20px 0",
-        ),
         rx.cond(
             TrackerState.has_comparison_rows,
             rx.box(
-                rx.box(
-                    rx.text("Producto", size="1", weight="medium", color=styles.TEXT_MUTED),
-                    rx.text("Alibaba", size="1", weight="medium", color=styles.ALIBABA),
-                    rx.text(
-                        "Facebook Marketplace", size="1", weight="medium", color=styles.FACEBOOK
-                    ),
-                    rx.text("Mercado Libre", size="1", weight="medium", color=styles.MERCADOLIBRE),
-                    rx.text("Análisis", size="1", weight="medium", color=styles.TEXT_MUTED),
-                    display="grid",
-                    grid_template_columns="minmax(220px, 1.2fr) repeat(3, minmax(190px, 1fr)) minmax(160px, 0.8fr)",
-                    column_gap="20px",
-                    padding="12px 20px",
-                    min_width="1100px",
-                ),
+                header,
                 rx.foreach(TrackerState.comparison_rows, comparison_row),
                 overflow_x="auto",
                 width="100%",
             ),
             empty_state(
                 "Todavía no hay una comparación",
-                "Busca en Alibaba y, si corresponde, abre comparables de Facebook o Mercado Libre.",
+                "Busca un producto para ver resultados por plataforma.",
             ),
         ),
         **styles.SURFACE_STYLE,

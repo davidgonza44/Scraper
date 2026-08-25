@@ -324,6 +324,7 @@ def alibaba_product_to_row(product: object) -> dict[str, Any]:
         "price_min": "" if min_price is None else str(min_price),
         "price_max": "" if max_price is None else str(max_price),
         "currency": str(currency or ""),
+        "review_score": str(getattr(product, "review_score", "") or ""),
     }
 
 
@@ -438,6 +439,9 @@ def run_alibaba_search(
         row["reputation_years"] = format_component_points(reputation.years_points, YEARS_WEIGHT)
         row["reputation_volume"] = format_component_points(
             reputation.review_count_points, REVIEW_COUNT_WEIGHT
+        )
+        row["review_score"] = (
+            "" if reputation.review_score_value is None else str(reputation.review_score_value)
         )
         rows.append(row)
     status = "SUCCESS" if rows else "EMPTY"
