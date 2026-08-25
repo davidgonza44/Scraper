@@ -34,6 +34,8 @@ from bera_price_tracker.gui import (
     analysis,
     comparison,
     marketplace_summary,
+    search_diagnostics,
+    search_export,
     search_scope,
     search_session,
     services,
@@ -149,6 +151,24 @@ def clamp_limit(value: int | str) -> int:
     return max(1, min(5, number))
 
 
+def _payload_text(item: object, key: str, default: str = "") -> str:
+    if not isinstance(item, dict):
+        return default
+    value = item.get(key, default)
+    if value is None:
+        return default
+    return str(value)
+
+
+def _official_store_label(value: object) -> str:
+    if value is True:
+        return "Tienda oficial"
+    text = str(value or "").strip()
+    if text.casefold() in {"1", "true", "tienda oficial"}:
+        return "Tienda oficial"
+    return text if text and text != "—" else ""
+
+
 class GuiModel(BaseModel):
     """Serializable GUI row models. pydantic v2 replacement for deprecated rx.Base."""
 
@@ -225,6 +245,9 @@ class AlibabaResultRow(GuiModel):
     reputation_years: str = ""
     reputation_volume: str = ""
     review_score: str = ""
+    review_count: str = ""
+    supplier_service_score: str = ""
+    gold_supplier_years: str = ""
 
 
 class MercadoLibreResultRow(GuiModel):
@@ -253,6 +276,11 @@ class MercadoLibreResultRow(GuiModel):
     score_value: int = 0
     reputation_available: bool = False
     reputation_value: int = 0
+    rating_average: str = ""
+    review_count: str = ""
+    seller_reputation: str = ""
+    seller_status: str = ""
+    official_store: str = ""
 
 
 class FacebookProductResultRow(GuiModel):
@@ -316,6 +344,11 @@ class SearchProgressRow(GuiModel):
     detail: str = ""
 
 
+class DiagnosticLine(GuiModel):
+    label: str = ""
+    value: str = ""
+
+
 class MarketplaceSummaryCard(GuiModel):
     platform: str = ""
     platform_id: str = ""
@@ -338,6 +371,11 @@ class MarketplaceSummaryCard(GuiModel):
     rating_value: str = ""
     rating_label: str = "Sin calificación"
     rating_filled: int = 0
+    details_available: bool = False
+    details_open: bool = False
+    diagnostic_detail: str = ""
+    diagnostic_outcome: str = ""
+    diagnostic_lines: list[DiagnosticLine] = []
 
 
 class ComparisonRow(GuiModel):
@@ -360,6 +398,8 @@ class ComparisonRow(GuiModel):
     alibaba_rating_available: bool = False
     alibaba_rating_filled: int = 0
     alibaba_rating_label: str = "Sin calificación"
+    alibaba_rating_caption: str = ""
+    alibaba_trust_line: str = ""
     opportunity_available: bool = False
     opportunity_score: str = "0"
     opportunity_percent: str = "0%"
@@ -389,6 +429,8 @@ class ComparisonRow(GuiModel):
     ml_rating_available: bool = False
     ml_rating_filled: int = 0
     ml_rating_label: str = "Sin calificación"
+    ml_rating_caption: str = ""
+    ml_trust_line: str = ""
     analysis_available: bool = False
     analysis_heading: str = "Análisis no disponible"
     analysis_detail: str = ""
@@ -497,6 +539,7 @@ class TrackerState(rx.State):
     search_elapsed_ms: int = 0
     search_completed_at: str = ""
     search_session_query: str = ""
+    diagnostic_open_platforms: list[str] = []
     alibaba_negotiation_product_key: str = ""
     alibaba_negotiation_quantity: str = "40"
     alibaba_negotiation_resale: str = ""
@@ -1125,6 +1168,9 @@ class TrackerState(rx.State):
                 reputation_years=str(item.get("reputation_years", "")),
                 reputation_volume=str(item.get("reputation_volume", "")),
                 review_score=str(item.get("review_score", "")),
+                review_count=_payload_text(item, "review_count"),
+                supplier_service_score=_payload_text(item, "supplier_service_score"),
+                gold_supplier_years=_payload_text(item, "gold_supplier_years"),
             )
             for item in payload.get("results") or []
         ]
@@ -1908,6 +1954,11 @@ class TrackerState(rx.State):
                 relevance_label=str(item.get("relevance_label", "")),
                 relevance_tokens=str(item.get("relevance_tokens", "")),
                 is_outlier=bool(item.get("is_outlier", False)),
+                rating_average=_payload_text(item, "rating_average"),
+                review_count=_payload_text(item, "review_count"),
+                seller_reputation=_payload_text(item, "seller_reputation"),
+                seller_status=_payload_text(item, "seller_status"),
+                official_store=_official_store_label(item.get("official_store")),
             )
             for item in payload.get("results") or []
         ]
@@ -1970,6 +2021,9 @@ class TrackerState(rx.State):
                 reputation_years=str(item.get("reputation_years", "")),
                 reputation_volume=str(item.get("reputation_volume", "")),
                 review_score=str(item.get("review_score", "")),
+                review_count=_payload_text(item, "review_count"),
+                supplier_service_score=_payload_text(item, "supplier_service_score"),
+                gold_supplier_years=_payload_text(item, "gold_supplier_years"),
             )
             for item in self._payload_maps(payload, "results")
         ]
@@ -2046,6 +2100,11 @@ class TrackerState(rx.State):
                 relevance_label=str(item.get("relevance_label", "")),
                 relevance_tokens=str(item.get("relevance_tokens", "")),
                 is_outlier=bool(item.get("is_outlier", False)),
+                rating_average=_payload_text(item, "rating_average"),
+                review_count=_payload_text(item, "review_count"),
+                seller_reputation=_payload_text(item, "seller_reputation"),
+                seller_status=_payload_text(item, "seller_status"),
+                official_store=_official_store_label(item.get("official_store")),
             )
             for item in self._payload_maps(payload, "results")
         ]
@@ -2058,6 +2117,7 @@ class TrackerState(rx.State):
         self.alibaba_summary = {}
         self.alibaba_stats_raw = {}
         self.alibaba_error = ""
+        self.diagnostic_open_platforms = []
         if PLATFORM_ALIBABA in selected:
             self.alibaba_query = plan.query
             self.alibaba_limit = plan.limit
@@ -2231,6 +2291,9 @@ class TrackerState(rx.State):
             "maximo": "USD 4.00",
             "p25": "USD 4.00",
             "p75": "USD 4.00",
+            "requested": "5",
+            "fetched": "1",
+            "usable": "1",
         }
         self.alibaba_stats_raw = {
             "minimum": "4.00",
@@ -2246,10 +2309,14 @@ class TrackerState(rx.State):
                 product_id="fixture-ali",
                 score_value=72,
                 score="72",
-                review_score="4.6",
+                review_score="4.8",
+                review_count="128",
+                supplier_service_score="4.9",
+                gold_supplier_years="6",
                 supplier_name="Fixture Supplier",
                 moq="50",
                 currency="USD",
+                image_url="https://s.alicdn.com/kf/fixture-alibaba-bat.jpg",
             )
         ]
         self.facebook_product_ui_status = UI_ERROR
@@ -2271,6 +2338,9 @@ class TrackerState(rx.State):
             "p25": "USD 9.00",
             "p75": "USD 9.00",
             "currency": "USD",
+            "requested": "5",
+            "fetched": "1",
+            "usable": "1",
         }
         self.ml_results = [
             MercadoLibreResultRow(
@@ -2281,6 +2351,12 @@ class TrackerState(rx.State):
                 relevance_value=90,
                 seller_name="Fixture Seller",
                 condition="Nuevo",
+                thumbnail_url="https://http2.mlstatic.com/fixture-ml-bat.jpg",
+                rating_average="4.8",
+                review_count="742",
+                seller_reputation="green_power",
+                seller_status="platinum · Tienda oficial",
+                official_store="Tienda oficial",
             )
         ]
 
@@ -2297,11 +2373,18 @@ class TrackerState(rx.State):
         self.facebook_product_error = ""
         self.facebook_product_results = [
             FacebookProductResultRow(
-                title="Fixture Facebook",
-                usd_price="USD 6.50",
+                title="Bate de sóftball",
+                usd_price="USD 150.00",
+                usd_amount="150.00",
                 usd_provenance="Facebook VE · USD",
                 location="Caracas",
                 currency="USD",
+                price="USD 150.00",
+                price_raw="150.00",
+                permalink="https://www.facebook.com/marketplace/item/fixture-bat",
+                image_url="https://scontent.xx.fbcdn.net/v/t1/fixture-facebook-bat.jpg",
+                relevance_value=88,
+                relevance="88/100",
             )
         ]
         self.facebook_product_statistics = [
@@ -2311,15 +2394,69 @@ class TrackerState(rx.State):
                 basis="USD",
                 provenance="Facebook VE",
                 count="1",
-                minimum="6.50",
-                average="6.50",
-                median="6.50",
-                maximum="6.50",
-                p25="6.50",
-                p75="6.50",
+                minimum="150.00",
+                average="150.00",
+                median="150.00",
+                maximum="150.00",
+                p25="150.00",
+                p75="150.00",
             )
         ]
-        self.facebook_product_summary = {"usable": "1"}
+        self.facebook_product_summary = {
+            "requested": "3",
+            "fetched": "3",
+            "usable": "1",
+            "free_price": "1",
+            "invalid_price": "1",
+        }
+
+    def apply_zero_result_diagnostic_fixture(self) -> None:
+        """Completed search with Alibaba empty, Facebook filtered, ML missing image."""
+
+        self.apply_complete_search_fixture()
+        self.search_query = "béisbol"
+        self.search_session_query = "béisbol"
+        self.alibaba_query = "béisbol"
+        self.alibaba_ui_status = UI_EMPTY
+        self.alibaba_results = []
+        self.alibaba_summary = {
+            "resultados": "0",
+            "requested": "1",
+            "fetched": "0",
+            "usable": "0",
+        }
+        self.ml_query = "béisbol"
+        self.ml_results = [
+            MercadoLibreResultRow(
+                title="Bate de béisbol, aluminio",
+                price="USD 9.00",
+                price_raw="9.00",
+                currency="USD",
+                relevance_value=90,
+                seller_name="Fixture Seller",
+                condition="Nuevo",
+                thumbnail_url="",
+                rating_average="4.8",
+                review_count="742",
+                seller_reputation="MercadoLíder",
+                seller_status="Tienda oficial",
+                official_store="Tienda oficial",
+            )
+        ]
+        self.ml_summary = {
+            "comparables": "1 de 1",
+            "comparable_count": "1",
+            "minimo": "USD 9.00",
+            "mediana": "USD 9.00",
+            "precio_tipico": "USD 9.00",
+            "maximo": "USD 9.00",
+            "p25": "USD 9.00",
+            "p75": "USD 9.00",
+            "currency": "USD",
+            "requested": "1",
+            "fetched": "1",
+            "usable": "1",
+        }
 
     def apply_running_search_fixture(self) -> None:
         """Isolated visual fixture for in-progress search."""
@@ -2365,6 +2502,7 @@ class TrackerState(rx.State):
         self.ml_error = ""
         self.ml_is_loading = False
         self.ml_ui_status = UI_INITIAL
+        self.diagnostic_open_platforms = []
         self._invalidate_ml_comparison()
 
     def compare_ml_with_landed_cost(self) -> None:
@@ -3010,7 +3148,34 @@ class TrackerState(rx.State):
             ml_summary=self.ml_live_summary,
             ml_rows=self.ml_visible_rows,
         )
-        return [MarketplaceSummaryCard.model_validate(item) for item in raw]
+        attached = search_diagnostics.attach_diagnostics(
+            raw,
+            [
+                search_diagnostics.alibaba_diagnostic(
+                    ui_status=self.alibaba_ui_status,
+                    summary=self.alibaba_summary,
+                    requested_limit=self.search_limit,
+                    usable_rows=len(self.alibaba_visible_rows),
+                    error=self.alibaba_error,
+                ),
+                search_diagnostics.facebook_diagnostic(
+                    ui_status=self.facebook_product_ui_status,
+                    summary=self.facebook_product_summary,
+                    requested_limit=self.search_limit,
+                    usable_rows=len(self.facebook_product_results),
+                    error=self.facebook_product_error,
+                ),
+                search_diagnostics.mercadolibre_diagnostic(
+                    ui_status=self.ml_ui_status,
+                    summary=self.ml_live_summary,
+                    requested_limit=self.search_limit,
+                    usable_rows=len(self.ml_visible_rows),
+                    error=self.ml_error,
+                ),
+            ],
+            open_platforms=self.diagnostic_open_platforms,
+        )
+        return [MarketplaceSummaryCard.model_validate(item) for item in attached]
 
     @rx.var
     def comparison_rows(self) -> list[ComparisonRow]:
@@ -3040,6 +3205,82 @@ class TrackerState(rx.State):
     def has_comparison_rows(self) -> bool:
         return len(self.comparison_rows) > 0
 
+    def current_export_listing_count(self) -> int:
+        count = 0
+        if self.alibaba_ui_status == UI_SUCCESS:
+            count += len(self.alibaba_visible_rows)
+        if self.facebook_product_ui_status == UI_SUCCESS:
+            count += len(self.facebook_product_results)
+        if self.ml_ui_status == UI_SUCCESS:
+            count += len(self.ml_visible_rows)
+        return count
+
     @rx.var
     def export_enabled(self) -> bool:
-        return False
+        return search_diagnostics.export_enabled(
+            phase=self.search_session_phase,
+            listing_count=self.current_export_listing_count(),
+        )
+
+    def toggle_provider_diagnostic(self, platform_id: str) -> None:
+        current = list(self.diagnostic_open_platforms)
+        key = str(platform_id or "")
+        if not key:
+            return
+        if key in current:
+            self.diagnostic_open_platforms = [item for item in current if item != key]
+        else:
+            self.diagnostic_open_platforms = [*current, key]
+
+    def export_current_search(self) -> object:
+        """Download current-session listings as CSV. Zero provider I/O."""
+
+        if not search_diagnostics.export_enabled(
+            phase=self.search_session_phase,
+            listing_count=self.current_export_listing_count(),
+        ):
+            return None
+        alibaba_diag = search_diagnostics.alibaba_diagnostic(
+            ui_status=self.alibaba_ui_status,
+            summary=self.alibaba_summary,
+            requested_limit=self.search_limit,
+            usable_rows=len(self.alibaba_visible_rows),
+            error=self.alibaba_error,
+        )
+        facebook_diag = search_diagnostics.facebook_diagnostic(
+            ui_status=self.facebook_product_ui_status,
+            summary=self.facebook_product_summary,
+            requested_limit=self.search_limit,
+            usable_rows=len(self.facebook_product_results),
+            error=self.facebook_product_error,
+        )
+        ml_diag = search_diagnostics.mercadolibre_diagnostic(
+            ui_status=self.ml_ui_status,
+            summary=self.ml_live_summary,
+            requested_limit=self.search_limit,
+            usable_rows=len(self.ml_visible_rows),
+            error=self.ml_error,
+        )
+        rows = search_export.listing_rows_for_export(
+            search_query=self.search_session_query or self.search_query,
+            searched_at=self.search_completed_at,
+            search_mode=self.search_mode_label,
+            requested_limit=self.search_limit,
+            alibaba_status=self.alibaba_ui_status,
+            alibaba_rows=self.alibaba_visible_rows,
+            alibaba_diagnostic=alibaba_diag,
+            facebook_status=self.facebook_product_ui_status,
+            facebook_rows=self.facebook_product_results,
+            facebook_diagnostic=facebook_diag,
+            ml_status=self.ml_ui_status,
+            ml_rows=self.ml_visible_rows,
+            ml_diagnostic=ml_diag,
+        )
+        if not rows:
+            return None
+        payload = search_export.render_csv(rows)
+        filename = search_export.export_filename(
+            searched_at=self.search_completed_at,
+            query=self.search_session_query or self.search_query,
+        )
+        return rx.download(data=payload, filename=filename, mime_type="text/csv;charset=utf-8")

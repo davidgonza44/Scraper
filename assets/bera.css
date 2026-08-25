@@ -203,6 +203,35 @@ select:focus-visible {
   }
 }
 
+.bera-product-thumb {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #F8FAFC;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+}
+
+.bera-product-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.bera-product-thumb-fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  background: #F8FAFC;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

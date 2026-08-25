@@ -97,7 +97,7 @@ def format_session_timestamp(moment: datetime) -> str:
 
 
 def seller_rating(raw: object) -> dict[str, str | int | bool]:
-    """Genuine 0–5 seller rating only. Never treat relevance as stars."""
+    """Genuine 0–5 numeric rating only. Never treat relevance or opportunity as stars."""
 
     parsed = parse_rating_0_5(raw)
     if parsed is None:
@@ -120,6 +120,21 @@ def seller_rating(raw: object) -> dict[str, str | int | bool]:
         "label": f"{text}/5",
         "filled": filled,
     }
+
+
+def product_rating_display(
+    raw: object, *, review_count: object = ""
+) -> dict[str, str | int | bool]:
+    """Product/listing 0–5 rating. Never a seller, relevance, or opportunity score."""
+
+    rating = seller_rating(raw)
+    count = str(review_count or "").strip()
+    if rating["available"] and count:
+        rating["label"] = f"{rating['value']} · {count} reseñas"
+    elif rating["available"]:
+        rating["label"] = str(rating["value"])
+    rating["caption"] = "Calificación del producto" if rating["available"] else ""
+    return rating
 
 
 def opportunity_gauge(score_value: object, score_text: object = "") -> dict[str, str | int | bool]:

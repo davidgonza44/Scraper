@@ -11,6 +11,7 @@ from urllib.parse import quote_plus
 
 from bera_price_tracker.application import MarketplaceSourceUnavailable
 from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
+from bera_price_tracker.application.provider_acquisition import ProviderAcquisitionMetrics
 from bera_price_tracker.application.services import validate_alibaba_search
 from bera_price_tracker.domain.alibaba import AlibabaProduct
 from bera_price_tracker.infrastructure.providers.apify import (
@@ -167,6 +168,9 @@ class ApifyAlibabaClient:
     _api_token: str | None = field(default=None, repr=False)
     actor_id: str = DEFAULT_ALIBABA_ACTOR
     client_factory: ClientFactory | None = field(default=None, repr=False)
+    last_metrics: ProviderAcquisitionMetrics | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         actor = self.actor_id.strip() if isinstance(self.actor_id, str) else ""
@@ -212,6 +216,15 @@ class ApifyAlibabaClient:
             mapped = map_alibaba_item(raw_item)
             if mapped is not None:
                 products.append(mapped)
+        object.__setattr__(
+            self,
+            "last_metrics",
+            ProviderAcquisitionMetrics(
+                requested=normalized_limit,
+                fetched=len(raw_items),
+                usable=len(products),
+            ),
+        )
         return products
 
 

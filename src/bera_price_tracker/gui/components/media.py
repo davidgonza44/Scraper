@@ -8,35 +8,37 @@ import reflex as rx
 from bera_price_tracker.gui import styles
 
 PLACEHOLDER_LABEL = "Sin imagen"
+DEFAULT_SIZE = "80px"
 
 
 def product_thumbnail(
     image_url: object,
     *,
     alt: object = "",
-    size: str = "72px",
+    size: str = DEFAULT_SIZE,
 ) -> rx.Component:
     return rx.box(
         rx.cond(
             image_url != "",
-            rx.image(
+            rx.el.img(
                 src=image_url,
                 alt=alt,
-                width=size,
-                height=size,
-                object_fit="cover",
-                border_radius=styles.RADIUS_SM,
+                class_name="bera-product-thumb-img",
+                custom_attrs={
+                    "onerror": (
+                        "this.style.display='none';"
+                        "if(this.nextElementSibling){this.nextElementSibling.style.display='flex';}"
+                    )
+                },
             ),
-            rx.center(
-                rx.text(PLACEHOLDER_LABEL, size="1", color=styles.TEXT_MUTED, weight="medium"),
-                width=size,
-                height=size,
-                background_color=styles.WORKSPACE_BG,
-                border=f"1px dashed {styles.BORDER_STRONG}",
-                border_radius=styles.RADIUS_SM,
-            ),
+            rx.fragment(),
         ),
-        width=size,
-        height=size,
+        rx.center(
+            rx.text(PLACEHOLDER_LABEL, size="1", color=styles.TEXT_MUTED, weight="medium"),
+            class_name="bera-product-thumb-fallback",
+            display=rx.cond(image_url != "", "none", "flex"),
+        ),
+        class_name="bera-product-thumb",
+        style={"width": size, "height": size, "min_width": size, "min_height": size},
         flex_shrink="0",
     )

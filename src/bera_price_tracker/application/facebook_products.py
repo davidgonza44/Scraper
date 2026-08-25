@@ -47,6 +47,7 @@ class FacebookProductSearchMetrics:
     """Ephemeral counters from one generic Facebook search."""
 
     fetched: int = 0
+    requested: int = 0
     invalid_price: int = 0
     free_price: int = 0
     out_of_scope_location: int = 0

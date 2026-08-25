@@ -315,3 +315,57 @@ def test_vef5_listing_displays_usd_without_changing_original() -> None:
     assert listing.formatted_amount == "VEF5"
     assert listing.usd_amount == Decimal("5.00")
     assert listing.usd_evidence == ("facebook_venezuela_price_semantics",)
+
+
+def test_maps_primary_listing_photo_image_url() -> None:
+    mapped = map_apify_item(
+        _raw_item(
+            primary_listing_photo={"photo_image_url": "https://scontent.xx.fbcdn.net/v/t1/bate.jpg"}
+        )
+    )
+    assert mapped is not None
+    assert mapped.image_url == "https://scontent.xx.fbcdn.net/v/t1/bate.jpg"
+
+
+def test_maps_primary_listing_photo_image_uri() -> None:
+    mapped = map_apify_item(
+        _raw_item(
+            primary_listing_photo={"image": {"uri": "https://scontent.xx.fbcdn.net/v/t1/uri.jpg"}}
+        )
+    )
+    assert mapped is not None
+    assert mapped.image_url == "https://scontent.xx.fbcdn.net/v/t1/uri.jpg"
+
+
+def test_maps_camel_case_primary_listing_photo() -> None:
+    mapped = map_apify_item(
+        _raw_item(
+            **{
+                "primaryListingPhoto": {
+                    "photoImageUrl": "https://scontent.xx.fbcdn.net/v/t1/camel.jpg"
+                }
+            }
+        )
+    )
+    assert mapped is not None
+    assert mapped.image_url == "https://scontent.xx.fbcdn.net/v/t1/camel.jpg"
+
+
+def test_missing_primary_photo_maps_to_none() -> None:
+    mapped = map_apify_item(_raw_item())
+    assert mapped is not None
+    assert mapped.image_url is None
+
+
+def test_image_mapping_does_not_alter_title_price_location() -> None:
+    without_photo = map_apify_item(_raw_item())
+    with_photo = map_apify_item(
+        _raw_item(
+            primary_listing_photo={"photo_image_url": "https://scontent.xx.fbcdn.net/v/t1/bate.jpg"}
+        )
+    )
+    assert without_photo is not None and with_photo is not None
+    assert with_photo.title == without_photo.title
+    assert with_photo.price == without_photo.price
+    assert with_photo.location == without_photo.location
+    assert with_photo.image_url == "https://scontent.xx.fbcdn.net/v/t1/bate.jpg"

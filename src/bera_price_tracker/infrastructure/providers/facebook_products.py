@@ -129,6 +129,7 @@ class FacebookMarketplaceProductSearch:
                         usd_amount=normalized.usd_amount,
                         usd_normalization_status=normalized.normalization_status.value,
                         usd_evidence=normalized.evidence,
+                        image_url=_required_text(record.image_url),
                     )
                 )
             except (TypeError, ValueError):
@@ -137,6 +138,7 @@ class FacebookMarketplaceProductSearch:
 
         metrics = FacebookProductSearchMetrics(
             fetched=response.fetched,
+            requested=limit,
             invalid_price=invalid_price,
             free_price=free_price,
             out_of_scope_location=out_of_scope_location,

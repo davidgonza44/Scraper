@@ -9,6 +9,7 @@ from typing import Protocol, cast
 from urllib.parse import urlsplit
 
 from bera_price_tracker.application import MarketplaceSourceUnavailable
+from bera_price_tracker.application.provider_acquisition import ProviderAcquisitionMetrics
 from bera_price_tracker.application.services import validate_mercadolibre_search
 from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
 from bera_price_tracker.infrastructure.providers.apify import (
@@ -162,6 +163,53 @@ def _nested_text(record: Mapping[str, object], parent: str, child: str) -> str |
     return _scalar_text(record.get(f"{parent}.{child}"))
 
 
+def _rating_text(value: object) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        if value != value or value < 0:
+            return None
+        text = f"{value:.2f}".rstrip("0").rstrip(".")
+        return text or None
+    return _scalar_text(value)
+
+
+def _seller_mapping(record: Mapping[str, object]) -> Mapping[str, object] | None:
+    return _as_mapping(record.get("seller"))
+
+
+def _seller_reputation_text(seller: Mapping[str, object]) -> str | None:
+    """Categorical Mercado Libre reputation. Never converted into 0–5 stars."""
+
+    reputation = seller.get("reputation")
+    if isinstance(reputation, str):
+        return _scalar_text(reputation)
+    mapped = _as_mapping(reputation)
+    if mapped is None:
+        return None
+    for key in ("level_id", "levelId", "power_seller_status", "powerSellerStatus"):
+        text = _scalar_text(mapped.get(key))
+        if text is not None:
+            return text
+    return None
+
+
+def _seller_status_text(seller: Mapping[str, object]) -> str | None:
+    parts: list[str] = []
+    power = _scalar_text(seller.get("powerSellerStatus") or seller.get("power_seller_status"))
+    if power is not None:
+        parts.append(power)
+    store = _scalar_text(seller.get("storeName") or seller.get("store_name"))
+    if store is not None:
+        parts.append(store)
+    official = seller.get("isOfficialStore")
+    if official is None:
+        official = seller.get("is_official_store")
+    if official is True:
+        parts.append("Tienda oficial")
+    return " · ".join(parts) or None
+
+
 def is_venezuela_listing(
     *,
     external_id: str | None,
@@ -223,6 +271,11 @@ def map_mercadolibre_item(raw: object) -> MercadoLibreListing | None:
     if free_shipping_raw is None:
         free_shipping_raw = record.get("free_shipping")
     free_shipping = free_shipping_raw if isinstance(free_shipping_raw, bool) else None
+    seller = _seller_mapping(record)
+    official_raw = None if seller is None else seller.get("isOfficialStore")
+    if official_raw is None and seller is not None:
+        official_raw = seller.get("is_official_store")
+    official_store = official_raw if isinstance(official_raw, bool) else None
     return MercadoLibreListing(
         external_id=external_id,
         title=title,
@@ -234,7 +287,12 @@ def map_mercadolibre_item(raw: object) -> MercadoLibreListing | None:
         currency=currency,
         condition=_scalar_text(record.get("condition")),
         thumbnail_url=_scalar_text(record.get("thumbnailUrl") or record.get("thumbnail")),
-        seller_name=_nested_text(record, "seller", "nickname"),
+        seller_name=None if seller is None else _scalar_text(seller.get("nickname")),
+        seller_reputation=None if seller is None else _seller_reputation_text(seller),
+        seller_status=None if seller is None else _seller_status_text(seller),
+        official_store=official_store,
+        rating_average=_rating_text(record.get("ratingAverage", record.get("rating_average"))),
+        review_count=_scalar_text(record.get("reviewCount") or record.get("review_count")),
         free_shipping=free_shipping,
         country=country,
         site_id=site_id,
@@ -268,6 +326,9 @@ class ApifyMercadoLibreClient:
     _api_token: str | None = field(default=None, repr=False)
     actor_id: str = DEFAULT_MERCADOLIBRE_ACTOR
     client_factory: ClientFactory | None = field(default=None, repr=False)
+    last_metrics: ProviderAcquisitionMetrics | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         actor = self.actor_id.strip() if isinstance(self.actor_id, str) else ""
@@ -313,6 +374,15 @@ class ApifyMercadoLibreClient:
             mapped = map_mercadolibre_item(raw_item)
             if mapped is not None:
                 listings.append(mapped)
+        object.__setattr__(
+            self,
+            "last_metrics",
+            ProviderAcquisitionMetrics(
+                requested=normalized_limit,
+                fetched=len(raw_items),
+                usable=len(listings),
+            ),
+        )
         return listings
 
 

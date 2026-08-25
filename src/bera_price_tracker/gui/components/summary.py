@@ -12,7 +12,7 @@ from bera_price_tracker.gui.components.brands import (
     marketplace_brand_facebook,
     marketplace_brand_ml,
 )
-from bera_price_tracker.gui.components.primitives import rating_stars, status_badge
+from bera_price_tracker.gui.components.primitives import status_badge
 from bera_price_tracker.gui.state import TrackerState
 
 
@@ -94,21 +94,58 @@ def marketplace_summary_card(card: rx.Var) -> rx.Component:
             card["meta_one"] != "",
             rx.text(card["meta_one"], size="1", color=styles.TEXT_SECONDARY, padding_top="8px"),
         ),
-        rx.hstack(
-            rx.cond(
-                card["meta_two"] != "",
-                rx.text(card["meta_two"], size="1", color=styles.TEXT_SECONDARY),
-                rx.fragment(),
-            ),
-            rx.spacer(),
-            rating_stars(card["rating_available"], card["rating_filled"], card["rating_label"]),
-            width="100%",
-            align="center",
-            padding_top="6px",
+        rx.cond(
+            card["meta_two"] != "",
+            rx.text(card["meta_two"], size="1", color=styles.TEXT_SECONDARY, padding_top="6px"),
         ),
         rx.cond(
             card["note"] != "",
             rx.text(card["note"], size="1", color=styles.TEXT_MUTED, padding_top="6px"),
+        ),
+        rx.cond(
+            card["details_available"],
+            rx.vstack(
+                rx.button(
+                    rx.cond(card["details_open"], "Ocultar detalles", "Ver detalles"),
+                    on_click=TrackerState.toggle_provider_diagnostic(card["platform_id"]),
+                    size="1",
+                    variant="ghost",
+                    color=styles.PRIMARY,
+                    padding="0",
+                    height="auto",
+                    min_height="auto",
+                ),
+                rx.cond(
+                    card["details_open"],
+                    rx.vstack(
+                        rx.foreach(
+                            card["diagnostic_lines"],
+                            lambda item: rx.hstack(
+                                rx.text(item["label"], size="1", color=styles.TEXT_MUTED),
+                                rx.spacer(),
+                                rx.text(item["value"], size="1", weight="medium"),
+                                width="100%",
+                            ),
+                        ),
+                        rx.cond(
+                            card["diagnostic_detail"] != "",
+                            rx.text(
+                                card["diagnostic_detail"],
+                                size="1",
+                                color=styles.DANGER,
+                                padding_top="4px",
+                            ),
+                        ),
+                        spacing="1",
+                        width="100%",
+                        padding_top="6px",
+                    ),
+                ),
+                spacing="1",
+                width="100%",
+                padding_top="8px",
+                align_items="start",
+            ),
         ),
         **styles.SURFACE_STYLE,
         padding="14px 16px",

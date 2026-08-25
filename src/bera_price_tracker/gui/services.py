@@ -22,6 +22,26 @@ logger = logging.getLogger(__name__)
 UNAVAILABLE_USER_MESSAGE = "Facebook Marketplace no está disponible temporalmente."
 GENERIC_USER_MESSAGE = "No se pudo consultar Facebook Marketplace."
 
+
+def _provider_acquisition(service: object, *, requested: int, usable: int) -> dict[str, str]:
+    """Copy safe acquisition counts. Missing fetched stays blank for 'No disponible'."""
+
+    from bera_price_tracker.application.provider_acquisition import ProviderAcquisitionMetrics
+
+    provider = getattr(service, "provider", None)
+    metrics = getattr(provider, "last_metrics", None)
+    payload = {
+        "requested": str(requested),
+        "usable": str(usable),
+    }
+    if isinstance(metrics, ProviderAcquisitionMetrics):
+        payload["fetched"] = str(metrics.fetched)
+        payload["requested"] = str(metrics.requested)
+        payload["usable"] = str(metrics.usable)
+        payload["rejected"] = str(metrics.rejected)
+    return payload
+
+
 _EXPLAIN_FIELDS = (
     "product_type",
     "h0019_match",
@@ -325,6 +345,9 @@ def alibaba_product_to_row(product: object) -> dict[str, Any]:
         "price_max": "" if max_price is None else str(max_price),
         "currency": str(currency or ""),
         "review_score": str(getattr(product, "review_score", "") or ""),
+        "review_count": str(getattr(product, "review_count", "") or ""),
+        "supplier_service_score": str(getattr(product, "supplier_service_score", "") or ""),
+        "gold_supplier_years": str(getattr(product, "gold_supplier_years", "") or ""),
     }
 
 
@@ -443,16 +466,23 @@ def run_alibaba_search(
         row["review_score"] = (
             "" if reputation.review_score_value is None else str(reputation.review_score_value)
         )
+        row["review_count"] = str(getattr(product, "review_count", "") or "")
+        row["supplier_service_score"] = str(getattr(product, "supplier_service_score", "") or "")
+        row["gold_supplier_years"] = str(getattr(product, "gold_supplier_years", "") or "")
         rows.append(row)
     status = "SUCCESS" if rows else "EMPTY"
 
     def _raw(value: object) -> str:
         return "" if value is None else str(value)
 
+    acquisition = _provider_acquisition(service, requested=normalized_limit, usable=len(products))
+    summary = build_alibaba_summary(list(products))
+    summary.update(acquisition)
+
     return {
         "ui_status": status,
         "results": rows,
-        "summary": build_alibaba_summary(list(products)),
+        "summary": summary,
         "stats_raw": {
             "minimum": _raw(stats.minimum),
             "p25": _raw(stats.p25),
@@ -1507,6 +1537,7 @@ def run_facebook_product_search(
         "ui_status": "SUCCESS" if rows else "EMPTY",
         "results": rows,
         "summary": {
+            "requested": str(metrics.requested or limit),
             "fetched": str(metrics.fetched),
             "usable": str(metrics.usable),
             "free_price": str(metrics.free_price),
@@ -1592,6 +1623,11 @@ def mercadolibre_listing_to_row(scored: Any) -> dict[str, Any]:
         "currency": currency or "—",
         "condition": _blank_or_dash(listing.condition),
         "seller_name": _blank_or_dash(listing.seller_name),
+        "seller_reputation": _blank_or_dash(getattr(listing, "seller_reputation", None)),
+        "seller_status": _blank_or_dash(getattr(listing, "seller_status", None)),
+        "official_store": bool(getattr(listing, "official_store", False)),
+        "rating_average": str(getattr(listing, "rating_average", "") or ""),
+        "review_count": str(getattr(listing, "review_count", "") or ""),
         "shipping": shipping,
         "thumbnail_url": safe_public_image_url(listing.thumbnail_url or ""),
         "country": _blank_or_dash(listing.country),
@@ -1726,10 +1762,12 @@ def run_mercadolibre_search(
         ):
             row["is_outlier"] = is_price_outlier(price, stats.lower_fence, stats.upper_fence)
         rows.append(row)
+    summary = build_mercadolibre_summary(scored, min_relevance=DEFAULT_BENCHMARK_RELEVANCE)
+    summary.update(_provider_acquisition(service, requested=normalized_limit, usable=len(listings)))
     return {
         "ui_status": "SUCCESS" if rows else "EMPTY",
         "results": rows,
-        "summary": build_mercadolibre_summary(scored, min_relevance=DEFAULT_BENCHMARK_RELEVANCE),
+        "summary": summary,
         "error_message": "",
     }
 

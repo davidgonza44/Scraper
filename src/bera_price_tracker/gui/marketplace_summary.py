@@ -6,9 +6,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from bera_price_tracker.gui.brands import PLATFORM_ALIBABA, PLATFORM_FACEBOOK, PLATFORM_ML
-from bera_price_tracker.gui.search_session import seller_rating
 
 UI_SUCCESS = "SUCCESS"
+UI_EMPTY = "EMPTY"
 UI_LOADING = "LOADING"
 UI_ERROR = "ERROR"
 EMPTY_METRIC = "—"
@@ -101,10 +101,10 @@ def alibaba_summary_card(
     overlay = _status_overlay(card, ui_status)
     if overlay is not None:
         return overlay
-    if ui_status != UI_SUCCESS:
+    if ui_status not in {UI_SUCCESS, UI_EMPTY}:
         return card
-    card["status"] = "ready"
-    card["status_label"] = "Resultados"
+    card["status"] = "ready" if ui_status == UI_SUCCESS and rows else "empty-results"
+    card["status_label"] = "Resultados" if rows else "Sin resultados"
     card["result_count"] = (
         _metric(summary, "resultados")
         if _metric(summary, "resultados") != EMPTY_METRIC
@@ -122,7 +122,6 @@ def alibaba_summary_card(
         card["range"] = _range(card["minimum"], card["maximum"])
     supplier = ""
     moq = ""
-    review_score = ""
     if rows:
         first = rows[0]
         supplier = _text(
@@ -132,19 +131,14 @@ def alibaba_summary_card(
         moq = _text(
             getattr(first, "moq", None) or (first.get("moq") if isinstance(first, Mapping) else "")
         )
-        review_score = _text(
-            getattr(first, "review_score", None)
-            or (first.get("review_score") if isinstance(first, Mapping) else "")
-        )
     if moq:
         card["meta_one"] = f"MOQ típico: {moq}"
     if supplier:
         card["meta_two"] = f"Mejor proveedor: {supplier}"
-    rating = seller_rating(review_score)
-    card["rating_available"] = bool(rating["available"])
-    card["rating_value"] = str(rating["value"])
-    card["rating_label"] = str(rating["label"])
-    card["rating_filled"] = int(rating["filled"])
+    card["rating_available"] = False
+    card["rating_value"] = ""
+    card["rating_label"] = "Sin calificación"
+    card["rating_filled"] = 0
     return card
 
 
@@ -162,10 +156,10 @@ def facebook_summary_card(
     overlay = _status_overlay(card, ui_status)
     if overlay is not None:
         return overlay
-    if ui_status != UI_SUCCESS:
+    if ui_status not in {UI_SUCCESS, UI_EMPTY}:
         return card
-    card["status"] = "ready"
-    card["status_label"] = "Con precio"
+    card["status"] = "ready" if ui_status == UI_SUCCESS and rows else "empty-results"
+    card["status_label"] = "Con precio" if rows else "Sin resultados"
     usable = _metric(summary, "usable")
     card["result_count"] = usable if usable != EMPTY_METRIC else str(len(rows))
     first_stats = statistics[0] if statistics else None
@@ -239,10 +233,10 @@ def mercadolibre_summary_card(
     overlay = _status_overlay(card, ui_status)
     if overlay is not None:
         return overlay
-    if ui_status != UI_SUCCESS:
+    if ui_status not in {UI_SUCCESS, UI_EMPTY}:
         return card
-    card["status"] = "ready"
-    card["status_label"] = "Comparables"
+    card["status"] = "ready" if ui_status == UI_SUCCESS and rows else "empty-results"
+    card["status_label"] = "Comparables" if rows else "Sin resultados"
     count = _metric(summary, "comparable_count")
     if count == EMPTY_METRIC:
         count = _metric(summary, "comparables")

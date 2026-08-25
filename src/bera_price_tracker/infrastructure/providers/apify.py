@@ -67,6 +67,7 @@ class ApifyFacebookListing:
     location: str | None
     url: str | None
     description: str = ""
+    image_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +249,23 @@ def _price_currency(price: Mapping[str, object] | None, formatted: str | None) -
     return _currency_from_formatted(formatted)
 
 
+def _listing_image_url(record: Mapping[str, object]) -> str | None:
+    """Return the public primary-photo scalar. Never stores the photo object."""
+
+    photo = _as_mapping(record.get("primary_listing_photo")) or _as_mapping(
+        record.get("primaryListingPhoto")
+    )
+    if photo is None:
+        return None
+    direct = _scalar_text(photo.get("photo_image_url")) or _scalar_text(photo.get("photoImageUrl"))
+    if direct is not None:
+        return direct
+    image = _as_mapping(photo.get("image"))
+    if image is None:
+        return None
+    return _scalar_text(image.get("uri")) or _scalar_text(image.get("url"))
+
+
 def _location_text(record: Mapping[str, object]) -> str | None:
     display_name = _scalar_text(
         _nested_get(record, "location", "reverse_geocode", "city_page", "display_name")
@@ -284,6 +302,7 @@ def map_apify_item(raw: object) -> ApifyFacebookListing | None:
         location=_location_text(record),
         url=_scalar_text(record.get("listingUrl")) or _scalar_text(record.get("itemUrl")),
         description="",
+        image_url=_listing_image_url(record),
     )
 
 
