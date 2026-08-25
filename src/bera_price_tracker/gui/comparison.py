@@ -234,6 +234,44 @@ def _empty_row() -> dict[str, str | bool]:
     return row
 
 
+_RESULT_STATUSES = frozenset({UI_SUCCESS, "EMPTY", "ERROR"})
+
+IDLE_HEADINGS = {
+    "dashboard": "Inteligencia de compras e importación",
+    "searches": "Búsquedas Alibaba",
+    "products": "Facebook Marketplace Venezuela",
+    "comparisons": "Comparaciones de mercado",
+    "tracking": "Seguimiento Alibaba",
+    "import": "Importación y costo puesto",
+    "tools": "Facebook H0019",
+    "settings": "Ranking y filtros",
+}
+
+
+def shared_alibaba_association(
+    facebook_association_id: object = "",
+    ml_association_id: object = "",
+    context_id: object = "",
+) -> str:
+    """Return the Alibaba id only when FB, ML, and context all name the same product."""
+
+    facebook_id = _text(facebook_association_id)
+    ml_id = _text(ml_association_id)
+    selected_id = _text(context_id)
+    if not facebook_id or not ml_id or not selected_id:
+        return ""
+    if facebook_id == ml_id == selected_id:
+        return selected_id
+    return ""
+
+
+def _results_heading(query: object, status: object) -> str:
+    text = _text(query)
+    if _text(status) in _RESULT_STATUSES and text:
+        return f"Resultados para: {text}"
+    return ""
+
+
 def page_heading(
     *,
     alibaba_query: str = "",
@@ -245,28 +283,103 @@ def page_heading(
     ml_status: str = "",
     h0019_status: str = "",
     workspace_view: str = "",
+    facebook_association_id: str = "",
+    ml_association_id: str = "",
+    context_id: str = "",
+    context_title: str = "",
 ) -> str:
-    """Show a real search query only when a search has actually run."""
+    """Workspace-first heading. Another marketplace's SUCCESS never leaks in."""
 
-    if alibaba_status in {UI_SUCCESS, "EMPTY", "ERROR"} and alibaba_query.strip():
-        return f"Resultados para: {alibaba_query.strip()}"
-    if facebook_status in {UI_SUCCESS, "EMPTY", "ERROR"} and facebook_query.strip():
-        return f"Resultados para: {facebook_query.strip()}"
-    if ml_status in {UI_SUCCESS, "EMPTY", "ERROR"} and ml_query.strip():
-        return f"Resultados para: {ml_query.strip()}"
-    if h0019_status in {UI_SUCCESS, "EMPTY", "ERROR"} and h0019_query.strip():
-        return f"Resultados para: {h0019_query.strip()}"
-    idle_titles = {
-        "dashboard": "Inteligencia de compras e importación",
-        "searches": "Búsquedas Alibaba",
-        "products": "Facebook Marketplace Venezuela",
-        "comparisons": "Comparaciones de mercado",
-        "tracking": "Seguimiento Alibaba",
-        "import": "Importación y costo puesto",
-        "tools": "Facebook H0019",
-        "settings": "Ranking y filtros",
-    }
-    return idle_titles.get(workspace_view, "Inteligencia de compras e importación")
+    view = _text(workspace_view) or "dashboard"
+    if view == "searches":
+        return _results_heading(alibaba_query, alibaba_status) or IDLE_HEADINGS["searches"]
+    if view == "products":
+        return _results_heading(facebook_query, facebook_status) or IDLE_HEADINGS["products"]
+    if view == "comparisons":
+        heading = _results_heading(ml_query, ml_status)
+        if heading:
+            return heading
+        if _text(context_title) and _text(context_id):
+            return f"Resultados para: {_text(context_title)}"
+        return IDLE_HEADINGS["comparisons"]
+    if view == "tools":
+        return _results_heading(h0019_query, h0019_status) or IDLE_HEADINGS["tools"]
+    if view == "tracking":
+        title = _text(context_title)
+        return title or IDLE_HEADINGS["tracking"]
+    if view == "import":
+        title = _text(context_title)
+        return title or IDLE_HEADINGS["import"]
+    if view == "settings":
+        return IDLE_HEADINGS["settings"]
+    shared = shared_alibaba_association(facebook_association_id, ml_association_id, context_id)
+    if view == "dashboard" and shared and _text(context_title):
+        return f"Resultados para: {_text(context_title)}"
+    return IDLE_HEADINGS.get(view, IDLE_HEADINGS["dashboard"])
+
+
+def _lookup_alibaba(rows: Sequence[Any], product_id: str) -> Any | None:
+    if not product_id:
+        return None
+    for item in rows:
+        if _attr(item, "product_id") == product_id:
+            return item
+    return None
+
+
+def _fill_product_row(
+    *,
+    alibaba_row: Any | None,
+    facebook_row: Any | None,
+    ml_row: Any | None,
+    product_id: str,
+    product_title: str,
+    product_subtitle: str = "",
+    ml_comparison: Mapping[str, object] | None = None,
+    landed: Mapping[str, object] | None = None,
+) -> dict[str, str | bool]:
+    row = _empty_row()
+    row["product_id"] = product_id
+    row["product_title"] = product_title
+    if product_subtitle:
+        row["product_subtitle"] = product_subtitle
+    if alibaba_row is not None:
+        row["product_image_url"] = safe_public_image_url(_attr(alibaba_row, "image_url"))
+        if not product_subtitle:
+            row["product_subtitle"] = _attr(alibaba_row, "supplier_name") or row["product_subtitle"]
+    row.update(_alibaba_cell(alibaba_row))
+    row.update(_facebook_cell(facebook_row))
+    row.update(_ml_cell(ml_row))
+    row.update(
+        build_analysis(
+            alibaba_row=alibaba_row,
+            ml_comparison=ml_comparison if ml_row is not None else None,
+            landed=landed,
+        )
+    )
+    return row
+
+
+def _standalone_facebook_row(facebook_row: Any, fallback_title: str = "") -> dict[str, str | bool]:
+    title = _attr(facebook_row, "title") or fallback_title
+    return _fill_product_row(
+        alibaba_row=None,
+        facebook_row=facebook_row,
+        ml_row=None,
+        product_id="",
+        product_title=title,
+    )
+
+
+def _standalone_ml_row(ml_row: Any, fallback_title: str = "") -> dict[str, str | bool]:
+    title = _attr(ml_row, "title") or fallback_title
+    return _fill_product_row(
+        alibaba_row=None,
+        facebook_row=None,
+        ml_row=ml_row,
+        product_id="",
+        product_title=title,
+    )
 
 
 def build_comparison_rows(
@@ -284,72 +397,65 @@ def build_comparison_rows(
     landed: Mapping[str, object] | None = None,
     fallback_title: str = "",
 ) -> list[dict[str, str | bool]]:
-    """One honest row per Alibaba product; FB/ML fill only the associated product."""
+    """Fill FB/ML cells only when an explicit Alibaba association proves identity."""
 
     facebook_best = _best_by_relevance(facebook_rows) if facebook_status == UI_SUCCESS else None
     ml_best = _best_by_relevance(ml_rows) if ml_status == UI_SUCCESS else None
     context = dict(alibaba_context or {})
     context_id = _text(context.get("external_id"))
     context_title = _text(context.get("title"))
+    facebook_id = _text(facebook_association_id)
+    ml_id = _text(ml_association_id)
 
     rows: list[dict[str, str | bool]] = []
+    facebook_placed = False
+    ml_placed = False
+
     if alibaba_status == UI_SUCCESS and alibaba_rows:
         for item in alibaba_rows:
             product_id = _attr(item, "product_id")
-            facebook_row = (
-                facebook_best
-                if product_id and facebook_association_id and product_id == facebook_association_id
-                else None
-            )
-            ml_row = (
-                ml_best
-                if product_id and ml_association_id and product_id == ml_association_id
-                else None
-            )
-            row = _empty_row()
-            row["product_title"] = _attr(item, "title") or context_title or fallback_title
-            row["product_image_url"] = safe_public_image_url(_attr(item, "image_url"))
-            row["product_id"] = product_id
-            row["product_subtitle"] = _attr(item, "supplier_name") or row["product_subtitle"]
-            row.update(_alibaba_cell(item))
-            row.update(_facebook_cell(facebook_row))
-            row.update(_ml_cell(ml_row))
-            row.update(
-                build_analysis(
+            facebook_row = facebook_best if product_id and facebook_id == product_id else None
+            ml_row = ml_best if product_id and ml_id == product_id else None
+            if facebook_row is not None:
+                facebook_placed = True
+            if ml_row is not None:
+                ml_placed = True
+            rows.append(
+                _fill_product_row(
                     alibaba_row=item,
-                    ml_comparison=ml_comparison if ml_row is not None else None,
+                    facebook_row=facebook_row,
+                    ml_row=ml_row,
+                    product_id=product_id,
+                    product_title=_attr(item, "title") or context_title or fallback_title,
+                    ml_comparison=ml_comparison,
                     landed=landed if product_id and product_id == context_id else None,
                 )
             )
-            rows.append(row)
-        return rows
-
-    if facebook_best is not None or ml_best is not None:
-        row = _empty_row()
-        title = context_title or fallback_title
-        if not title and facebook_best is not None:
-            title = _attr(facebook_best, "title")
-        if not title and ml_best is not None:
-            title = _attr(ml_best, "title")
-        row["product_title"] = title
-        row["product_id"] = context_id
-        associated_alibaba = None
-        if context_id:
-            for item in alibaba_rows:
-                if _attr(item, "product_id") == context_id:
-                    associated_alibaba = item
-                    break
-        row.update(_alibaba_cell(associated_alibaba))
-        row.update(_facebook_cell(facebook_best))
-        row.update(_ml_cell(ml_best))
-        if associated_alibaba is not None:
-            row["product_image_url"] = safe_public_image_url(_attr(associated_alibaba, "image_url"))
-        row.update(
-            build_analysis(
-                alibaba_row=associated_alibaba,
-                ml_comparison=ml_comparison,
-                landed=landed,
+    else:
+        shared_id = shared_alibaba_association(facebook_id, ml_id, context_id)
+        if shared_id and facebook_best is not None and ml_best is not None:
+            associated = _lookup_alibaba(alibaba_rows, shared_id)
+            rows.append(
+                _fill_product_row(
+                    alibaba_row=associated,
+                    facebook_row=facebook_best,
+                    ml_row=ml_best,
+                    product_id=shared_id,
+                    product_title=(
+                        _attr(associated, "title")
+                        or context_title
+                        or fallback_title
+                        or _attr(facebook_best, "title")
+                    ),
+                    ml_comparison=ml_comparison,
+                    landed=landed,
+                )
             )
-        )
-        return [row]
-    return []
+            facebook_placed = True
+            ml_placed = True
+
+    if facebook_best is not None and not facebook_placed:
+        rows.append(_standalone_facebook_row(facebook_best, fallback_title))
+    if ml_best is not None and not ml_placed:
+        rows.append(_standalone_ml_row(ml_best, fallback_title))
+    return rows

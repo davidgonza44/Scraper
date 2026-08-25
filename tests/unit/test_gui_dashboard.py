@@ -427,19 +427,31 @@ def test_match_label_and_page_heading_variants() -> None:
     assert comparison.match_label(80, has_listing=True) == comparison.MATCH_HIGH
     assert comparison.match_label("60", has_listing=True) == comparison.MATCH_MEDIUM
     assert (
-        comparison.page_heading(alibaba_query="mouse", alibaba_status="EMPTY")
+        comparison.page_heading(
+            alibaba_query="mouse",
+            alibaba_status="EMPTY",
+            workspace_view="searches",
+        )
         == "Resultados para: mouse"
     )
     assert (
-        comparison.page_heading(facebook_query="mouse ve", facebook_status="ERROR")
+        comparison.page_heading(
+            facebook_query="mouse ve",
+            facebook_status="ERROR",
+            workspace_view="products",
+        )
         == "Resultados para: mouse ve"
     )
-    assert comparison.page_heading(ml_query="mouse ml", ml_status=UI_SUCCESS) == (
-        "Resultados para: mouse ml"
-    )
-    assert comparison.page_heading(h0019_query="pastillas sbr", h0019_status="EMPTY") == (
-        "Resultados para: pastillas sbr"
-    )
+    assert comparison.page_heading(
+        ml_query="mouse ml",
+        ml_status=UI_SUCCESS,
+        workspace_view="comparisons",
+    ) == ("Resultados para: mouse ml")
+    assert comparison.page_heading(
+        h0019_query="pastillas sbr",
+        h0019_status="EMPTY",
+        workspace_view="tools",
+    ) == ("Resultados para: pastillas sbr")
     assert comparison.page_heading() == "Inteligencia de compras e importación"
     assert comparison.page_heading(workspace_view="tools") == "Facebook H0019"
     assert comparison.page_heading(workspace_view="searches") == "Búsquedas Alibaba"
@@ -481,8 +493,9 @@ def test_comparison_rows_without_alibaba_use_facebook_or_ml_title() -> None:
         alibaba_rows=[AlibabaResultRow(product_id="ali-9", title="From context", price="$2.00")],
     )
     assert ml_rows[0]["product_title"] == "Solo ML"
-    assert ml_rows[0]["alibaba_has_listing"] is True
-    assert ml_rows[0]["alibaba_price"] == "$2.00"
+    assert ml_rows[0]["alibaba_has_listing"] is False
+    assert ml_rows[0]["facebook_has_listing"] is False
+    assert ml_rows[0]["ml_has_listing"] is True
 
 
 def test_alibaba_published_range_and_unsafe_facebook_image() -> None:

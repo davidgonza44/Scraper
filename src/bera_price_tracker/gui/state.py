@@ -2227,6 +2227,7 @@ class TrackerState(rx.State):
 
     @rx.var
     def page_heading(self) -> str:
+        context = self.ml_alibaba_context or self.facebook_product_alibaba_context
         return comparison.page_heading(
             alibaba_query=self.alibaba_query,
             facebook_query=self.facebook_product_query,
@@ -2237,6 +2238,10 @@ class TrackerState(rx.State):
             ml_status=self.ml_ui_status,
             h0019_status=self.ui_status,
             workspace_view=self.workspace_view,
+            facebook_association_id=self.facebook_product_association_product_id,
+            ml_association_id=self.ml_association_product_id,
+            context_id=str(context.get("external_id") or ""),
+            context_title=str(context.get("title") or ""),
         )
 
     @rx.var
