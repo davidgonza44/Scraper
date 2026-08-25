@@ -74,7 +74,11 @@ _NUMBER_UNIT_PATTERN = re.compile(
 _MATERIAL_GRADE_PATTERN = re.compile(r"\b\d{3}L\b", re.IGNORECASE)
 _STANDALONE_GRADE_PATTERN = re.compile(r"\b\d{3}\b")
 _MODEL_CODE_PATTERN = re.compile(
-    r"\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z]{1,5}\d{2,8}[A-Z0-9]{0,4}\b",
+    r"\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z]{1,5}\d{2,8}[A-Z0-9]{0,4}\b[+#]?",
+    re.IGNORECASE,
+)
+_HYPHENATED_MODEL_PATTERN = re.compile(
+    r"\b(?=[A-Z0-9-]*\d)[A-Z]{1,5}-[A-Z0-9]{1,8}\b",
     re.IGNORECASE,
 )
 _VERSION_PATTERN = re.compile(r"\b(?:v|ver\.?|version)\s*\d+(?:\.\d+){0,3}\b", re.IGNORECASE)
@@ -90,6 +94,7 @@ _TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     _MATERIAL_GRADE_PATTERN,
     _STANDARD_PATTERN,
     _VERSION_PATTERN,
+    _HYPHENATED_MODEL_PATTERN,
     _MODEL_CODE_PATTERN,
     _STANDALONE_GRADE_PATTERN,
 )
@@ -105,13 +110,18 @@ _YEAR_PATTERN = re.compile(r"\b20[2-3]\d\b")
 _MARKETPLACE_NOISE_PHRASES: tuple[str, ...] = (
     "factory direct",
     "direct factory",
+    "factory price",
     "ready to ship",
     "free shipping",
     "fast shipping",
     "new arrivals",
     "new arrival",
     "best seller",
+    "best selling",
     "bestselling",
+    "best-selling",
+    "hot selling",
+    "hot-selling",
     "hot sale",
     "high quality",
     "high-quality",
@@ -122,14 +132,28 @@ _MARKETPLACE_NOISE_PHRASES: tuple[str, ...] = (
     "dropshipping",
     "dropship",
     "wholesale",
+    "promotional",
+    "promotion",
+    "gran éxito de ventas",
+    "venta directa de fábrica",
+    "venta directa de fabrica",
+    "precio de fábrica",
+    "precio de fabrica",
     "venta al por mayor",
+    "al por mayor",
+    "nuevo lanzamiento",
+    "nuevo ingreso",
+    "listo para enviar",
     "envío gratis",
     "envio gratis",
+    "alta calidad",
+    "venta caliente",
+    "superventas",
+    "promocional",
+    "promoción",
+    "promocion",
     "de fábrica",
     "de fabrica",
-    "alta calidad",
-    "listo para enviar",
-    "nuevo ingreso",
     "100%",
     "oem",
     "odm",
@@ -138,6 +162,31 @@ _MARKETPLACE_NOISE_PHRASES: tuple[str, ...] = (
     "personalized",
     "manufacturer",
     "supplier",
+)
+_MARKETPLACE_NOISE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(
+        rf"(?<!\w){r'\s+'.join(re.escape(part) for part in phrase.split())}(?!\w)",
+        re.IGNORECASE,
+    )
+    for phrase in sorted(_MARKETPLACE_NOISE_PHRASES, key=len, reverse=True)
+)
+_DECIMAL_COMMA_PATTERN = re.compile(r"(?<=\d),(?=\d)")
+_DECORATIVE_PUNCT_PATTERN = re.compile(r"[;:,\"'`´“”‘’«»()\[\]{}|/\\¿¡*?@&=<>~^，；：、–—]+")
+_STRANDED_PERIOD_PATTERN = re.compile(r"(?<!\d)\.(?!\d)")
+_EDGE_CONNECTORS = frozenset(
+    {
+        "and",
+        "con",
+        "de",
+        "del",
+        "for",
+        "of",
+        "or",
+        "para",
+        "por",
+        "with",
+        "y",
+    }
 )
 
 
@@ -387,32 +436,166 @@ class ConservativeProductSearchQueryGenerator:
     """Strip marketplace noise. Preserve technical identifiers. Never invent attributes."""
 
     def generate(self, *, original_text: str, translated_text: str) -> str:
-        source = translated_text if isinstance(translated_text, str) else ""
-        query = _strip_commercial_noise(source)
+        translated = translated_text if isinstance(translated_text, str) else ""
+        original = original_text if isinstance(original_text, str) else ""
+        query = _build_conservative_search_query(translated)
         if not query:
-            query = _strip_commercial_noise(original_text if isinstance(original_text, str) else "")
-        original_tokens = extract_technical_tokens(original_text)
-        present = {normalize_technical_token(token) for token in extract_technical_tokens(query)}
-        missing = [
-            token for token in original_tokens if normalize_technical_token(token) not in present
-        ]
-        if missing:
-            query = " ".join([query, *missing]).strip()
-        return query
+            query = _build_conservative_search_query(original)
+        return _merge_required_technical_tokens(query, original)
 
 
-def _strip_commercial_noise(text: str) -> str:
+def _build_conservative_search_query(text: str) -> str:
+    if not text.strip():
+        return ""
+    cleaned = _strip_price_and_quantity_noise(text)
+    cleaned = _strip_marketplace_noise(cleaned)
+    cleaned = _normalize_decimal_tokens(cleaned)
+    cleaned = _clean_search_punctuation(cleaned)
+    cleaned = _deduplicate_equivalent_technical_tokens(cleaned)
+    cleaned = _deduplicate_exact_terms(cleaned)
+    return _normalize_search_whitespace(cleaned)
+
+
+def _strip_price_and_quantity_noise(text: str) -> str:
     cleaned = _PRICE_PATTERN.sub(" ", text)
     cleaned = _CURRENCY_CODE_PATTERN.sub(" ", cleaned)
     cleaned = _MOQ_PATTERN.sub(" ", cleaned)
-    for phrase in sorted(_MARKETPLACE_NOISE_PHRASES, key=len, reverse=True):
-        cleaned = re.sub(re.escape(phrase), " ", cleaned, flags=re.IGNORECASE)
-    cleaned = _YEAR_PATTERN.sub(" ", cleaned)
-    cleaned = re.sub(r"[|/]+", " ", cleaned)
-    cleaned = re.sub(
-        r"[^\w.+#\u00C0-\u024F\u0400-\u04FF\u4E00-\u9FFF\s-]", " ", cleaned, flags=re.UNICODE
-    )
-    return " ".join(cleaned.split()).strip(" -")
+    return _YEAR_PATTERN.sub(" ", cleaned)
+
+
+def _strip_marketplace_noise(text: str) -> str:
+    cleaned = text
+    for pattern in _MARKETPLACE_NOISE_PATTERNS:
+        cleaned = pattern.sub(" ", cleaned)
+    return cleaned
+
+
+def _normalize_decimal_tokens(text: str) -> str:
+    return _DECIMAL_COMMA_PATTERN.sub(".", text)
+
+
+def _iter_technical_token_spans(text: str) -> list[tuple[int, int, str]]:
+    occupied: list[tuple[int, int]] = []
+    spans: list[tuple[int, int, str]] = []
+    for pattern in _TOKEN_PATTERNS:
+        for match in pattern.finditer(text):
+            start, end = match.span()
+            if _overlaps(start, end, occupied):
+                continue
+            token = match.group(0).strip()
+            if not token or _looks_like_currency_amount(token):
+                continue
+            occupied.append((start, end))
+            spans.append((start, end, token))
+    spans.sort(key=lambda item: item[0])
+    return spans
+
+
+def _clean_search_punctuation(text: str) -> str:
+    spans = _iter_technical_token_spans(text)
+    if not spans:
+        cleaned = _DECORATIVE_PUNCT_PATTERN.sub(" ", text)
+        cleaned = _STRANDED_PERIOD_PATTERN.sub(" ", cleaned)
+        return _normalize_search_whitespace(cleaned)
+    pieces: list[str] = []
+    last = 0
+    protected: list[str] = []
+    for start, end, token in spans:
+        pieces.append(_DECORATIVE_PUNCT_PATTERN.sub(" ", text[last:start]))
+        pieces.append(f" \x1eT{len(protected)}\x1f ")
+        protected.append(token)
+        last = end
+    pieces.append(_DECORATIVE_PUNCT_PATTERN.sub(" ", text[last:]))
+    cleaned = _STRANDED_PERIOD_PATTERN.sub(" ", "".join(pieces))
+    for index in range(len(protected) - 1, -1, -1):
+        cleaned = cleaned.replace(f"\x1eT{index}\x1f", protected[index])
+    return _normalize_search_whitespace(cleaned)
+
+
+def _deduplicate_equivalent_technical_tokens(text: str) -> str:
+    spans = _iter_technical_token_spans(text)
+    seen: set[str] = set()
+    drop: set[int] = set()
+    for index, (_start, _end, token) in enumerate(spans):
+        key = normalize_technical_token(token)
+        if key in seen:
+            drop.add(index)
+            continue
+        seen.add(key)
+    if not drop:
+        return text
+    pieces: list[str] = []
+    last = 0
+    for index, (start, end, token) in enumerate(spans):
+        pieces.append(text[last:start])
+        if index not in drop:
+            pieces.append(token)
+        last = end
+    pieces.append(text[last:])
+    return _normalize_search_whitespace("".join(pieces))
+
+
+def _deduplicate_exact_terms(text: str) -> str:
+    tokens = [token for token in text.split() if token]
+    if not tokens:
+        return ""
+    collapsed: list[str] = []
+    for token in tokens:
+        if collapsed and collapsed[-1].casefold() == token.casefold():
+            continue
+        collapsed.append(token)
+    result: list[str] = []
+    seen: set[tuple[str, ...]] = set()
+    index = 0
+    length = len(collapsed)
+    while index < length:
+        skip = 0
+        for size in range(length - index, 1, -1):
+            gram = tuple(token.casefold() for token in collapsed[index : index + size])
+            if gram in seen:
+                skip = size
+                break
+        if skip:
+            index += skip
+            continue
+        result.append(collapsed[index])
+        for start in range(len(result) - 1):
+            seen.add(tuple(token.casefold() for token in result[start:]))
+        index += 1
+    result = _strip_edge_connectors(result)
+    return " ".join(result)
+
+
+def _strip_edge_connectors(tokens: list[str]) -> list[str]:
+    start = 0
+    end = len(tokens)
+    while start < end and tokens[start].casefold() in _EDGE_CONNECTORS:
+        start += 1
+    while end > start and tokens[end - 1].casefold() in _EDGE_CONNECTORS:
+        end -= 1
+    return tokens[start:end]
+
+
+def _merge_required_technical_tokens(query: str, original_text: str) -> str:
+    if not original_text.strip():
+        return query
+    present = {normalize_technical_token(token) for token in extract_technical_tokens(query)}
+    extras: list[str] = []
+    seen_extra: set[str] = set()
+    for token in extract_technical_tokens(original_text):
+        key = normalize_technical_token(token)
+        if key in present or key in seen_extra:
+            continue
+        extras.append(token)
+        seen_extra.add(key)
+        present.add(key)
+    if not extras:
+        return query
+    return _normalize_search_whitespace(" ".join([query, *extras]))
+
+
+def _normalize_search_whitespace(text: str) -> str:
+    return " ".join(text.split()).strip(" -")
 
 
 @dataclass(slots=True)
