@@ -379,4 +379,5 @@ def test_partial_fixture_preserves_success_and_error() -> None:
     assert state.facebook_product_ui_status == UI_ERROR
     assert state.ml_ui_status == UI_SUCCESS
     assert state.facebook_product_results == []
-    assert state.alibaba_results[0].title == "Fixture Alibaba"
+    assert state.ml_results[0].title == "Fixture ML"
+    assert state.ml_results[0].relevance_value == 90

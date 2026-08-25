@@ -238,7 +238,7 @@ _RESULT_STATUSES = frozenset({UI_SUCCESS, "EMPTY", "ERROR"})
 
 IDLE_HEADINGS = {
     "dashboard": "Inteligencia de compras e importación",
-    "searches": "Búsquedas Alibaba",
+    "searches": "Buscar productos",
     "products": "Facebook Marketplace Venezuela",
     "comparisons": "Comparaciones de mercado",
     "tracking": "Seguimiento Alibaba",

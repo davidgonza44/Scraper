@@ -2124,10 +2124,11 @@ class TrackerState(rx.State):
         self.search_mode = MODE_MULTI
         self.search_limit = DEFAULT_SEARCH_LIMIT
         self.search_query = "fixture mouse"
+        self.alibaba_query = "fixture mouse"
         self.alibaba_ui_status = UI_SUCCESS
         self.alibaba_is_loading = False
         self.alibaba_error = ""
-        self.alibaba_summary = {"resultados": "3"}
+        self.alibaba_summary = {"resultados": "1"}
         self.alibaba_results = [
             AlibabaResultRow(title="Fixture Alibaba", price="$4.00", product_id="fixture-ali")
         ]
@@ -2135,11 +2136,14 @@ class TrackerState(rx.State):
         self.facebook_product_is_loading = False
         self.facebook_product_results = []
         self.facebook_product_error = "No se pudo consultar Facebook Marketplace."
+        self.ml_query = "fixture mouse"
         self.ml_ui_status = UI_SUCCESS
         self.ml_is_loading = False
         self.ml_error = ""
-        self.ml_summary = {"comparables": "3"}
-        self.ml_results = [MercadoLibreResultRow(title="Fixture ML", price="$9.00")]
+        self.ml_summary = {"comparables": "1"}
+        self.ml_results = [
+            MercadoLibreResultRow(title="Fixture ML", price="$9.00", relevance_value=90)
+        ]
 
     def compare_ml_with_landed_cost(self) -> None:
         if self.ml_has_alibaba_context:

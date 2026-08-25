@@ -91,7 +91,7 @@ def marketplace_selector() -> rx.Component:
                 selected=TrackerState.search_platform == PLATFORM_ML,
                 on_click=TrackerState.set_search_platform_ml,
                 mark=marketplace_brand_ml(),
-                title=PLATFORM_LABELS[PLATFORM_ML],
+                title="",
             ),
             spacing="2",
             width="100%",

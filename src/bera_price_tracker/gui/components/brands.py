@@ -57,7 +57,11 @@ def _tile_card(
     inner = rx.hstack(
         mark,
         rx.vstack(
-            rx.text(title, size="3", weight="medium", color=styles.TEXT_PRIMARY),
+            rx.cond(
+                title != "",
+                rx.text(title, size="3", weight="medium", color=styles.TEXT_PRIMARY),
+                rx.fragment(),
+            ),
             rx.cond(
                 detail != "",
                 rx.text(detail, size="1", color=styles.TEXT_MUTED),
