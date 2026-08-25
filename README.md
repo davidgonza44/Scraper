@@ -12,11 +12,13 @@ de recolección y precios. No realiza scraping HTML ni automatización de navega
 
 - Python 3.12 o superior.
 - `uv` es opcional, pero simplifica la creación del entorno de desarrollo.
-- Node.js **24 LTS** para la GUI Reflex. No uses Node 25 (Current): Reflex 0.8
-  genera un frontend con React Router 7.13 / Vite 6, que esperan una LTS
-  (`>=20.19`). Node 25 provoca fallos de `react-router dev` en Windows
-  (`EPERM` al hacer `scandir` de `.web/.react-router/types/app/routes`).
-  El repositorio fija la major en `.nvmrc` y `.node-version`.
+- Node.js **24 LTS** para la GUI Reflex, administrado **por proyecto** con
+  [fnm](https://github.com/Schniz/fnm). No uses Node 25 (Current) dentro de este
+  repositorio: Reflex 0.8 genera un frontend con React Router 7.13 / Vite 6, que
+  esperan una LTS (`>=20.19`). Node 25 provoca fallos de `react-router dev` en
+  Windows (`EPERM` al hacer `scandir` de `.web/.react-router/types/app/routes`).
+  El repositorio fija la major en `.nvmrc` y `.node-version`. Esto **no** exige
+  reemplazar el Node global/default de otros proyectos (por ejemplo Node 25).
 
 ## Instalación de desarrollo
 
@@ -31,34 +33,128 @@ La única dependencia de runtime Python documentada históricamente era `httpx`.
 Hoy el extra de GUI también instala Reflex. Las herramientas de calidad se
 instalan mediante el extra `dev`.
 
-## GUI Reflex (Windows PowerShell)
+## Development on Windows
 
-La carpeta `.web` la genera Reflex y **no** se versiona. Si el frontend falla
-al arrancar (`Starting frontend failed`, `EPERM` / `scandir` en
-`.web/.react-router\\types\\app\\routes`), regenera desde un árbol limpio con
-Node 24 y npm (Bun no es necesario; Reflex hace fallback a npm si Bun falla).
+Este repositorio usa **Node 24 LTS solo dentro del proyecto**, mediante **fnm**.
+El Node global del sistema (por ejemplo `v25.9.0`) puede seguir siendo el
+habitual fuera de `D:\Scraper`.
 
-```powershell
-# 1. Cierra cualquier `reflex run` / `node` / `react-router` de esta carpeta.
+> Node 24 es la versión requerida por este repositorio. Esto no requiere reemplazar la versión global/default de Node utilizada por otros proyectos.
 
-# 2. Instala y activa Node 24 LTS (elige una herramienta):
-#    fnm:  fnm install 24; fnm use
-#    nvm-windows: nvm install 24; nvm use 24
-node -v   # debe empezar por v24.
-
-# 3. Borra el frontend generado (seguro: está en .gitignore).
-if (Test-Path .web) { Remove-Item -LiteralPath .web -Recurse -Force }
-
-# 4. Arranca. PYTHONPATH=src es obligatorio. Prefiere npm en Windows.
-$env:PYTHONPATH = "src"
-$env:REFLEX_USE_NPM = "1"
-.\.venv\Scripts\python.exe -m reflex run
-```
+La GUI Reflex se inicia con `.\dev.ps1`. Ese script **no** borra `.web`, **no**
+mata procesos `node.exe` y **no** reinstala dependencias. `.web` se reutiliza
+para que Reflex arranque más rápido. Reflex se fuerza a **npm** solo en esa
+sesión (`REFLEX_USE_NPM=1`) porque Bun ha fallado en este frontend.
 
 URL típica: http://localhost:3000
 
 No dejes `reflex run` abierto después de una comprobación. No lances búsquedas
 reales contra proveedores durante el arranque.
+
+### Instalación inicial de fnm
+
+Una sola vez, si todavía no tienes fnm:
+
+```powershell
+winget install Schniz.fnm
+```
+
+Cierra y vuelve a abrir PowerShell para que `fnm` quede en el PATH de la
+sesión. No hace falta desinstalar Node 25 ni cambiar el PATH de forma
+permanente desde este repositorio.
+
+### Instalación de Node 24 administrado por fnm
+
+Una sola vez, en cualquier directorio:
+
+```powershell
+fnm install 24
+```
+
+`fnm` guarda esa versión en su propio almacén. **No** reemplaza el Node global
+del sistema. Si omites este paso, `.\dev.ps1` puede ejecutar `fnm install 24`
+cuando falte; el efecto es el mismo y tampoco toca el Node global.
+
+### Inicio normal del proyecto
+
+Después de clonar o de `git pull`, y con `.venv` ya creado:
+
+```powershell
+cd D:\Scraper
+.\dev.ps1
+```
+
+Rutina diaria:
+
+```powershell
+cd D:\Scraper
+.\dev.ps1
+```
+
+`dev.ps1` se ejecuta desde la raíz del repositorio aunque lo llames desde otro
+directorio. Usa `.venv\Scripts\python.exe` (no hace falta activar `.venv` a
+mano), define `PYTHONPATH=src` y `REFLEX_USE_NPM=1` solo para esa sesión, y
+arranca `python -m reflex run`.
+
+### Verificación
+
+Con el entorno fnm de este proyecto activo (dentro de `.\dev.ps1`, o tras
+`fnm use 24` en esa sesión):
+
+```powershell
+node -v
+```
+
+debe mostrar una versión `v24.x.x`. Fuera de este proyecto, sin inicializar
+fnm, `node -v` puede seguir mostrando el Node global (por ejemplo `v25.9.0`).
+
+### Recuperación excepcional del frontend
+
+`.web` está en `.gitignore` y **no** se borra en un arranque normal. Solo si el
+frontend está corrupto (`Starting frontend failed`, `EPERM` / `scandir` en
+`.web/.react-router\types\app\routes`):
+
+```powershell
+.\reset-frontend.ps1
+```
+
+Ese script intenta detener únicamente procesos ligados a `.web` o al Reflex de
+este repositorio (no hace `taskkill /IM node.exe`), elimina `.web` y avisa de
+que el siguiente `.\dev.ps1` será más lento porque Reflex reconstruirá el
+frontend. No lo uses a diario.
+
+### Opcional: fnm al hacer `cd`
+
+Para que PowerShell seleccione Node 24 al entrar a este directorio gracias a
+`.node-version`, puedes añadir **tú** la inicialización oficial de fnm a tu
+perfil. **Este repositorio no modifica `$PROFILE`.**
+
+1. Abre el perfil (créalo si no existe):
+
+```powershell
+if (!(Test-Path -LiteralPath $PROFILE)) {
+    New-Item -Path $PROFILE -Type File -Force | Out-Null
+}
+notepad $PROFILE
+```
+
+2. Añade esta línea (inicialización oficial de fnm con `--use-on-cd`):
+
+```powershell
+fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression
+```
+
+3. Cierra y vuelve a abrir PowerShell.
+
+Después, de forma opcional:
+
+```powershell
+cd D:\Scraper
+node -v
+```
+
+puede mostrar Node 24 sin llamar a `.\dev.ps1`. Sigue siendo opcional: el
+flujo soportado a diario es `.\dev.ps1`.
 
 ## CLI
 
@@ -269,5 +365,3 @@ haber sido actualizada por una recolección posterior.
 
 Consulta [docs/architecture.md](docs/architecture.md) para conocer los límites de capas y
 el flujo previsto.
-#   S c r a p e r  
- 
