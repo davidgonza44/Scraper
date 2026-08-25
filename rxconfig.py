@@ -6,6 +6,8 @@ Run from this directory (or from D:\\Scraper after copy):
 
 Typical URL: http://localhost:3000
 
+Frontend requires Node.js 24 LTS. See README for Windows PowerShell steps.
+
 Do not leave reflex run running after checks. Do not collect live data.
 """
 
@@ -23,6 +25,7 @@ from bera_price_tracker.config import load_local_environment  # noqa: E402
 load_local_environment()
 
 import reflex as rx  # noqa: E402
+from reflex.plugins import SitemapPlugin  # noqa: E402
 
 config = rx.Config(
     app_name="gui",
@@ -32,5 +35,5 @@ config = rx.Config(
     backend_host="127.0.0.1",
     api_url="http://127.0.0.1:8000",
     telemetry_enabled=False,
-    disable_plugins=["reflex.plugins.sitemap.SitemapPlugin"],
+    disable_plugins=[SitemapPlugin],
 )

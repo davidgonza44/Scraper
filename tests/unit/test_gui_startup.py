@@ -37,6 +37,33 @@ def test_rxconfig_is_local_loopback():
     assert cfg.backend_host == "127.0.0.1"
     assert cfg.api_url == "http://127.0.0.1:8000"
     assert cfg.telemetry_enabled is False
+    from reflex.plugins import SitemapPlugin
+
+    assert SitemapPlugin in cfg.disable_plugins
+    assert all(not isinstance(item, str) for item in cfg.disable_plugins)
+
+
+def test_gui_row_models_are_pydantic_not_rx_base() -> None:
+    import reflex as rx
+    from pydantic import BaseModel
+
+    from bera_price_tracker.gui.state import AlibabaResultRow, DetailItem, GuiModel
+
+    assert issubclass(GuiModel, BaseModel)
+    assert issubclass(DetailItem, GuiModel)
+    assert issubclass(AlibabaResultRow, GuiModel)
+    assert not issubclass(DetailItem, rx.Base)
+    row = AlibabaResultRow(title="mouse", score_value=80)
+    copied = row.model_copy(update={"score_value": 90})
+    assert copied.score_value == 90
+    assert row.score_value == 80
+
+
+def test_node_lts_pin_files() -> None:
+    nvmrc = (ROOT / ".nvmrc").read_text(encoding="utf-8").strip()
+    node_version = (ROOT / ".node-version").read_text(encoding="utf-8").strip()
+    assert nvmrc == "24"
+    assert node_version == "24"
 
 
 def test_import_does_not_construct_apify_client():

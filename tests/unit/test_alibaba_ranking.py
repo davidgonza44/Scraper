@@ -435,7 +435,7 @@ def test_low_match_badge_does_not_cap_ranking() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Real AlibabaResultRow (rx.Base) — regression for copy(update=...)
+# Real AlibabaResultRow (pydantic) — regression for model_copy(update=...)
 # ---------------------------------------------------------------------------
 
 
@@ -480,7 +480,7 @@ def test_reflex_row_with_unavailable_reputation_renormalizes() -> None:
     # (80*50 + 90*30) / 80 = 83.75 -> 84; a real 0 would give 40+27+0 = 67.
     assert annotated[0].ranking_value == 84
     assert annotated[0].ranking_reputation_used is False
-    zero_row = row.copy(update={"reputation_available": True, "reputation_value": 0})
+    zero_row = row.model_copy(update={"reputation_available": True, "reputation_value": 0})
     assert analysis.annotate_ranking([zero_row])[0].ranking_value == 67
 
 

@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import reflex as rx
+from pydantic import BaseModel, ConfigDict
 
 from bera_price_tracker.application.alibaba_ranking import (
     DEFAULT_OPPORTUNITY_WEIGHT,
@@ -148,12 +149,18 @@ def clamp_limit(value: int | str) -> int:
     return max(1, min(5, number))
 
 
-class DetailItem(rx.Base):
+class GuiModel(BaseModel):
+    """Serializable GUI row models. pydantic v2 replacement for deprecated rx.Base."""
+
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True, use_enum_values=True)
+
+
+class DetailItem(GuiModel):
     label: str = ""
     value: str = ""
 
 
-class AlibabaTrackedRow(rx.Base):
+class AlibabaTrackedRow(GuiModel):
     product_id: str = ""
     title: str = ""
     supplier_name: str = ""
@@ -176,7 +183,7 @@ class AlibabaTrackedRow(rx.Base):
     history_open: bool = False
 
 
-class AlibabaResultRow(rx.Base):
+class AlibabaResultRow(GuiModel):
     title: str = ""
     price: str = ""
     moq: str = ""
@@ -220,7 +227,7 @@ class AlibabaResultRow(rx.Base):
     review_score: str = ""
 
 
-class MercadoLibreResultRow(rx.Base):
+class MercadoLibreResultRow(GuiModel):
     external_id: str = ""
     title: str = ""
     permalink: str = ""
@@ -248,7 +255,7 @@ class MercadoLibreResultRow(rx.Base):
     reputation_value: int = 0
 
 
-class FacebookProductResultRow(rx.Base):
+class FacebookProductResultRow(GuiModel):
     external_id: str = ""
     title: str = ""
     permalink: str = ""
@@ -273,7 +280,7 @@ class FacebookProductResultRow(rx.Base):
     image_url: str = ""
 
 
-class FacebookCurrencyStatsRow(rx.Base):
+class FacebookCurrencyStatsRow(GuiModel):
     currency: str = ""
     label: str = ""
     basis: str = ""
@@ -291,7 +298,7 @@ class FacebookCurrencyStatsRow(rx.Base):
     iqr: str = "unavailable"
 
 
-class ResultRow(rx.Base):
+class ResultRow(GuiModel):
     title: str = ""
     price: str = ""
     price_raw: str = ""
@@ -303,13 +310,13 @@ class ResultRow(rx.Base):
     details_items: list[DetailItem] = []
 
 
-class SearchProgressRow(rx.Base):
+class SearchProgressRow(GuiModel):
     platform: str = ""
     label: str = ""
     detail: str = ""
 
 
-class MarketplaceSummaryCard(rx.Base):
+class MarketplaceSummaryCard(GuiModel):
     platform: str = ""
     platform_id: str = ""
     status: str = "empty"
@@ -333,7 +340,7 @@ class MarketplaceSummaryCard(rx.Base):
     rating_filled: int = 0
 
 
-class ComparisonRow(rx.Base):
+class ComparisonRow(GuiModel):
     product_title: str = ""
     product_image_url: str = ""
     product_subtitle: str = ""
@@ -2537,7 +2544,7 @@ class TrackerState(rx.State):
                 updates["history_open"] = history_open
             if row.image_url != image_url:
                 updates["image_url"] = image_url
-            rows.append(row.copy(update=updates) if updates else row)
+            rows.append(row.model_copy(update=updates) if updates else row)
         return rows
 
     @rx.var
@@ -2607,7 +2614,7 @@ class TrackerState(rx.State):
             if row.is_followed == is_followed:
                 rows.append(row)
                 continue
-            rows.append(row.copy(update={"is_followed": is_followed}))
+            rows.append(row.model_copy(update={"is_followed": is_followed}))
         return rows
 
     @rx.var
@@ -3003,7 +3010,7 @@ class TrackerState(rx.State):
             ml_summary=self.ml_live_summary,
             ml_rows=self.ml_visible_rows,
         )
-        return [MarketplaceSummaryCard(**item) for item in raw]
+        return [MarketplaceSummaryCard.model_validate(item) for item in raw]
 
     @rx.var
     def comparison_rows(self) -> list[ComparisonRow]:
@@ -3027,7 +3034,7 @@ class TrackerState(rx.State):
             landed_product_id=self.alibaba_landed_product_id,
             fallback_title=fallback,
         )
-        return [ComparisonRow(**item) for item in raw]
+        return [ComparisonRow.model_validate(item) for item in raw]
 
     @rx.var
     def has_comparison_rows(self) -> bool:
