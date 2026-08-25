@@ -1330,7 +1330,8 @@ FACEBOOK_PRODUCTS_QUERY_ERROR = "Indica un término de búsqueda."
 FACEBOOK_PRODUCTS_CITY_ERROR = "Indica una ciudad de Venezuela."
 FACEBOOK_PRODUCTS_LIMIT_ERROR = "La cantidad debe estar entre 1 y 5."
 FACEBOOK_PRODUCTS_PUBLISHED_NOTE = (
-    "Solo precios explícitos, finitos y mayores que cero. Sin conversión de moneda."
+    "Solo precios explícitos, finitos y mayores que cero. Precio fuente preservado; "
+    "USD Facebook-Venezuela usa el mismo valor numérico, con evidencia y sin FX."
 )
 
 
@@ -1360,10 +1361,30 @@ def facebook_product_listing_to_row(listing: object, relevance: object) -> dict[
     total = int(getattr(relevance, "total_query_tokens", 0) or 0)
     price = getattr(listing, "price", None)
     currency = str(getattr(listing, "currency", "") or "UNKNOWN")
+    formatted_price = str(getattr(listing, "formatted_amount", "") or "")
+    usd_amount = getattr(listing, "usd_amount", None)
+    usd_status = str(getattr(listing, "usd_normalization_status", "") or "")
+    usd_evidence = _as_tuple(getattr(listing, "usd_evidence", ()))
     from bera_price_tracker.application.facebook_relevance import (
         format_relevance_display,
         relevance_label,
     )
+    from bera_price_tracker.domain.money import (
+        FACEBOOK_VENEZUELA_EVIDENCE,
+        NormalizationStatus,
+        format_usd_line,
+    )
+
+    usd_price = format_usd_line(usd_amount) if isinstance(usd_amount, Decimal) else ""
+    if FACEBOOK_VENEZUELA_EVIDENCE in usd_evidence:
+        usd_basis = "facebook_venezuela_normalized_usd"
+        usd_provenance = "Facebook Venezuela · mismo valor numérico · sin FX"
+    elif usd_status == NormalizationStatus.ALREADY_USD.value:
+        usd_basis = "source_usd"
+        usd_provenance = "USD explícito del proveedor"
+    else:
+        usd_basis = ""
+        usd_provenance = ""
 
     return {
         "external_id": str(getattr(listing, "external_id", "") or ""),
@@ -1372,7 +1393,18 @@ def facebook_product_listing_to_row(listing: object, relevance: object) -> dict[
         "price": _facebook_product_money(price, currency),
         "price_raw": f"{price:f}" if isinstance(price, Decimal) else "",
         "currency": currency,
-        "formatted_price": str(getattr(listing, "formatted_amount", "") or ""),
+        "formatted_price": formatted_price,
+        "source_price_note": (
+            f"{formatted_price} · etiqueta fuente del proveedor Facebook"
+            if formatted_price
+            else "Etiqueta fuente del proveedor Facebook"
+        ),
+        "usd_price": usd_price,
+        "usd_amount": f"{usd_amount:f}" if isinstance(usd_amount, Decimal) else "",
+        "usd_normalization_status": usd_status,
+        "usd_evidence": ", ".join(usd_evidence),
+        "usd_basis": usd_basis,
+        "usd_provenance": usd_provenance,
         "location": str(getattr(listing, "location", "") or "—"),
         "representative": f"{price:f}" if isinstance(price, Decimal) else "",
         "relevance_value": score,
@@ -1385,23 +1417,52 @@ def facebook_product_listing_to_row(listing: object, relevance: object) -> dict[
 
 def _facebook_statistics_rows(listings: Sequence[object]) -> list[dict[str, str]]:
     from bera_price_tracker.application.facebook_statistics import (
-        calculate_facebook_statistics_by_currency,
+        FacebookStatisticsBasis,
+        calculate_facebook_statistics,
     )
+    from bera_price_tracker.domain.money import format_usd_display
 
     rows: list[dict[str, str]] = []
-    for stats in calculate_facebook_statistics_by_currency(listings):
+    for stats in calculate_facebook_statistics(listings):
         currency = stats.currency
+        normalized_facebook_usd = (
+            stats.basis is FacebookStatisticsBasis.FACEBOOK_VENEZUELA_NORMALIZED_USD
+        )
+
+        def money(
+            value: Decimal | None,
+            normalized: bool = normalized_facebook_usd,
+            row_currency: str | None = currency,
+        ) -> str:
+            if normalized and value is not None:
+                return format_usd_display(value)
+            return _facebook_product_money(value, row_currency)
+
         rows.append(
             {
                 "currency": currency or "",
+                "label": (
+                    "USD normalizado · Facebook Venezuela"
+                    if normalized_facebook_usd
+                    else f"{currency or 'UNKNOWN'} · moneda fuente"
+                ),
+                "basis": stats.basis.value,
+                "source_currencies": ", ".join(stats.source_currencies),
+                "normalization_status": ", ".join(stats.normalization_statuses),
+                "evidence": ", ".join(stats.evidence),
+                "provenance": (
+                    "Mismo valor numérico de la etiqueta VEF del proveedor; sin FX."
+                    if normalized_facebook_usd
+                    else "Benchmark de moneda fuente explícita; sin conversión."
+                ),
                 "count": str(stats.priced_listings),
-                "minimum": _facebook_product_money(stats.minimum, currency),
-                "average": _facebook_product_money(stats.average, currency),
-                "median": _facebook_product_money(stats.median, currency),
-                "maximum": _facebook_product_money(stats.maximum, currency),
-                "p25": _facebook_product_money(stats.p25, currency),
-                "p75": _facebook_product_money(stats.p75, currency),
-                "iqr": _facebook_product_money(stats.iqr, currency),
+                "minimum": money(stats.minimum),
+                "average": money(stats.average),
+                "median": money(stats.median),
+                "maximum": money(stats.maximum),
+                "p25": money(stats.p25),
+                "p75": money(stats.p75),
+                "iqr": money(stats.iqr),
             }
         )
     return rows

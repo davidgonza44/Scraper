@@ -223,6 +223,13 @@ class FacebookProductResultRow(rx.Base):
     price_raw: str = ""
     currency: str = "UNKNOWN"
     formatted_price: str = ""
+    source_price_note: str = ""
+    usd_price: str = ""
+    usd_amount: str = ""
+    usd_normalization_status: str = ""
+    usd_evidence: str = ""
+    usd_basis: str = ""
+    usd_provenance: str = ""
     location: str = "—"
     representative: str = ""
     relevance_value: int = 0
@@ -234,6 +241,12 @@ class FacebookProductResultRow(rx.Base):
 
 class FacebookCurrencyStatsRow(rx.Base):
     currency: str = ""
+    label: str = ""
+    basis: str = ""
+    source_currencies: str = ""
+    normalization_status: str = ""
+    evidence: str = ""
+    provenance: str = ""
     count: str = "0"
     minimum: str = "unavailable"
     average: str = "unavailable"
@@ -1256,6 +1269,13 @@ class TrackerState(rx.State):
                 price_raw=str(item.get("price_raw", "")),
                 currency=str(item.get("currency", "UNKNOWN")),
                 formatted_price=str(item.get("formatted_price", "")),
+                source_price_note=str(item.get("source_price_note", "")),
+                usd_price=str(item.get("usd_price", "")),
+                usd_amount=str(item.get("usd_amount", "")),
+                usd_normalization_status=str(item.get("usd_normalization_status", "")),
+                usd_evidence=str(item.get("usd_evidence", "")),
+                usd_basis=str(item.get("usd_basis", "")),
+                usd_provenance=str(item.get("usd_provenance", "")),
                 location=str(item.get("location", "—")),
                 representative=str(item.get("representative", "")),
                 relevance_value=int(item.get("relevance_value", 0) or 0),
@@ -1269,6 +1289,12 @@ class TrackerState(rx.State):
         statistics = [
             FacebookCurrencyStatsRow(
                 currency=str(item.get("currency", "")),
+                label=str(item.get("label", "")),
+                basis=str(item.get("basis", "")),
+                source_currencies=str(item.get("source_currencies", "")),
+                normalization_status=str(item.get("normalization_status", "")),
+                evidence=str(item.get("evidence", "")),
+                provenance=str(item.get("provenance", "")),
                 count=str(item.get("count", "0")),
                 minimum=str(item.get("minimum", "unavailable")),
                 average=str(item.get("average", "unavailable")),

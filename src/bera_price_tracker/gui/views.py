@@ -2344,8 +2344,9 @@ def _facebook_products_metric(label: str, key: str, *, accent: bool = False) -> 
 
 def _facebook_currency_stats(row: rx.Var) -> rx.Component:
     return rx.box(
-        rx.text(row["currency"], size="2", weight="medium", color=GREEN),
+        rx.text(row["label"], size="2", weight="medium", color=GREEN),
         rx.text(row["count"] + " comparables", size="1", color=MUTED),
+        rx.text(row["provenance"], size="1", color=MUTED),
         rx.hstack(
             rx.text("Mín " + row["minimum"], size="1"),
             rx.text("P25 " + row["p25"], size="1"),
@@ -2431,7 +2432,16 @@ def _facebook_products_table() -> rx.Component:
                     TrackerState.facebook_product_results,
                     lambda row: rx.table.row(
                         rx.table.cell(row["title"]),
-                        rx.table.cell(row["price"], color=BRICK, weight="medium"),
+                        rx.table.cell(
+                            rx.vstack(
+                                rx.text(row["price"], color=BRICK, weight="medium"),
+                                rx.text(row["source_price_note"], size="1", color=MUTED),
+                                rx.text(row["usd_price"], size="2", color=GREEN, weight="medium"),
+                                rx.text(row["usd_provenance"], size="1", color=MUTED),
+                                spacing="1",
+                                align="start",
+                            )
+                        ),
                         rx.table.cell(row["currency"]),
                         rx.table.cell(row["location"]),
                         rx.table.cell(_ml_relevance_cell(row)),

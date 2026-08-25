@@ -13,6 +13,9 @@ from bera_price_tracker.application.facebook_products import (
     FacebookRejectionReason,
     classify_explicit_facebook_price,
 )
+from bera_price_tracker.application.facebook_venezuela_price import (
+    normalize_facebook_venezuela_price,
+)
 from bera_price_tracker.domain import Listing, MarketplaceSource, SearchQuery
 from bera_price_tracker.infrastructure.providers.apify import (
     ApifyFacebookListing,
@@ -105,18 +108,27 @@ class FacebookMarketplaceProductSearch:
                 reasons.append(FacebookRejectionReason.SOURCE_ERROR)
                 continue
             try:
+                currency = _safe_currency(record.currency)
+                normalized = normalize_facebook_venezuela_price(
+                    record.price,
+                    currency,
+                    _required_text(record.formatted_price),
+                )
                 listings.append(
                     Listing(
                         source=MarketplaceSource.FACEBOOK_MARKETPLACE,
                         external_id=product_id,
                         title=title,
                         price=record.price,
-                        currency=_safe_currency(record.currency),
+                        currency=currency,
                         formatted_amount=_required_text(record.formatted_price),
                         location=_required_text(record.location),
                         url=url,
                         query=search_query,
                         collected_at=collected_at,
+                        usd_amount=normalized.usd_amount,
+                        usd_normalization_status=normalized.normalization_status.value,
+                        usd_evidence=normalized.evidence,
                     )
                 )
             except (TypeError, ValueError):
