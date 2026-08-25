@@ -278,7 +278,7 @@ def test_validate_facebook_product_search_normalizes_and_rejects_bounds() -> Non
     with pytest.raises(ValueError, match="limit"):
         validate_facebook_product_search("mouse", "caracas", 6)
     with pytest.raises(TypeError, match="limit"):
-        validate_facebook_product_search("mouse", "caracas", True)  # type: ignore[arg-type]
+        validate_facebook_product_search("mouse", "caracas", True)
 
 
 def test_missing_location_is_not_invented_and_is_not_out_of_scope() -> None:
