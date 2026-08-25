@@ -217,6 +217,71 @@ def test_stale_association_a_never_leaks_into_product_b_row() -> None:
     assert leftover_facebook[0]["ml_has_listing"] is False
 
 
+def test_landed_cost_for_product_a_never_appears_on_product_b() -> None:
+    landed_a = {"unit_landed": "$6.10"}
+    rows = comparison.build_comparison_rows(
+        alibaba_rows=[
+            _alibaba(PRODUCT_A, "Mouse A"),
+            _alibaba(PRODUCT_B, "Headphones B"),
+        ],
+        alibaba_status=UI_SUCCESS,
+        alibaba_context={"external_id": PRODUCT_B, "title": "Headphones B"},
+        landed=landed_a,
+        landed_product_id=PRODUCT_A,
+    )
+    by_id = {row["product_id"]: row for row in rows}
+    assert "6.10" in str(by_id[PRODUCT_A]["analysis_detail"])
+    assert "6.10" not in str(by_id[PRODUCT_B]["analysis_detail"])
+    assert by_id[PRODUCT_B]["analysis_heading"] != "Costo puesto"
+
+
+def test_landed_cost_without_product_id_is_not_attached() -> None:
+    rows = comparison.build_comparison_rows(
+        alibaba_rows=[_alibaba(PRODUCT_A, "Mouse A")],
+        alibaba_status=UI_SUCCESS,
+        alibaba_context={"external_id": PRODUCT_A, "title": "Mouse A"},
+        landed={"unit_landed": "$6.10"},
+        landed_product_id="",
+    )
+    assert len(rows) == 1
+    assert "6.10" not in str(rows[0]["analysis_detail"])
+    assert rows[0]["analysis_heading"] != "Costo puesto"
+
+
+def test_fallback_row_does_not_reuse_another_product_landed_cost() -> None:
+    rows = comparison.build_comparison_rows(
+        facebook_rows=[_facebook("Mouse FB A")],
+        ml_rows=[_ml("Mouse ML A")],
+        facebook_status=UI_SUCCESS,
+        ml_status=UI_SUCCESS,
+        facebook_association_id=PRODUCT_A,
+        ml_association_id=PRODUCT_A,
+        alibaba_context={"external_id": PRODUCT_A, "title": "Mouse A"},
+        landed={"unit_landed": "$6.10"},
+        landed_product_id=PRODUCT_B,
+    )
+    assert len(rows) == 1
+    assert rows[0]["product_id"] == PRODUCT_A
+    assert "6.10" not in str(rows[0]["analysis_detail"])
+
+
+def test_tracker_state_hides_landed_cost_from_unrelated_product() -> None:
+    state = TrackerState()
+    state.alibaba_results = [
+        _alibaba(PRODUCT_A, "Mouse A"),
+        _alibaba(PRODUCT_B, "Headphones B"),
+    ]
+    state.alibaba_ui_status = UI_SUCCESS
+    state.ml_alibaba_context = {"external_id": PRODUCT_B, "title": "Headphones B"}
+    state.ml_has_alibaba_context = True
+    state.alibaba_landed_has_result = True
+    state.alibaba_landed_product_id = PRODUCT_A
+    state.alibaba_landed_result = {"unit_landed": "$6.10"}
+    by_id = {row.product_id: row for row in state.comparison_rows}
+    assert "6.10" in by_id[PRODUCT_A].analysis_detail
+    assert "6.10" not in by_id[PRODUCT_B].analysis_detail
+
+
 def test_shared_association_requires_all_three_ids() -> None:
     assert comparison.shared_alibaba_association("", PRODUCT_A, PRODUCT_A) == ""
     assert comparison.shared_alibaba_association(PRODUCT_A, "", PRODUCT_A) == ""

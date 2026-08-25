@@ -1043,6 +1043,9 @@ def generate_alibaba_negotiation_reply(
 ALIBABA_LANDED_COST_GENERIC_ERROR = "No se pudo calcular el costo puesto en Venezuela."
 ALIBABA_LANDED_ESTIMATE_LABEL = "ESTIMACIÓN LOGÍSTICA"
 ALIBABA_LANDED_CONFIRMED_LABEL = "Cotización confirmada"
+ALIBABA_PROFITABILITY_PRODUCT_MISMATCH = (
+    "El costo puesto no pertenece al producto en negociación."
+)
 
 
 def sanitize_alibaba_landed_cost_error(exc: BaseException) -> str:

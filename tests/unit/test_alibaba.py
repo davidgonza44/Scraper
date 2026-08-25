@@ -1510,6 +1510,7 @@ def test_profitability_ceiling_fails_closed_on_currency_mismatch() -> None:
     state.alibaba_negotiation_has_plan = True
     state.alibaba_negotiation_plan_payload = plan
     state.alibaba_landed_has_result = True
+    state.alibaba_landed_product_id = "1"
     state.alibaba_landed_result = landed_cny
     state.apply_alibaba_profitability_ceiling()
     assert state.alibaba_negotiation_has_profitability is False
@@ -1554,6 +1555,7 @@ def test_matching_usd_profitability_is_applied_and_does_not_raise_ceiling() -> N
     state.alibaba_negotiation_has_plan = True
     state.alibaba_negotiation_plan_payload = plan
     state.alibaba_landed_has_result = True
+    state.alibaba_landed_product_id = "1"
     state.alibaba_landed_result = landed
     state.apply_alibaba_profitability_ceiling()
     assert state.alibaba_negotiation_has_profitability is True

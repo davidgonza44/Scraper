@@ -432,6 +432,7 @@ def build_comparison_rows(
     ml_association_id: str = "",
     ml_comparison: Mapping[str, object] | None = None,
     landed: Mapping[str, object] | None = None,
+    landed_product_id: str = "",
     fallback_title: str = "",
 ) -> list[dict[str, object]]:
     """Fill FB/ML cells only when an explicit Alibaba association proves identity."""
@@ -443,6 +444,7 @@ def build_comparison_rows(
     context_title = _text(context.get("title"))
     facebook_id = _text(facebook_association_id)
     ml_id = _text(ml_association_id)
+    landed_id = _text(landed_product_id)
 
     rows: list[dict[str, object]] = []
     facebook_placed = False
@@ -465,7 +467,7 @@ def build_comparison_rows(
                     product_id=product_id,
                     product_title=_attr(item, "title") or context_title or fallback_title,
                     ml_comparison=ml_comparison,
-                    landed=landed if product_id and product_id == context_id else None,
+                    landed=landed if product_id and landed_id and product_id == landed_id else None,
                 )
             )
     else:
@@ -485,7 +487,7 @@ def build_comparison_rows(
                         or _attr(facebook_best, "title")
                     ),
                     ml_comparison=ml_comparison,
-                    landed=landed,
+                    landed=landed if landed_id and shared_id == landed_id else None,
                 )
             )
             facebook_placed = True
