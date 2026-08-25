@@ -789,7 +789,17 @@ class TrackerState(rx.State):
                 "Calcula la estrategia antes de aplicar rentabilidad."
             )
             return
-        landed = self.alibaba_landed_result if self.alibaba_landed_has_result else None
+        plan_product_id = str(self.alibaba_negotiation_plan_payload.get("product_id") or "").strip()
+        landed_product_id = self.alibaba_landed_product_id.strip()
+        if not self.alibaba_landed_has_result:
+            landed = None
+        elif not comparison.landed_context_applies(plan_product_id, landed_product_id):
+            self.alibaba_negotiation_profitability_hint = (
+                services.ALIBABA_PROFITABILITY_PRODUCT_MISMATCH
+            )
+            return
+        else:
+            landed = self.alibaba_landed_result
         try:
             row = services.apply_alibaba_profitability_ceiling(
                 self.alibaba_negotiation_plan_payload,
@@ -3014,6 +3024,7 @@ class TrackerState(rx.State):
             ml_association_id=self.ml_association_product_id,
             ml_comparison=self.ml_comparison if self.ml_has_comparison else None,
             landed=self.alibaba_landed_result if self.alibaba_landed_has_result else None,
+            landed_product_id=self.alibaba_landed_product_id,
             fallback_title=fallback,
         )
         return [ComparisonRow(**item) for item in raw]

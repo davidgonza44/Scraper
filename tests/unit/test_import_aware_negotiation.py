@@ -608,6 +608,7 @@ def test_state_shows_mismatch_hint_without_rewriting_plan() -> None:
     from bera_price_tracker.gui.state import TrackerState
 
     plan_row = _cny_plan_row()
+    plan_row["product_id"] = "P-1"
     state = TrackerState()
     state.alibaba_negotiation_has_plan = True
     state.alibaba_negotiation_plan_payload = dict(plan_row)
@@ -615,6 +616,7 @@ def test_state_shows_mismatch_hint_without_rewriting_plan() -> None:
     state.alibaba_negotiation_target = plan_row["target_price"]
     state.alibaba_negotiation_ceiling = plan_row["ceiling_price"]
     state.alibaba_landed_has_result = True
+    state.alibaba_landed_product_id = "P-1"
     state.alibaba_landed_result = {
         "max_supplier_raw": "4.10",
         "currency": "USD",
@@ -626,6 +628,117 @@ def test_state_shows_mismatch_hint_without_rewriting_plan() -> None:
     assert state.alibaba_negotiation_opening == plan_row["opening_offer"]
     assert state.alibaba_negotiation_target == plan_row["target_price"]
     assert state.alibaba_negotiation_ceiling == plan_row["ceiling_price"]
+
+
+def test_state_rejects_profitability_from_another_product_landed_cost() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    plan_row = _usd_plan_row()
+    plan_row["product_id"] = "mouse-A"
+    state = TrackerState()
+    state.alibaba_negotiation_has_plan = True
+    state.alibaba_negotiation_plan_payload = dict(plan_row)
+    state.alibaba_negotiation_opening = plan_row["opening_offer"]
+    state.alibaba_negotiation_target = plan_row["target_price"]
+    state.alibaba_negotiation_ceiling = plan_row["ceiling_price"]
+    state.alibaba_landed_has_result = True
+    state.alibaba_landed_product_id = "headphones-B"
+    state.alibaba_landed_result = {
+        "max_supplier_raw": "4.10",
+        "currency": "USD",
+        "rate_status": ShippingRateStatus.ESTIMATE.value,
+    }
+    state.apply_alibaba_profitability_ceiling()
+    assert state.alibaba_negotiation_profitability_hint == (
+        services.ALIBABA_PROFITABILITY_PRODUCT_MISMATCH
+    )
+    assert state.alibaba_negotiation_has_profitability is False
+    assert state.alibaba_negotiation_ceiling == plan_row["ceiling_price"]
+
+
+def test_state_rejects_profitability_when_landed_product_id_is_missing() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    plan_row = _usd_plan_row()
+    plan_row["product_id"] = "mouse-A"
+    state = TrackerState()
+    state.alibaba_negotiation_has_plan = True
+    state.alibaba_negotiation_plan_payload = dict(plan_row)
+    state.alibaba_negotiation_ceiling = plan_row["ceiling_price"]
+    state.alibaba_landed_has_result = True
+    state.alibaba_landed_product_id = ""
+    state.alibaba_landed_result = {
+        "max_supplier_raw": "4.10",
+        "currency": "USD",
+        "rate_status": ShippingRateStatus.ESTIMATE.value,
+    }
+    state.apply_alibaba_profitability_ceiling()
+    assert state.alibaba_negotiation_profitability_hint == (
+        services.ALIBABA_PROFITABILITY_PRODUCT_MISMATCH
+    )
+    assert state.alibaba_negotiation_has_profitability is False
+    assert state.alibaba_negotiation_ceiling == plan_row["ceiling_price"]
+
+
+def test_state_rejects_profitability_when_plan_product_id_is_missing() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    plan_row = _usd_plan_row()
+    plan_row["product_id"] = ""
+    state = TrackerState()
+    state.alibaba_negotiation_has_plan = True
+    state.alibaba_negotiation_plan_payload = dict(plan_row)
+    state.alibaba_negotiation_ceiling = plan_row["ceiling_price"]
+    state.alibaba_landed_has_result = True
+    state.alibaba_landed_product_id = "mouse-A"
+    state.alibaba_landed_result = {
+        "max_supplier_raw": "4.10",
+        "currency": "USD",
+        "rate_status": ShippingRateStatus.ESTIMATE.value,
+    }
+    state.apply_alibaba_profitability_ceiling()
+    assert state.alibaba_negotiation_profitability_hint == (
+        services.ALIBABA_PROFITABILITY_PRODUCT_MISMATCH
+    )
+    assert state.alibaba_negotiation_has_profitability is False
+    assert state.alibaba_negotiation_ceiling == plan_row["ceiling_price"]
+
+
+def test_profitability_switch_from_a_to_b_and_back_to_a() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    plan_a = _usd_plan_row()
+    plan_a["product_id"] = "mouse-A"
+    plan_b = _usd_plan_row()
+    plan_b["product_id"] = "headphones-B"
+    landed_a = {
+        "max_supplier_raw": "4.10",
+        "currency": "USD",
+        "rate_status": ShippingRateStatus.ESTIMATE.value,
+        "unit_landed": "$99.99",
+    }
+    state = TrackerState()
+    state.alibaba_landed_has_result = True
+    state.alibaba_landed_product_id = "mouse-A"
+    state.alibaba_landed_result = landed_a
+
+    state.alibaba_negotiation_has_plan = True
+    state.alibaba_negotiation_plan_payload = dict(plan_b)
+    state.alibaba_negotiation_ceiling = plan_b["ceiling_price"]
+    state.apply_alibaba_profitability_ceiling()
+    assert state.alibaba_negotiation_profitability_hint == (
+        services.ALIBABA_PROFITABILITY_PRODUCT_MISMATCH
+    )
+    assert state.alibaba_negotiation_has_profitability is False
+    assert state.alibaba_negotiation_ceiling == plan_b["ceiling_price"]
+
+    state.alibaba_negotiation_plan_payload = dict(plan_a)
+    state.alibaba_negotiation_ceiling = plan_a["ceiling_price"]
+    state.alibaba_negotiation_profitability_hint = ""
+    state.apply_alibaba_profitability_ceiling()
+    assert state.alibaba_negotiation_has_profitability is True
+    assert state.alibaba_negotiation_profitability_hint == ""
+    assert state.alibaba_negotiation_plan_payload["profitability_applied"] == "1"
 
 
 def test_equal_profitability_ceiling_does_not_reduce() -> None:

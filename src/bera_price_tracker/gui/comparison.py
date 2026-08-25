@@ -44,6 +44,33 @@ def _text(value: object) -> str:
     return str(value).strip()
 
 
+def landed_context_applies(product_id: object, landed_product_id: object) -> bool:
+    """Authorize landed-cost reuse only for the same explicit product id.
+
+    Empty or missing ids fail closed. Title, fuzzy, and relevance matching are not used.
+    """
+
+    left = _text(product_id)
+    right = _text(landed_product_id)
+    return bool(left) and bool(right) and left == right
+
+
+def _ml_comparison_for_product(
+    *,
+    product_id: str,
+    landed_product_id: str,
+    ml_row: Any,
+    ml_comparison: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    if ml_row is None or ml_comparison is None:
+        return None
+    if _text(ml_comparison.get("landed")) and not landed_context_applies(
+        product_id, landed_product_id
+    ):
+        return None
+    return ml_comparison
+
+
 def _attr(row: object, name: str, default: str = "") -> str:
     if row is None:
         return default
@@ -432,6 +459,7 @@ def build_comparison_rows(
     ml_association_id: str = "",
     ml_comparison: Mapping[str, object] | None = None,
     landed: Mapping[str, object] | None = None,
+    landed_product_id: str = "",
     fallback_title: str = "",
 ) -> list[dict[str, object]]:
     """Fill FB/ML cells only when an explicit Alibaba association proves identity."""
@@ -443,6 +471,7 @@ def build_comparison_rows(
     context_title = _text(context.get("title"))
     facebook_id = _text(facebook_association_id)
     ml_id = _text(ml_association_id)
+    landed_id = _text(landed_product_id)
 
     rows: list[dict[str, object]] = []
     facebook_placed = False
@@ -464,8 +493,13 @@ def build_comparison_rows(
                     ml_row=ml_row,
                     product_id=product_id,
                     product_title=_attr(item, "title") or context_title or fallback_title,
-                    ml_comparison=ml_comparison,
-                    landed=landed if product_id and product_id == context_id else None,
+                    ml_comparison=_ml_comparison_for_product(
+                        product_id=product_id,
+                        landed_product_id=landed_id,
+                        ml_row=ml_row,
+                        ml_comparison=ml_comparison,
+                    ),
+                    landed=landed if landed_context_applies(product_id, landed_id) else None,
                 )
             )
     else:
@@ -484,8 +518,13 @@ def build_comparison_rows(
                         or fallback_title
                         or _attr(facebook_best, "title")
                     ),
-                    ml_comparison=ml_comparison,
-                    landed=landed,
+                    ml_comparison=_ml_comparison_for_product(
+                        product_id=shared_id,
+                        landed_product_id=landed_id,
+                        ml_row=ml_best,
+                        ml_comparison=ml_comparison,
+                    ),
+                    landed=landed if landed_context_applies(shared_id, landed_id) else None,
                 )
             )
             facebook_placed = True
