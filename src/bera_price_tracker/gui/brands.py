@@ -37,14 +37,7 @@ def _image_spec(platform: str, filename: str, label: str) -> BrandSpec:
 BRANDS: dict[str, BrandSpec] = {
     PLATFORM_ALIBABA: _image_spec(PLATFORM_ALIBABA, "alibaba.svg", "Alibaba"),
     PLATFORM_FACEBOOK: _image_spec(PLATFORM_FACEBOOK, "facebook.svg", "Facebook Marketplace"),
-    PLATFORM_ML: BrandSpec(
-        platform=PLATFORM_ML,
-        label="Mercado Libre",
-        alt="Mercado Libre",
-        kind="text",
-        src="",
-        local_path=None,
-    ),
+    PLATFORM_ML: _image_spec(PLATFORM_ML, "mercado-libre.svg", "Mercado Libre"),
 }
 
 
@@ -55,12 +48,15 @@ def brand_spec(platform: str) -> BrandSpec:
         raise ValueError(f"unknown marketplace brand: {platform}") from exc
 
 
-def local_brand_files() -> tuple[Path, Path]:
+def local_brand_files() -> tuple[Path, Path, Path]:
     alibaba = brand_spec(PLATFORM_ALIBABA).local_path
     facebook = brand_spec(PLATFORM_FACEBOOK).local_path
-    if alibaba is None or facebook is None:
-        raise FileNotFoundError("Alibaba and Facebook brand files must exist locally")
-    return alibaba, facebook
+    mercado_libre = brand_spec(PLATFORM_ML).local_path
+    if alibaba is None or facebook is None or mercado_libre is None:
+        raise FileNotFoundError(
+            "Alibaba, Facebook, and Mercado Libre brand files must exist locally"
+        )
+    return alibaba, facebook, mercado_libre
 
 
 def brand_uses_runtime_cdn(spec: BrandSpec) -> bool:

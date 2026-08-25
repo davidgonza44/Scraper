@@ -22,14 +22,17 @@ def marketplace_brand(
     name_weight: str = "medium",
 ) -> rx.Component:
     spec = brand_spec(platform)
+    max_width = max(size, int(size * 1.5))
     mark = (
         rx.image(
             src=spec.src,
             alt=spec.alt,
-            width=f"{size}px",
             height=f"{size}px",
-            min_width=f"{size}px",
+            width="auto",
+            max_height=f"{size}px",
+            max_width=f"{max_width}px",
             object_fit="contain",
+            flex_shrink="0",
         )
         if spec.kind == "image"
         else rx.text(

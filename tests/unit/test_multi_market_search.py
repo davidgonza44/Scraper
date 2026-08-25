@@ -211,13 +211,25 @@ def test_unsupported_plan_limit_never_reaches_runners() -> None:
     assert state.search_limit == DEFAULT_SEARCH_LIMIT
 
 
+def _gui_python_sources() -> list[Path]:
+    root = Path(__file__).resolve().parents[2] / "src/bera_price_tracker/gui"
+    return sorted(root.rglob("*.py"))
+
+
 def test_brand_assets_exist_locally() -> None:
-    alibaba, facebook = brands.local_brand_files()
+    alibaba, facebook, mercado_libre = brands.local_brand_files()
     assert alibaba.is_file()
     assert facebook.is_file()
-    assert alibaba.read_text(encoding="utf-8").lstrip().startswith("<svg")
-    assert facebook.read_text(encoding="utf-8").lstrip().startswith("<svg")
-    assert not (alibaba.parent / "mercado-libre.svg").exists()
+    assert mercado_libre.is_file()
+    assert mercado_libre.name == "mercado-libre.svg"
+    for path in (alibaba, facebook, mercado_libre):
+        text = path.read_text(encoding="utf-8")
+        assert text.lstrip().startswith("<svg")
+        lowered = text.casefold()
+        assert "jsdelivr" not in lowered
+        assert "thesvg.org" not in lowered
+        assert "simpleicons.org" not in lowered
+        assert 'href="http' not in lowered
 
 
 def test_brand_component_specs_cover_three_marketplaces() -> None:
@@ -226,14 +238,21 @@ def test_brand_component_specs_cover_three_marketplaces() -> None:
     ml = brands.brand_spec(PLATFORM_ML)
     assert alibaba.kind == "image" and alibaba.src == "/brands/alibaba.svg"
     assert facebook.kind == "image" and facebook.src == "/brands/facebook.svg"
-    assert ml.kind == "text" and ml.src == ""
+    assert ml.kind == "image" and ml.src == "/brands/mercado-libre.svg"
     assert ml.label == "Mercado Libre"
+    assert ml.local_path is not None and ml.local_path.is_file()
 
 
 def test_brand_specs_have_no_runtime_cdn() -> None:
     for spec in brands.BRANDS.values():
+        assert spec.kind == "image"
+        assert spec.src.startswith("/brands/")
+        assert spec.src.endswith(".svg")
         assert brands.brand_uses_runtime_cdn(spec) is False
         assert "simpleicons.org" not in spec.src
+        assert "thesvg" not in spec.src.casefold()
+        assert "jsdelivr" not in spec.src.casefold()
+        assert not spec.src.startswith("http://")
         assert not spec.src.startswith("https://")
 
 
@@ -242,8 +261,19 @@ def test_no_fabricated_mercadolibre_logo_file() -> None:
         encoding="utf-8"
     )
     assert "handshake" not in source.casefold()
+    assert "<svg" not in source.casefold()
     attribution = (brands._ASSETS_ROOT / "ATTRIBUTION.md").read_text(encoding="utf-8")
-    assert "text only" in attribution.casefold()
+    lowered = attribution.casefold()
+    assert "thesvg" in lowered
+    assert "https://thesvg.org/icon/mercado-libre" in lowered
+    assert "license reported by source: mit" in lowered
+    assert "does not grant trademark rights" in lowered
+    assert "trademark of its respective owner" in lowered
+    assert "marketplace identification only" in lowered
+    assert "not an official asset obtained from mercado libre" in lowered
+    assert "text only" not in lowered
+    svg = (brands._ASSETS_ROOT / "mercado-libre.svg").read_text(encoding="utf-8")
+    assert "#2D3277" in svg and "#FFE600" in svg
 
 
 def test_unrelated_marketplace_results_stay_on_separate_rows() -> None:
@@ -627,7 +657,57 @@ def test_platform_logo_component_has_no_cdn() -> None:
     source = Path(brand_components.__file__).read_text(encoding="utf-8")
     assert "https://" not in source
     assert "simpleicons.org" not in source
+    assert "thesvg" not in source.casefold()
+    assert "jsdelivr" not in source.casefold()
     assert "marketplace_brand(" in source
+    assert "PLATFORM_ALIBABA" in source
+    assert "PLATFORM_FACEBOOK" in source
+    assert "PLATFORM_ML" in source
+    assert "object_fit" in source
+
+
+def test_shared_brand_component_covers_all_marketplace_surfaces() -> None:
+    from bera_price_tracker.gui.components import brands as brand_components
+
+    component_source = Path(brand_components.__file__).read_text(encoding="utf-8")
+    assert "def marketplace_brand(" in component_source
+    assert "def marketplace_brand_alibaba" in component_source
+    assert "def marketplace_brand_facebook" in component_source
+    assert "def marketplace_brand_ml" in component_source
+    summary_source = (
+        Path(__file__).resolve().parents[2] / "src/bera_price_tracker/gui/components/summary.py"
+    ).read_text(encoding="utf-8")
+    assert "marketplace_brand_alibaba()" in summary_source
+    assert "marketplace_brand_facebook()" in summary_source
+    assert "marketplace_brand_ml()" in summary_source
+    comparison_source = (
+        Path(__file__).resolve().parents[2] / "src/bera_price_tracker/gui/components/comparison.py"
+    ).read_text(encoding="utf-8")
+    assert "marketplace_brand_alibaba(size=16)" in comparison_source
+    assert "marketplace_brand_facebook(size=16)" in comparison_source
+    assert "marketplace_brand_ml(size=16)" in comparison_source
+    results_source = (
+        Path(__file__).resolve().parents[2]
+        / "src/bera_price_tracker/gui/components/search_results.py"
+    ).read_text(encoding="utf-8")
+    assert "marketplace_brand_alibaba(size=16, show_name=False)" in results_source
+    assert "marketplace_brand_facebook(size=16, show_name=False)" in results_source
+    assert "marketplace_brand_ml(size=16, show_name=False)" in results_source
+    setup_source = (
+        Path(__file__).resolve().parents[2]
+        / "src/bera_price_tracker/gui/components/search_scope.py"
+    ).read_text(encoding="utf-8")
+    assert "marketplace_brand_alibaba()" in setup_source
+    assert "marketplace_brand_facebook()" in setup_source
+    assert "marketplace_brand_ml()" in setup_source
+    assert "marketplace_brand_alibaba(show_name=True)" in setup_source
+    assert "marketplace_brand_facebook(show_name=True)" in setup_source
+    assert "marketplace_brand_ml(show_name=True)" in setup_source
+    for path in _gui_python_sources():
+        text = path.read_text(encoding="utf-8").casefold()
+        assert "thesvg.org" not in text
+        assert "cdn.jsdelivr.net" not in text
+        assert "@thesvg" not in text
 
 
 def test_search_session_phase_duration_and_parsing_branches() -> None:
