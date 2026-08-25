@@ -26,7 +26,20 @@ from bera_price_tracker.application.services import (
     alibaba_credit_warning,
     mercadolibre_credit_warning,
 )
-from bera_price_tracker.gui import analysis, services
+from bera_price_tracker.gui import analysis, comparison, marketplace_summary, services
+from bera_price_tracker.gui.images import safe_public_image_url
+from bera_price_tracker.gui.navigation import (
+    DEFAULT_WORKSPACE,
+    WORKSPACE_COMPARISONS,
+    WORKSPACE_DASHBOARD,
+    WORKSPACE_IMPORT,
+    WORKSPACE_PRODUCTS,
+    WORKSPACE_SEARCHES,
+    WORKSPACE_SETTINGS,
+    WORKSPACE_TOOLS,
+    WORKSPACE_TRACKING,
+    marketplace_tab_for,
+)
 
 UI_INITIAL = "INITIAL"
 UI_LOADING = "LOADING"
@@ -142,6 +155,8 @@ class AlibabaTrackedRow(rx.Base):
     price_max: str = ""
     currency: str = ""
     selected: bool = False
+    image_url: str = ""
+    history_open: bool = False
 
 
 class AlibabaResultRow(rx.Base):
@@ -237,6 +252,7 @@ class FacebookProductResultRow(rx.Base):
     relevance_label: str = ""
     relevance_tokens: str = ""
     is_outlier: bool = False
+    image_url: str = ""
 
 
 class FacebookCurrencyStatsRow(rx.Base):
@@ -269,7 +285,63 @@ class ResultRow(rx.Base):
     details_items: list[DetailItem] = []
 
 
+class MarketplaceSummaryCard(rx.Base):
+    platform: str = ""
+    status: str = "empty"
+    status_label: str = "Sin búsqueda"
+    result_count: str = "0"
+    minimum: str = "—"
+    median: str = "—"
+    average: str = "—"
+    maximum: str = "—"
+    range: str = "—"
+    meta_one: str = ""
+    meta_two: str = ""
+    note: str = ""
+
+
+class ComparisonRow(rx.Base):
+    product_title: str = ""
+    product_image_url: str = ""
+    product_subtitle: str = ""
+    product_id: str = ""
+    alibaba_has_listing: bool = False
+    alibaba_image_url: str = ""
+    alibaba_title: str = ""
+    alibaba_price: str = ""
+    alibaba_range: str = ""
+    alibaba_moq: str = ""
+    alibaba_supplier: str = ""
+    alibaba_relevance: str = ""
+    alibaba_match_label: str = ""
+    alibaba_url: str = ""
+    facebook_has_listing: bool = False
+    facebook_image_url: str = ""
+    facebook_title: str = ""
+    facebook_price: str = ""
+    facebook_source_note: str = ""
+    facebook_usd_note: str = ""
+    facebook_location: str = ""
+    facebook_relevance: str = ""
+    facebook_match_label: str = ""
+    facebook_url: str = ""
+    ml_has_listing: bool = False
+    ml_image_url: str = ""
+    ml_title: str = ""
+    ml_price: str = ""
+    ml_condition: str = ""
+    ml_seller: str = ""
+    ml_relevance: str = ""
+    ml_match_label: str = ""
+    ml_url: str = ""
+    analysis_available: bool = False
+    analysis_heading: str = "Análisis no disponible"
+    analysis_detail: str = ""
+
+
 class TrackerState(rx.State):
+    workspace_view: str = DEFAULT_WORKSPACE
+    alibaba_history_open_ids: list[str] = []
     query: str = "pastillas sbr"
     city: str = "caracas"
     limit: int = 5
@@ -483,18 +555,56 @@ class TrackerState(rx.State):
             self.summary = dict(payload.get("summary") or {})
             self.ui_status = str(payload.get("ui_status") or UI_EMPTY)
 
+    def _open_workspace(self, view: str) -> None:
+        self.workspace_view = view
+        self.marketplace_tab = marketplace_tab_for(view)
+
+    def show_dashboard(self) -> None:
+        self._open_workspace(WORKSPACE_DASHBOARD)
+
+    def show_searches(self) -> None:
+        self._open_workspace(WORKSPACE_SEARCHES)
+        self.refresh_alibaba_tracking()
+
+    def show_products(self) -> None:
+        self._open_workspace(WORKSPACE_PRODUCTS)
+
+    def show_comparisons(self) -> None:
+        self._open_workspace(WORKSPACE_COMPARISONS)
+
+    def show_tracking(self) -> None:
+        self._open_workspace(WORKSPACE_TRACKING)
+        self.refresh_alibaba_tracking()
+
+    def show_import(self) -> None:
+        self._open_workspace(WORKSPACE_IMPORT)
+
+    def show_tools(self) -> None:
+        self._open_workspace(WORKSPACE_TOOLS)
+
+    def show_settings(self) -> None:
+        self._open_workspace(WORKSPACE_SETTINGS)
+
     def show_facebook_tab(self) -> None:
-        self.marketplace_tab = "facebook"
+        self._open_workspace(WORKSPACE_TOOLS)
 
     def show_facebook_products_tab(self) -> None:
-        self.marketplace_tab = "facebook_products"
+        self._open_workspace(WORKSPACE_PRODUCTS)
 
     def show_alibaba_tab(self) -> None:
-        self.marketplace_tab = "alibaba"
+        self._open_workspace(WORKSPACE_SEARCHES)
         self.refresh_alibaba_tracking()
 
     def show_mercadolibre_tab(self) -> None:
-        self.marketplace_tab = "mercadolibre"
+        self._open_workspace(WORKSPACE_COMPARISONS)
+
+    def toggle_alibaba_history(self, product_id: str) -> None:
+        if product_id in self.alibaba_history_open_ids:
+            self.alibaba_history_open_ids = [
+                item for item in self.alibaba_history_open_ids if item != product_id
+            ]
+            return
+        self.alibaba_history_open_ids = [*self.alibaba_history_open_ids, product_id]
 
     def set_alibaba_negotiation_product_key(self, value: str) -> None:
         key = value.split(" · ", 1)[0].strip()
@@ -872,7 +982,7 @@ class TrackerState(rx.State):
                 supplier_name=str(item.get("supplier_name", "")),
                 supplier_country=str(item.get("supplier_country", "")),
                 url=str(item.get("url", "")),
-                image_url=str(item.get("image_url", "")),
+                image_url=safe_public_image_url(item.get("image_url", "")),
                 representative=str(item.get("representative", "")),
                 product_id=str(item.get("product_id", "")),
                 price_min=str(item.get("price_min", "")),
@@ -1074,7 +1184,7 @@ class TrackerState(rx.State):
             "title": title.strip() or "Sin título",
         }
         self.facebook_product_has_alibaba_context = True
-        self.marketplace_tab = "facebook_products"
+        self._open_workspace(WORKSPACE_PRODUCTS)
         self._clear_facebook_product_results()
         if product_changed:
             self.facebook_product_query = self.alibaba_query.strip()
@@ -1283,6 +1393,7 @@ class TrackerState(rx.State):
                 relevance_label=str(item.get("relevance_label", "")),
                 relevance_tokens=str(item.get("relevance_tokens", "")),
                 is_outlier=bool(item.get("is_outlier", False)),
+                image_url=safe_public_image_url(item.get("image_url", "")),
             )
             for item in payload.get("results") or []
         ]
@@ -1393,7 +1504,7 @@ class TrackerState(rx.State):
         self._reset_product_translation_state(
             configured=services.product_translator_is_configured()
         )
-        self.marketplace_tab = "mercadolibre"
+        self._open_workspace(WORKSPACE_COMPARISONS)
         if product_changed:
             self.ml_results = []
             self.ml_summary = {}
@@ -1665,7 +1776,7 @@ class TrackerState(rx.State):
                 condition=str(item.get("condition", "—")),
                 seller_name=str(item.get("seller_name", "—")),
                 shipping=str(item.get("shipping", "—")),
-                thumbnail_url=str(item.get("thumbnail_url", "")),
+                thumbnail_url=safe_public_image_url(item.get("thumbnail_url", "")),
                 country=str(item.get("country", "—")),
                 representative=str(item.get("representative", "")),
                 relevance_value=int(item.get("relevance_value", 0) or 0),
@@ -1839,14 +1950,30 @@ class TrackerState(rx.State):
 
     @rx.var
     def alibaba_tracked_view_rows(self) -> list[AlibabaTrackedRow]:
+        from bera_price_tracker.gui.tracking_display import tracking_image_url
+
         selected = set(self.alibaba_refresh_selected_ids)
+        open_ids = set(self.alibaba_history_open_ids)
+        result_images = {
+            row.product_id: row.image_url for row in self.alibaba_results if row.product_id
+        }
         rows: list[AlibabaTrackedRow] = []
         for row in self.alibaba_tracked_rows:
             is_selected = bool(row.product_id) and row.product_id in selected
-            if row.selected == is_selected:
-                rows.append(row)
-                continue
-            rows.append(row.copy(update={"selected": is_selected}))
+            history_open = bool(row.product_id) and row.product_id in open_ids
+            image_url = tracking_image_url(
+                row.product_id,
+                tracked_image=row.image_url,
+                result_images=result_images,
+            )
+            updates: dict[str, object] = {}
+            if row.selected != is_selected:
+                updates["selected"] = is_selected
+            if row.history_open != history_open:
+                updates["history_open"] = history_open
+            if row.image_url != image_url:
+                updates["image_url"] = image_url
+            rows.append(row.copy(update=updates) if updates else row)
         return rows
 
     @rx.var
@@ -2097,3 +2224,84 @@ class TrackerState(rx.State):
                 min_relevance=self.ml_min_relevance,
             )
         return services.build_alibaba_ml_association(context, self.ml_live_summary, comparison)
+
+    @rx.var
+    def page_heading(self) -> str:
+        context = self.ml_alibaba_context or self.facebook_product_alibaba_context
+        return comparison.page_heading(
+            alibaba_query=self.alibaba_query,
+            facebook_query=self.facebook_product_query,
+            ml_query=self.ml_query,
+            h0019_query=self.query,
+            alibaba_status=self.alibaba_ui_status,
+            facebook_status=self.facebook_product_ui_status,
+            ml_status=self.ml_ui_status,
+            h0019_status=self.ui_status,
+            workspace_view=self.workspace_view,
+            facebook_association_id=self.facebook_product_association_product_id,
+            ml_association_id=self.ml_association_product_id,
+            context_id=str(context.get("external_id") or ""),
+            context_title=str(context.get("title") or ""),
+        )
+
+    @rx.var
+    def page_subtitle(self) -> str:
+        parts: list[str] = []
+        if self.ml_has_alibaba_context:
+            title = str(self.ml_alibaba_context.get("title") or "").strip()
+            if title:
+                parts.append(title)
+        elif self.facebook_product_has_alibaba_context:
+            title = str(self.facebook_product_alibaba_context.get("title") or "").strip()
+            if title:
+                parts.append(title)
+        if self.alibaba_ui_status == UI_SUCCESS and self.alibaba_summary.get("resultados"):
+            parts.append(f"Alibaba · {self.alibaba_summary['resultados']} resultados")
+        return " · ".join(parts)
+
+    @rx.var
+    def marketplace_summaries(self) -> list[MarketplaceSummaryCard]:
+        raw = marketplace_summary.build_marketplace_summaries(
+            alibaba_ui_status=self.alibaba_ui_status,
+            alibaba_summary=self.alibaba_summary,
+            alibaba_rows=self.alibaba_visible_rows,
+            facebook_ui_status=self.facebook_product_ui_status,
+            facebook_summary=self.facebook_product_summary,
+            facebook_statistics=self.facebook_product_statistics,
+            facebook_rows=self.facebook_product_results,
+            ml_ui_status=self.ml_ui_status,
+            ml_summary=self.ml_live_summary,
+            ml_rows=self.ml_visible_rows,
+        )
+        return [MarketplaceSummaryCard(**item) for item in raw]
+
+    @rx.var
+    def comparison_rows(self) -> list[ComparisonRow]:
+        fallback = (
+            self.alibaba_query.strip()
+            or self.facebook_product_query.strip()
+            or self.ml_query.strip()
+        )
+        raw = comparison.build_comparison_rows(
+            alibaba_rows=self.alibaba_visible_rows,
+            facebook_rows=self.facebook_product_results,
+            ml_rows=self.ml_visible_rows,
+            alibaba_status=self.alibaba_ui_status,
+            facebook_status=self.facebook_product_ui_status,
+            ml_status=self.ml_ui_status,
+            alibaba_context=self.ml_alibaba_context or self.facebook_product_alibaba_context,
+            facebook_association_id=self.facebook_product_association_product_id,
+            ml_association_id=self.ml_association_product_id,
+            ml_comparison=self.ml_comparison if self.ml_has_comparison else None,
+            landed=self.alibaba_landed_result if self.alibaba_landed_has_result else None,
+            fallback_title=fallback,
+        )
+        return [ComparisonRow(**item) for item in raw]
+
+    @rx.var
+    def has_comparison_rows(self) -> bool:
+        return len(self.comparison_rows) > 0
+
+    @rx.var
+    def export_enabled(self) -> bool:
+        return False

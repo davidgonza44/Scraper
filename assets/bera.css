@@ -1,0 +1,45 @@
+.bera-sidebar {
+  box-sizing: border-box;
+}
+
+.bera-workspace {
+  box-sizing: border-box;
+}
+
+.bera-comparison-matrix {
+  width: 100%;
+}
+
+.bera-summary-row > * {
+  min-width: 280px;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+}
+
+@media (max-width: 1279px) {
+  .bera-sidebar {
+    width: 72px !important;
+    min-width: 72px !important;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+
+  .bera-nav-label {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

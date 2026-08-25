@@ -9,17 +9,16 @@ from bera_price_tracker.gui.views import dashboard
 
 load_local_environment()
 
-GOOGLE_FONTS = (
-    "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650"
-    "&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
-)
+GOOGLE_FONTS = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
 
 app = rx.App(
-    stylesheets=[GOOGLE_FONTS],
+    stylesheets=[GOOGLE_FONTS, "/bera.css"],
     style={
-        "font_family": "'IBM Plex Sans', 'Segoe UI', sans-serif",
-        "background_color": "#f3eee4",
-        "color": "#1a1814",
+        "font_family": "Inter, 'Segoe UI', system-ui, sans-serif",
+        "background_color": "#F8F9FB",
+        "color": "#111827",
+        "font_size": "14px",
+        "line_height": "1.45",
     },
 )
-app.add_page(dashboard, route="/", title="BERA Price Tracker")
+app.add_page(dashboard, route="/", title="BERA Tracker")
