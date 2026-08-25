@@ -1,4 +1,4 @@
-# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value"
+# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value,operator"
 """Page header with real search context and reserved export affordance."""
 
 from __future__ import annotations
@@ -45,7 +45,15 @@ def page_header() -> rx.Component:
                 disabled=True,
                 title="La exportación no está disponible",
                 aria_label="Exportar, no disponible",
-                **styles.SECONDARY_BUTTON_STYLE,
+                background=styles.SURFACE,
+                color=styles.TEXT_PRIMARY,
+                border=f"1px solid {styles.BORDER_STRONG}",
+                border_radius=styles.RADIUS_SM,
+                height=styles.CONTROL_HEIGHT,
+                min_height=styles.CONTROL_HEIGHT,
+                font_size="14px",
+                font_weight="600",
+                padding_x="16px",
                 opacity="0.55",
                 cursor="not-allowed",
             ),

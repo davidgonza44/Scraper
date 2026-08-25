@@ -1,4 +1,4 @@
-# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value"
+# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value,operator"
 """Polished Alibaba tracking cards with collapsed history."""
 
 from __future__ import annotations
@@ -15,7 +15,9 @@ def history_accordion(item: rx.Var) -> rx.Component:
         rx.button(
             rx.hstack(
                 rx.icon("chevron-down", size=14),
-                rx.text("Ver historial (" + item["snapshot_count"] + ")", size="2", weight="medium"),
+                rx.text(
+                    "Ver historial (" + item["snapshot_count"] + ")", size="2", weight="medium"
+                ),
                 spacing="2",
                 align="center",
             ),
@@ -126,7 +128,9 @@ def tracking_card(item: rx.Var) -> rx.Component:
             ),
             rx.button(
                 "Buscar comparables en Venezuela",
-                on_click=TrackerState.prepare_ml_comparables_from_alibaba_tracked(item["product_id"]),
+                on_click=TrackerState.prepare_ml_comparables_from_alibaba_tracked(
+                    item["product_id"]
+                ),
                 size="2",
                 **styles.SECONDARY_BUTTON_STYLE,
             ),

@@ -63,7 +63,11 @@ def alibaba_summary_card(
         return card
     card["status"] = "ready"
     card["status_label"] = "Resultados"
-    card["result_count"] = _metric(summary, "resultados") if _metric(summary, "resultados") != EMPTY_METRIC else str(len(rows))
+    card["result_count"] = (
+        _metric(summary, "resultados")
+        if _metric(summary, "resultados") != EMPTY_METRIC
+        else str(len(rows))
+    )
     card["minimum"] = _metric(summary, "minimo")
     card["median"] = _metric(summary, "mediana")
     card["average"] = _metric(summary, "promedio")
@@ -75,8 +79,13 @@ def alibaba_summary_card(
     moq = ""
     if rows:
         first = rows[0]
-        supplier = _text(getattr(first, "supplier_name", None) or (first.get("supplier_name") if isinstance(first, Mapping) else ""))
-        moq = _text(getattr(first, "moq", None) or (first.get("moq") if isinstance(first, Mapping) else ""))
+        supplier = _text(
+            getattr(first, "supplier_name", None)
+            or (first.get("supplier_name") if isinstance(first, Mapping) else "")
+        )
+        moq = _text(
+            getattr(first, "moq", None) or (first.get("moq") if isinstance(first, Mapping) else "")
+        )
     if moq:
         card["meta_one"] = f"MOQ: {moq}"
     if supplier:
@@ -190,7 +199,9 @@ def build_marketplace_summaries(
     ml_rows: Sequence[Any] = (),
 ) -> list[dict[str, str]]:
     return [
-        alibaba_summary_card(ui_status=alibaba_ui_status, summary=alibaba_summary, rows=alibaba_rows),
+        alibaba_summary_card(
+            ui_status=alibaba_ui_status, summary=alibaba_summary, rows=alibaba_rows
+        ),
         facebook_summary_card(
             ui_status=facebook_ui_status,
             summary=facebook_summary,

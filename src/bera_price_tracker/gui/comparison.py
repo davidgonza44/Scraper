@@ -20,10 +20,16 @@ def match_label(relevance_value: object, *, has_listing: bool) -> str:
 
     if not has_listing:
         return ""
-    try:
-        score = int(relevance_value) if relevance_value is not None else 0
-    except (TypeError, ValueError):
+    score = 0
+    if isinstance(relevance_value, bool):
         score = 0
+    elif isinstance(relevance_value, int):
+        score = relevance_value
+    elif isinstance(relevance_value, str):
+        try:
+            score = int(relevance_value)
+        except ValueError:
+            score = 0
     if score >= 80:
         return MATCH_HIGH
     if score >= 60:
@@ -194,7 +200,9 @@ def build_analysis(
         if typical_profit:
             details.append(f"Margen típico: {typical_profit}")
     elif landed:
-        unit = _text(landed.get("unit_landed") or landed.get("landed_per_unit") or landed.get("unit"))
+        unit = _text(
+            landed.get("unit_landed") or landed.get("landed_per_unit") or landed.get("unit")
+        )
         if unit:
             if heading == ANALYSIS_UNAVAILABLE:
                 heading = "Costo puesto"
@@ -267,9 +275,7 @@ def build_comparison_rows(
 ) -> list[dict[str, str | bool]]:
     """One honest row per Alibaba product; FB/ML fill only the associated product."""
 
-    facebook_best = (
-        _best_by_relevance(facebook_rows) if facebook_status == UI_SUCCESS else None
-    )
+    facebook_best = _best_by_relevance(facebook_rows) if facebook_status == UI_SUCCESS else None
     ml_best = _best_by_relevance(ml_rows) if ml_status == UI_SUCCESS else None
     context = dict(alibaba_context or {})
     context_id = _text(context.get("external_id"))
@@ -281,9 +287,7 @@ def build_comparison_rows(
             product_id = _attr(item, "product_id")
             facebook_row = (
                 facebook_best
-                if product_id
-                and facebook_association_id
-                and product_id == facebook_association_id
+                if product_id and facebook_association_id and product_id == facebook_association_id
                 else None
             )
             ml_row = (

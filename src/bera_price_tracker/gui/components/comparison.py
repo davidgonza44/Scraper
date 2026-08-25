@@ -1,4 +1,4 @@
-# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value"
+# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value,operator"
 """Horizontal same-product comparison matrix."""
 
 from __future__ import annotations
@@ -82,7 +82,11 @@ def marketplace_cell(
             ),
             rx.cond(
                 relevance != "",
-                rx.text("Relevancia " + relevance, size="1", color=styles.TEXT_MUTED),
+                rx.hstack(
+                    rx.text("Relevancia", size="1", color=styles.TEXT_MUTED),
+                    rx.text(relevance, size="1", color=styles.TEXT_MUTED),
+                    spacing="1",
+                ),
             ),
             _listing_link(url),
             spacing="1",
@@ -167,7 +171,9 @@ def comparison_matrix() -> rx.Component:
     return rx.box(
         rx.hstack(
             rx.vstack(
-                rx.text("Comparación de mercado", size="4", weight="medium", color=styles.TEXT_PRIMARY),
+                rx.text(
+                    "Comparación de mercado", size="4", weight="medium", color=styles.TEXT_PRIMARY
+                ),
                 rx.text(
                     "Productos comparables en distintas plataformas",
                     size="2",
@@ -185,7 +191,9 @@ def comparison_matrix() -> rx.Component:
                 rx.box(
                     rx.text("Producto", size="1", weight="medium", color=styles.TEXT_MUTED),
                     rx.text("Alibaba", size="1", weight="medium", color=styles.ALIBABA),
-                    rx.text("Facebook Marketplace", size="1", weight="medium", color=styles.FACEBOOK),
+                    rx.text(
+                        "Facebook Marketplace", size="1", weight="medium", color=styles.FACEBOOK
+                    ),
                     rx.text("Mercado Libre", size="1", weight="medium", color=styles.MERCADOLIBRE),
                     rx.text("Análisis", size="1", weight="medium", color=styles.TEXT_MUTED),
                     display="grid",

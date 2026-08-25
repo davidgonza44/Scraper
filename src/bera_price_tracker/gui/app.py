@@ -9,9 +9,7 @@ from bera_price_tracker.gui.views import dashboard
 
 load_local_environment()
 
-GOOGLE_FONTS = (
-    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-)
+GOOGLE_FONTS = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
 
 app = rx.App(
     stylesheets=[GOOGLE_FONTS, "/bera.css"],

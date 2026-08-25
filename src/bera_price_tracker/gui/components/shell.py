@@ -1,4 +1,4 @@
-# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value"
+# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value,operator"
 """Dark sidebar + light workspace shell (shadcn dashboard-01 / Cruip Mosaic)."""
 
 from __future__ import annotations

@@ -128,7 +128,6 @@ BUTTON_STYLE: dict[str, object] = {
     "min_height": CONTROL_HEIGHT,
     "font_size": "14px",
     "font_weight": "600",
-    "padding_x": "16px",
     "cursor": "pointer",
     "transition": "background-color 160ms ease",
     "_hover": {
@@ -149,7 +148,6 @@ SECONDARY_BUTTON_STYLE: dict[str, object] = {
     "min_height": CONTROL_HEIGHT,
     "font_size": "14px",
     "font_weight": "600",
-    "padding_x": "16px",
     "cursor": "pointer",
     "transition": "background-color 160ms ease, border-color 160ms ease",
     "_hover": {

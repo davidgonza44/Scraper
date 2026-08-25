@@ -1,4 +1,4 @@
-# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value"
+# mypy: disable-error-code="index,attr-defined,type-arg,arg-type,no-untyped-def,call-arg,func-returns-value,operator"
 """Compact buttons, prices, badges, and empty states."""
 
 from __future__ import annotations

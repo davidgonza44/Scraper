@@ -6,20 +6,20 @@ from pathlib import Path
 
 from bera_price_tracker.gui import comparison, marketplace_summary, views
 from bera_price_tracker.gui.images import image_alt_text, safe_public_image_url
-from bera_price_tracker.gui.navigation import NAV_LABELS, NAV_ITEMS
+from bera_price_tracker.gui.navigation import NAV_ITEMS, NAV_LABELS
 from bera_price_tracker.gui.services import (
     alibaba_product_to_row,
     facebook_product_listing_to_row,
     mercadolibre_listing_to_row,
 )
 from bera_price_tracker.gui.state import (
+    UI_INITIAL,
+    UI_SUCCESS,
     AlibabaResultRow,
     AlibabaTrackedRow,
     FacebookProductResultRow,
     MercadoLibreResultRow,
     TrackerState,
-    UI_INITIAL,
-    UI_SUCCESS,
 )
 from bera_price_tracker.gui.tracking_display import (
     history_is_collapsed,
@@ -287,7 +287,13 @@ def test_summary_cards_use_real_ready_data_only() -> None:
         ],
         facebook_rows=[FacebookProductResultRow(location="Caracas")],
         ml_ui_status=UI_SUCCESS,
-        ml_summary={"comparables": "4", "minimo": "$9.50", "mediana": "$11.00", "precio_tipico": "$10.80", "maximo": "$14.00"},
+        ml_summary={
+            "comparables": "4",
+            "minimo": "$9.50",
+            "mediana": "$11.00",
+            "precio_tipico": "$10.80",
+            "maximo": "$14.00",
+        },
         ml_rows=[MercadoLibreResultRow(condition="Nuevo", seller_name="Tienda")],
     )
     assert cards[0]["result_count"] == "3"
@@ -412,3 +418,162 @@ def test_gui_modules_do_not_import_apify() -> None:
         text = path.read_text(encoding="utf-8")
         assert "infrastructure.providers.apify" not in text
         assert "import apify" not in text
+
+
+def test_match_label_and_page_heading_variants() -> None:
+    assert comparison.match_label(None, has_listing=False) == ""
+    assert comparison.match_label("bad", has_listing=True) == comparison.MATCH_COMPARABLE
+    assert comparison.match_label(True, has_listing=True) == comparison.MATCH_COMPARABLE
+    assert comparison.match_label(80, has_listing=True) == comparison.MATCH_HIGH
+    assert comparison.match_label("60", has_listing=True) == comparison.MATCH_MEDIUM
+    assert (
+        comparison.page_heading(alibaba_query="mouse", alibaba_status="EMPTY")
+        == "Resultados para: mouse"
+    )
+    assert (
+        comparison.page_heading(facebook_query="mouse ve", facebook_status="ERROR")
+        == "Resultados para: mouse ve"
+    )
+    assert comparison.page_heading(ml_query="mouse ml", ml_status=UI_SUCCESS) == (
+        "Resultados para: mouse ml"
+    )
+    assert comparison.page_heading(h0019_query="pastillas sbr", h0019_status="EMPTY") == (
+        "Resultados para: pastillas sbr"
+    )
+    assert comparison.page_heading() == "Inteligencia de compras e importación"
+
+
+def test_analysis_uses_landed_and_ml_comparison_without_inventing_score() -> None:
+    landed_only = comparison.build_analysis(
+        alibaba_row=None,
+        landed={"unit_landed": "$6.10"},
+    )
+    assert landed_only["analysis_heading"] == "Costo puesto"
+    assert "6.10" in str(landed_only["analysis_detail"])
+    with_ml = comparison.build_analysis(
+        alibaba_row=AlibabaResultRow(score="70/100", score_label="Oportunidad"),
+        ml_comparison={
+            "comparable": "1",
+            "landed": "$6.10",
+            "typical_price": "$11.00",
+            "typical_profit": "$4.90",
+        },
+    )
+    assert with_ml["analysis_heading"] == "Oportunidad Alibaba"
+    assert "Típico ML" in str(with_ml["analysis_detail"])
+
+
+def test_comparison_rows_without_alibaba_use_facebook_or_ml_title() -> None:
+    rows = comparison.build_comparison_rows(
+        facebook_rows=[FacebookProductResultRow(title="Solo Facebook", relevance_value=40)],
+        facebook_status=UI_SUCCESS,
+        fallback_title="",
+    )
+    assert len(rows) == 1
+    assert rows[0]["product_title"] == "Solo Facebook"
+    assert rows[0]["alibaba_has_listing"] is False
+    ml_rows = comparison.build_comparison_rows(
+        ml_rows=[MercadoLibreResultRow(title="Solo ML", relevance_value=40)],
+        ml_status=UI_SUCCESS,
+        alibaba_context={"external_id": "ali-9", "title": ""},
+        alibaba_rows=[AlibabaResultRow(product_id="ali-9", title="From context", price="$2.00")],
+    )
+    assert ml_rows[0]["product_title"] == "Solo ML"
+    assert ml_rows[0]["alibaba_has_listing"] is True
+    assert ml_rows[0]["alibaba_price"] == "$2.00"
+
+
+def test_alibaba_published_range_and_unsafe_facebook_image() -> None:
+    cell = comparison._alibaba_cell(
+        AlibabaResultRow(price="$4.00", price_min="3.50", price_max="4.30", currency="USD")
+    )
+    assert "3.50" in str(cell["alibaba_range"])
+    facebook = comparison._facebook_cell(
+        FacebookProductResultRow(image_url="javascript:alert(1)", price="10.00 VEF")
+    )
+    assert facebook["facebook_image_url"] == ""
+    dash = comparison._ml_cell(MercadoLibreResultRow(condition="—", seller_name="—"))
+    assert dash["ml_condition"] == ""
+    assert dash["ml_seller"] == ""
+
+
+def test_image_url_edge_cases() -> None:
+    assert safe_public_image_url("https://example.com/a b.jpg") == ""
+    assert safe_public_image_url("https://") == ""
+    assert safe_public_image_url("https://user@cdn.example/a.jpg") == ""
+    assert image_alt_text(None) == "Imagen del producto"
+    long_title = "x" * 200
+    assert image_alt_text(long_title).endswith("…")
+    assert len(image_alt_text(long_title)) <= 160
+
+
+def test_tracking_display_edge_cases() -> None:
+    assert parse_tracking_history("") == []
+    assert parse_tracking_history(None) == []
+    assert parse_tracking_history("solo")[0]["timestamp"] == "solo"
+    assert history_is_collapsed([], None) is True
+    assert history_toggle_label("") == "Ver historial (0)"
+    assert history_toggle_label(None) == "Ver historial (0)"
+    assert tracking_image_url(None) == ""
+    assert tracking_image_url("p1", tracked_image="https://s.alicdn.com/ok.jpg") == (
+        "https://s.alicdn.com/ok.jpg"
+    )
+
+
+def test_marketplace_summary_range_helpers() -> None:
+    card = marketplace_summary.alibaba_summary_card(
+        ui_status=UI_SUCCESS,
+        summary={"resultados": "1", "minimo": "$1.00", "maximo": "$2.00"},
+        rows=[],
+    )
+    assert card["range"] == "$1.00 – $2.00"
+    empty = marketplace_summary.empty_marketplace_card("Alibaba")
+    assert empty["status"] == "empty"
+    facebook = marketplace_summary.facebook_summary_card(
+        ui_status=UI_SUCCESS,
+        summary={"usable": "1"},
+        statistics=[
+            {
+                "minimum": "unavailable",
+                "median": "unavailable",
+                "average": "unavailable",
+                "maximum": "unavailable",
+            }
+        ],
+    )
+    assert facebook["minimum"] == "—"
+
+
+def test_navigation_tab_mapping() -> None:
+    from bera_price_tracker.gui.navigation import marketplace_tab_for
+
+    assert marketplace_tab_for("tools") == "facebook"
+    assert marketplace_tab_for("products") == "facebook_products"
+    assert marketplace_tab_for("unknown") == "alibaba"
+
+
+def test_component_builders_execute_offline() -> None:
+    from bera_price_tracker.gui.components import comparison as comparison_ui
+    from bera_price_tracker.gui.components import header, media, primitives, search, shell, summary
+    from bera_price_tracker.gui.components import tracking as tracking_ui
+
+    assert media.product_thumbnail("", alt="Sin") is not None
+    assert primitives.price_metric("$1.00") is not None
+    assert primitives.status_badge("ok", tone="positive") is not None
+    assert primitives.status_badge("x", tone="unknown") is not None
+    assert primitives.empty_state("Vacío", "Detalle") is not None
+    assert primitives.action_button("Ir") is not None
+    assert (
+        primitives.action_button("Ver", href="https://example.com", icon="external-link")
+        is not None
+    )
+    assert header.page_header() is not None
+    assert search.compact_alibaba_search() is not None
+    assert shell.sidebar() is not None
+    assert shell.app_shell(header.page_header()) is not None
+    assert summary.marketplace_summary_row() is not None
+    assert comparison_ui.comparison_matrix() is not None
+    assert comparison_ui._empty_cell("Sin resultado Alibaba") is not None
+    assert views.dashboard() is not None
+    assert views._executive_dashboard() is not None
+    assert tracking_ui.history_accordion is not None

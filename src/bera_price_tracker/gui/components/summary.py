@@ -73,7 +73,9 @@ def marketplace_summary_card(card: rx.Var) -> rx.Component:
         ),
         rx.cond(
             card["range"] != "—",
-            rx.text("Rango: " + card["range"], size="1", color=styles.TEXT_MUTED, padding_top="10px"),
+            rx.text(
+                "Rango: " + card["range"], size="1", color=styles.TEXT_MUTED, padding_top="10px"
+            ),
         ),
         rx.cond(
             card["meta_one"] != "",
