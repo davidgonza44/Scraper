@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 import reflex as rx
 
@@ -26,7 +27,8 @@ from bera_price_tracker.application.services import (
     alibaba_credit_warning,
     mercadolibre_credit_warning,
 )
-from bera_price_tracker.gui import analysis, comparison, marketplace_summary, services
+from bera_price_tracker.gui import analysis, comparison, marketplace_summary, search_scope, services
+from bera_price_tracker.gui.brands import PLATFORM_ALIBABA, PLATFORM_FACEBOOK, PLATFORM_ML
 from bera_price_tracker.gui.images import safe_public_image_url
 from bera_price_tracker.gui.navigation import (
     DEFAULT_WORKSPACE,
@@ -39,6 +41,11 @@ from bera_price_tracker.gui.navigation import (
     WORKSPACE_TOOLS,
     WORKSPACE_TRACKING,
     marketplace_tab_for,
+)
+from bera_price_tracker.gui.search_scope import (
+    DEFAULT_SEARCH_LIMIT,
+    MODE_MULTI,
+    MODE_SINGLE,
 )
 
 UI_INITIAL = "INITIAL"
@@ -285,6 +292,11 @@ class ResultRow(rx.Base):
     details_items: list[DetailItem] = []
 
 
+class SearchProgressRow(rx.Base):
+    label: str = ""
+    detail: str = ""
+
+
 class MarketplaceSummaryCard(rx.Base):
     platform: str = ""
     status: str = "empty"
@@ -431,6 +443,12 @@ class TrackerState(rx.State):
     facebook_product_translation_is_loading: bool = False
     facebook_product_translation_generation: int = 0
     facebook_product_query_origin: str = ""
+    search_mode: str = MODE_MULTI
+    search_platform: str = PLATFORM_ALIBABA
+    search_query: str = ""
+    search_limit: int = DEFAULT_SEARCH_LIMIT
+    search_error: str = ""
+    search_generation: int = 0
     alibaba_negotiation_product_key: str = ""
     alibaba_negotiation_quantity: str = "40"
     alibaba_negotiation_resale: str = ""
@@ -925,6 +943,40 @@ class TrackerState(rx.State):
     def set_alibaba_query(self, value: str) -> None:
         self.alibaba_query = value
 
+    def set_search_query(self, value: str) -> None:
+        self.search_query = value
+        self.search_error = ""
+
+    def set_search_mode_multi(self) -> None:
+        self.search_mode = MODE_MULTI
+        self.search_error = ""
+
+    def set_search_mode_single(self) -> None:
+        self.search_mode = MODE_SINGLE
+        self.search_error = ""
+
+    def set_search_platform_alibaba(self) -> None:
+        self.search_platform = PLATFORM_ALIBABA
+        self.search_mode = MODE_SINGLE
+        self.search_error = ""
+
+    def set_search_platform_facebook(self) -> None:
+        self.search_platform = PLATFORM_FACEBOOK
+        self.search_mode = MODE_SINGLE
+        self.search_error = ""
+
+    def set_search_platform_ml(self) -> None:
+        self.search_platform = PLATFORM_ML
+        self.search_mode = MODE_SINGLE
+        self.search_error = ""
+
+    def set_search_limit(self, value: str | int) -> None:
+        try:
+            self.search_limit = search_scope.validate_search_limit(value)
+            self.search_error = ""
+        except ValueError as exc:
+            self.search_error = str(exc)
+
     def set_alibaba_limit(self, value: str | int) -> None:
         try:
             self.alibaba_limit = int(value)
@@ -1108,7 +1160,10 @@ class TrackerState(rx.State):
         stats_raw: dict[str, str] | None = None,
         ui_status: str = "",
         error_message: str | None = None,
+        request_generation: int | None = None,
     ) -> None:
+        if request_generation is not None and request_generation != self.search_generation:
+            return
         # A second search cannot start while alibaba_is_loading is True, so this
         # in-flight request still owns the loading flag when query/limit changed.
         if (
@@ -1294,7 +1349,10 @@ class TrackerState(rx.State):
         summary: dict[str, str] | None = None,
         ui_status: str = "",
         error_message: str | None = None,
+        request_generation: int | None = None,
     ) -> None:
+        if request_generation is not None and request_generation != self.search_generation:
+            return
         if (
             product_id != self._facebook_product_active_id()
             or query.strip() != self.facebook_product_query.strip()
@@ -1694,7 +1752,10 @@ class TrackerState(rx.State):
         summary: dict[str, str] | None = None,
         ui_status: str = "",
         error_message: str | None = None,
+        request_generation: int | None = None,
     ) -> None:
+        if request_generation is not None and request_generation != self.search_generation:
+            return
         # A second search cannot start while ml_is_loading is True, so this
         # in-flight request still owns the loading flag when context/query changed.
         current_product_id = self._ml_active_search_product_id()
@@ -1795,6 +1856,290 @@ class TrackerState(rx.State):
                 summary=dict(payload.get("summary") or {}),
                 ui_status=str(payload.get("ui_status") or UI_EMPTY),
             )
+
+    def _payload_maps(self, payload: dict[str, object], key: str) -> list[dict[str, Any]]:
+        raw = payload.get(key) or []
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, dict)]
+
+    def _payload_int(self, item: dict[str, Any], key: str) -> int:
+        try:
+            return int(item.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _alibaba_rows_from_payload(self, payload: dict[str, object]) -> list[AlibabaResultRow]:
+        return [
+            AlibabaResultRow(
+                title=str(item.get("title", "")),
+                price=str(item.get("price", "")),
+                moq=str(item.get("moq", "")),
+                supplier_name=str(item.get("supplier_name", "")),
+                supplier_country=str(item.get("supplier_country", "")),
+                url=str(item.get("url", "")),
+                image_url=safe_public_image_url(item.get("image_url", "")),
+                representative=str(item.get("representative", "")),
+                product_id=str(item.get("product_id", "")),
+                price_min=str(item.get("price_min", "")),
+                price_max=str(item.get("price_max", "")),
+                currency=str(item.get("currency", "")),
+                is_outlier=bool(item.get("is_outlier", False)),
+                score_value=self._payload_int(item, "score_value"),
+                score=str(item.get("score", "")),
+                score_label=str(item.get("score_label", "")),
+                score_price=str(item.get("score_price", "")),
+                score_moq=str(item.get("score_moq", "")),
+                score_info=str(item.get("score_info", "")),
+                score_clarity=str(item.get("score_clarity", "")),
+                relevance_value=self._payload_int(item, "relevance_value"),
+                relevance=str(item.get("relevance", "")),
+                relevance_label=str(item.get("relevance_label", "")),
+                relevance_tokens=str(item.get("relevance_tokens", "")),
+                reputation_available=bool(item.get("reputation_available", False)),
+                reputation_value=self._payload_int(item, "reputation_value"),
+                reputation=str(item.get("reputation", "—")),
+                reputation_label=str(item.get("reputation_label", "")),
+                reputation_coverage=str(item.get("reputation_coverage", "")),
+                reputation_coverage_label=str(item.get("reputation_coverage_label", "")),
+                reputation_service=str(item.get("reputation_service", "")),
+                reputation_reviews=str(item.get("reputation_reviews", "")),
+                reputation_years=str(item.get("reputation_years", "")),
+                reputation_volume=str(item.get("reputation_volume", "")),
+            )
+            for item in self._payload_maps(payload, "results")
+        ]
+
+    def _facebook_rows_from_payload(
+        self, payload: dict[str, object]
+    ) -> tuple[list[FacebookProductResultRow], list[FacebookCurrencyStatsRow]]:
+        rows = [
+            FacebookProductResultRow(
+                external_id=str(item.get("external_id", "")),
+                title=str(item.get("title", "")),
+                permalink=str(item.get("permalink", "")),
+                price=str(item.get("price", "")),
+                price_raw=str(item.get("price_raw", "")),
+                currency=str(item.get("currency", "UNKNOWN")),
+                formatted_price=str(item.get("formatted_price", "")),
+                source_price_note=str(item.get("source_price_note", "")),
+                usd_price=str(item.get("usd_price", "")),
+                usd_amount=str(item.get("usd_amount", "")),
+                usd_normalization_status=str(item.get("usd_normalization_status", "")),
+                usd_evidence=str(item.get("usd_evidence", "")),
+                usd_basis=str(item.get("usd_basis", "")),
+                usd_provenance=str(item.get("usd_provenance", "")),
+                location=str(item.get("location", "—")),
+                representative=str(item.get("representative", "")),
+                relevance_value=self._payload_int(item, "relevance_value"),
+                relevance=str(item.get("relevance", "")),
+                relevance_label=str(item.get("relevance_label", "")),
+                relevance_tokens=str(item.get("relevance_tokens", "")),
+                is_outlier=bool(item.get("is_outlier", False)),
+                image_url=safe_public_image_url(item.get("image_url", "")),
+            )
+            for item in self._payload_maps(payload, "results")
+        ]
+        statistics = [
+            FacebookCurrencyStatsRow(
+                currency=str(item.get("currency", "")),
+                label=str(item.get("label", "")),
+                basis=str(item.get("basis", "")),
+                source_currencies=str(item.get("source_currencies", "")),
+                normalization_status=str(item.get("normalization_status", "")),
+                evidence=str(item.get("evidence", "")),
+                provenance=str(item.get("provenance", "")),
+                count=str(item.get("count", "0")),
+                minimum=str(item.get("minimum", "unavailable")),
+                average=str(item.get("average", "unavailable")),
+                median=str(item.get("median", "unavailable")),
+                maximum=str(item.get("maximum", "unavailable")),
+                p25=str(item.get("p25", "unavailable")),
+                p75=str(item.get("p75", "unavailable")),
+                iqr=str(item.get("iqr", "unavailable")),
+            )
+            for item in self._payload_maps(payload, "statistics")
+        ]
+        return rows, statistics
+
+    def _ml_rows_from_payload(self, payload: dict[str, object]) -> list[MercadoLibreResultRow]:
+        return [
+            MercadoLibreResultRow(
+                external_id=str(item.get("external_id", "")),
+                title=str(item.get("title", "")),
+                permalink=str(item.get("permalink", "")),
+                price=str(item.get("price", "—")),
+                price_raw=str(item.get("price_raw", "")),
+                currency=str(item.get("currency", "—")),
+                condition=str(item.get("condition", "—")),
+                seller_name=str(item.get("seller_name", "—")),
+                shipping=str(item.get("shipping", "—")),
+                thumbnail_url=safe_public_image_url(item.get("thumbnail_url", "")),
+                country=str(item.get("country", "—")),
+                representative=str(item.get("representative", "")),
+                relevance_value=self._payload_int(item, "relevance_value"),
+                relevance=str(item.get("relevance", "")),
+                relevance_label=str(item.get("relevance_label", "")),
+                relevance_tokens=str(item.get("relevance_tokens", "")),
+                is_outlier=bool(item.get("is_outlier", False)),
+            )
+            for item in self._payload_maps(payload, "results")
+        ]
+
+    def _prepare_scoped_search(self, plan: search_scope.SearchPlan) -> None:
+        self.search_query = plan.query
+        self.search_limit = plan.limit
+        if PLATFORM_ALIBABA in plan.providers:
+            self.alibaba_query = plan.query
+            self.alibaba_limit = plan.limit
+            self.alibaba_results = []
+            self.alibaba_summary = {}
+            self.alibaba_stats_raw = {}
+            self.alibaba_error = ""
+            self.alibaba_is_loading = True
+            self.alibaba_ui_status = UI_LOADING
+        if PLATFORM_FACEBOOK in plan.providers:
+            self.facebook_product_query = plan.query
+            self.facebook_product_limit = plan.limit
+            self.facebook_product_query_origin = services.ML_QUERY_ORIGIN_USER
+            self.facebook_product_results = []
+            self.facebook_product_statistics = []
+            self.facebook_product_summary = {}
+            self.facebook_product_error = ""
+            self.facebook_product_provenance = {}
+            self.facebook_product_is_loading = True
+            self.facebook_product_ui_status = UI_LOADING
+        if PLATFORM_ML in plan.providers:
+            self.ml_query = plan.query
+            self.ml_limit = plan.limit
+            self.ml_query_origin = services.ML_QUERY_ORIGIN_USER
+            self.ml_results = []
+            self.ml_summary = {}
+            self.ml_error = ""
+            self.ml_is_loading = True
+            self.ml_ui_status = UI_LOADING
+            self._invalidate_ml_comparison()
+
+    @rx.event(background=True)
+    async def run_scoped_search(self) -> None:
+        async with self:
+            try:
+                plan = search_scope.plan_search(
+                    mode=self.search_mode,
+                    platform=self.search_platform,
+                    query=self.search_query,
+                    limit=self.search_limit,
+                    city=self.facebook_product_city,
+                )
+            except ValueError as exc:
+                self.search_error = str(exc)
+                return
+            generation = self.search_generation + 1
+            self.search_generation = generation
+            self.search_error = ""
+            self._prepare_scoped_search(plan)
+
+        async def run_provider(provider: str) -> None:
+            try:
+                if provider == PLATFORM_ALIBABA:
+                    payload = await asyncio.to_thread(
+                        services.run_alibaba_search, plan.query, plan.limit
+                    )
+                elif provider == PLATFORM_FACEBOOK:
+                    payload = await asyncio.to_thread(
+                        services.run_facebook_product_search,
+                        plan.query,
+                        plan.city,
+                        plan.limit,
+                    )
+                else:
+                    payload = await asyncio.to_thread(
+                        services.run_mercadolibre_search, plan.query, plan.limit
+                    )
+            except Exception as exc:  # noqa: BLE001 — sanitized before display
+                async with self:
+                    if provider == PLATFORM_ALIBABA:
+                        self._finalize_alibaba_search(
+                            request_query=plan.query,
+                            request_limit=plan.limit,
+                            error_message=services.sanitize_alibaba_error(exc),
+                            request_generation=generation,
+                        )
+                    elif provider == PLATFORM_FACEBOOK:
+                        self._finalize_facebook_product_search(
+                            product_id=self._facebook_product_active_id(),
+                            query=plan.query,
+                            city=plan.city,
+                            error_message=services.sanitize_facebook_product_error(exc),
+                            request_generation=generation,
+                        )
+                    else:
+                        self._finalize_mercadolibre_search(
+                            search_product_id=self._ml_active_search_product_id(),
+                            query=plan.query,
+                            error_message=services.sanitize_mercadolibre_error(exc),
+                            request_generation=generation,
+                        )
+                return
+            if not isinstance(payload, dict):
+                payload = {}
+            async with self:
+                if provider == PLATFORM_ALIBABA:
+                    self._finalize_alibaba_search(
+                        request_query=plan.query,
+                        request_limit=plan.limit,
+                        rows=self._alibaba_rows_from_payload(payload),
+                        summary=dict(payload.get("summary") or {}),
+                        stats_raw=dict(payload.get("stats_raw") or {}),
+                        ui_status=str(payload.get("ui_status") or UI_EMPTY),
+                        request_generation=generation,
+                    )
+                elif provider == PLATFORM_FACEBOOK:
+                    rows, statistics = self._facebook_rows_from_payload(payload)
+                    self._finalize_facebook_product_search(
+                        product_id=self._facebook_product_active_id(),
+                        query=plan.query,
+                        city=plan.city,
+                        rows=rows,
+                        statistics=statistics,
+                        summary=dict(payload.get("summary") or {}),
+                        ui_status=str(payload.get("ui_status") or UI_EMPTY),
+                        request_generation=generation,
+                    )
+                else:
+                    self._finalize_mercadolibre_search(
+                        search_product_id=self._ml_active_search_product_id(),
+                        query=plan.query,
+                        rows=self._ml_rows_from_payload(payload),
+                        summary=dict(payload.get("summary") or {}),
+                        ui_status=str(payload.get("ui_status") or UI_EMPTY),
+                        request_generation=generation,
+                    )
+
+        await asyncio.gather(*[run_provider(provider) for provider in plan.providers])
+
+    def apply_partial_search_fixture(self) -> None:
+        """Isolated visual fixture. Not used by production search."""
+
+        self.search_mode = MODE_MULTI
+        self.search_limit = DEFAULT_SEARCH_LIMIT
+        self.search_query = "fixture mouse"
+        self.alibaba_ui_status = UI_SUCCESS
+        self.alibaba_is_loading = False
+        self.alibaba_error = ""
+        self.alibaba_summary = {"resultados": "3"}
+        self.alibaba_results = [
+            AlibabaResultRow(title="Fixture Alibaba", price="$4.00", product_id="fixture-ali")
+        ]
+        self.facebook_product_ui_status = UI_ERROR
+        self.facebook_product_is_loading = False
+        self.facebook_product_results = []
+        self.facebook_product_error = "No se pudo consultar Facebook Marketplace."
+        self.ml_ui_status = UI_SUCCESS
+        self.ml_is_loading = False
+        self.ml_error = ""
+        self.ml_summary = {"comparables": "3"}
+        self.ml_results = [MercadoLibreResultRow(title="Fixture ML", price="$9.00")]
 
     def compare_ml_with_landed_cost(self) -> None:
         if self.ml_has_alibaba_context:
@@ -2224,6 +2569,61 @@ class TrackerState(rx.State):
                 min_relevance=self.ml_min_relevance,
             )
         return services.build_alibaba_ml_association(context, self.ml_live_summary, comparison)
+
+    @rx.var
+    def search_cta_label(self) -> str:
+        return search_scope.cta_label(self.search_mode, self.search_platform)
+
+    @rx.var
+    def search_callout_primary(self) -> str:
+        primary, _secondary = search_scope.search_callout(self.search_limit)
+        return primary
+
+    @rx.var
+    def search_callout_secondary(self) -> str:
+        _primary, secondary = search_scope.search_callout(self.search_limit)
+        return secondary
+
+    @rx.var
+    def search_is_busy(self) -> bool:
+        try:
+            providers = search_scope.providers_for(self.search_mode, self.search_platform)
+        except ValueError:
+            providers = search_scope.ALL_PLATFORMS
+        flags = {
+            PLATFORM_ALIBABA: self.alibaba_is_loading,
+            PLATFORM_FACEBOOK: self.facebook_product_is_loading,
+            PLATFORM_ML: self.ml_is_loading,
+        }
+        return any(flags[provider] for provider in providers)
+
+    @rx.var
+    def search_progress_rows(self) -> list[SearchProgressRow]:
+        try:
+            providers = search_scope.providers_for(self.search_mode, self.search_platform)
+        except ValueError:
+            providers = search_scope.ALL_PLATFORMS
+        rows: list[SearchProgressRow] = []
+        for provider in providers:
+            if provider == PLATFORM_ALIBABA:
+                count = str(self.alibaba_summary.get("resultados") or len(self.alibaba_results))
+                detail = search_scope.progress_label(self.alibaba_ui_status, count)
+                label = search_scope.PLATFORM_LABELS[PLATFORM_ALIBABA]
+            elif provider == PLATFORM_FACEBOOK:
+                count = str(
+                    self.facebook_product_summary.get("usable")
+                    or len(self.facebook_product_results)
+                )
+                detail = search_scope.progress_label(self.facebook_product_ui_status, count)
+                if self.facebook_product_ui_status == UI_SUCCESS:
+                    detail = f"{count} resultados válidos"
+                label = search_scope.PLATFORM_LABELS[PLATFORM_FACEBOOK]
+            else:
+                count = str(self.ml_summary.get("comparables") or len(self.ml_results))
+                detail = search_scope.progress_label(self.ml_ui_status, count)
+                label = search_scope.PLATFORM_LABELS[PLATFORM_ML]
+            rows.append(SearchProgressRow(label=label, detail=detail))
+        return rows
 
     @rx.var
     def page_heading(self) -> str:

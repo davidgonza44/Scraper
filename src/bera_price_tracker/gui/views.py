@@ -12,6 +12,7 @@ from bera_price_tracker.gui.components.comparison import comparison_matrix
 from bera_price_tracker.gui.components.header import page_header
 from bera_price_tracker.gui.components.media import product_thumbnail
 from bera_price_tracker.gui.components.search import compact_alibaba_search
+from bera_price_tracker.gui.components.search_scope import multi_market_search_panel
 from bera_price_tracker.gui.components.shell import app_shell
 from bera_price_tracker.gui.components.summary import marketplace_summary_row
 from bera_price_tracker.gui.components.tracking import tracking_card
@@ -2969,7 +2970,9 @@ def _workspace() -> rx.Component:
             TrackerState.workspace_view == WORKSPACE_SEARCHES,
             rx.vstack(
                 page_header(),
-                _alibaba_form(),
+                multi_market_search_panel(),
+                marketplace_summary_row(),
+                comparison_matrix(),
                 _alibaba_body(),
                 spacing="4",
                 width="100%",

@@ -174,3 +174,24 @@ SURFACE_STYLE: dict[str, object] = {
     "border_radius": RADIUS,
     "box_shadow": SHADOW,
 }
+
+SELECTED_CARD_STYLE: dict[str, object] = {
+    "background_color": "rgba(79, 70, 229, 0.06)",
+    "border": f"1px solid {PRIMARY}",
+    "border_radius": RADIUS_SM,
+    "box_shadow": "none",
+}
+
+UNSELECTED_CARD_STYLE: dict[str, object] = {
+    "background_color": SURFACE,
+    "border": f"1px solid {BORDER_STRONG}",
+    "border_radius": RADIUS_SM,
+    "box_shadow": "none",
+}
+
+CALLOUT_STYLE: dict[str, object] = {
+    "background_color": "#EEF2FF",
+    "border": "1px solid #C7D2FE",
+    "border_radius": RADIUS_SM,
+    "padding": "10px 12px",
+}

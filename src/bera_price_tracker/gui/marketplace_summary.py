@@ -6,7 +6,21 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 UI_SUCCESS = "SUCCESS"
+UI_LOADING = "LOADING"
+UI_ERROR = "ERROR"
 EMPTY_METRIC = "—"
+
+
+def _status_overlay(card: dict[str, str], ui_status: str) -> dict[str, str] | None:
+    if ui_status == UI_LOADING:
+        card["status"] = "loading"
+        card["status_label"] = "Buscando..."
+        return card
+    if ui_status == UI_ERROR:
+        card["status"] = "error"
+        card["status_label"] = "Error"
+        return card
+    return None
 
 
 def _text(value: object) -> str:
@@ -59,6 +73,9 @@ def alibaba_summary_card(
     rows: Sequence[Any] = (),
 ) -> dict[str, str]:
     card = empty_marketplace_card("Alibaba")
+    overlay = _status_overlay(card, ui_status)
+    if overlay is not None:
+        return overlay
     if ui_status != UI_SUCCESS:
         return card
     card["status"] = "ready"
@@ -101,6 +118,9 @@ def facebook_summary_card(
     rows: Sequence[Any] = (),
 ) -> dict[str, str]:
     card = empty_marketplace_card("Facebook Marketplace")
+    overlay = _status_overlay(card, ui_status)
+    if overlay is not None:
+        return overlay
     if ui_status != UI_SUCCESS:
         return card
     card["status"] = "ready"
@@ -157,6 +177,9 @@ def mercadolibre_summary_card(
     rows: Sequence[Any] = (),
 ) -> dict[str, str]:
     card = empty_marketplace_card("Mercado Libre")
+    overlay = _status_overlay(card, ui_status)
+    if overlay is not None:
+        return overlay
     if ui_status != UI_SUCCESS:
         return card
     card["status"] = "ready"

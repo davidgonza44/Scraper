@@ -14,6 +14,12 @@
   min-width: 280px;
 }
 
+.bera-marketplace-selector > *,
+.bera-multi-brand-row > * {
+  min-width: 220px;
+  flex: 1 1 220px;
+}
+
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
