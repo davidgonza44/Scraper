@@ -8,15 +8,32 @@ from typing import cast
 import reflex as rx
 
 from bera_price_tracker.gui import styles
+from bera_price_tracker.gui.components.comparison import comparison_matrix
+from bera_price_tracker.gui.components.header import page_header
+from bera_price_tracker.gui.components.media import product_thumbnail
+from bera_price_tracker.gui.components.search import compact_alibaba_search
+from bera_price_tracker.gui.components.shell import app_shell
+from bera_price_tracker.gui.components.summary import marketplace_summary_row
+from bera_price_tracker.gui.components.tracking import tracking_card
+from bera_price_tracker.gui.navigation import (
+    WORKSPACE_COMPARISONS,
+    WORKSPACE_DASHBOARD,
+    WORKSPACE_IMPORT,
+    WORKSPACE_PRODUCTS,
+    WORKSPACE_SEARCHES,
+    WORKSPACE_SETTINGS,
+    WORKSPACE_TOOLS,
+    WORKSPACE_TRACKING,
+)
 from bera_price_tracker.gui.state import TrackerState
 
-INK = "#1a1814"
-PAPER = styles.PAPER
-CARD = "#faf7f0"
-BRICK = "#9b2c2c"
-GREEN = "#2f5d50"
-RULE = "#c9c1b2"
-MUTED = "#5c564c"
+INK = styles.TEXT_PRIMARY
+PAPER = styles.WORKSPACE_BG
+CARD = styles.SURFACE
+BRICK = styles.DANGER
+GREEN = styles.POSITIVE
+RULE = styles.BORDER
+MUTED = styles.TEXT_MUTED
 
 
 def _header() -> rx.Component:
@@ -132,9 +149,8 @@ def _form() -> rx.Component:
             spacing="5",
             width="100%",
         ),
-        background_color=CARD,
-        border=f"1px solid {RULE}",
-        padding="22px",
+        **styles.SURFACE_STYLE,
+        padding="16px 18px",
         width="100%",
     )
 
@@ -359,9 +375,8 @@ def _alibaba_form() -> rx.Component:
             spacing="5",
             width="100%",
         ),
-        background_color=CARD,
-        border=f"1px solid {RULE}",
-        padding="22px",
+        **styles.SURFACE_STYLE,
+        padding="16px 18px",
         width="100%",
     )
 
@@ -1192,129 +1207,7 @@ def _alibaba_tracking() -> rx.Component:
                 ),
                 rx.foreach(
                     TrackerState.alibaba_tracked_view_rows,
-                    lambda item: rx.box(
-                        rx.checkbox(
-                            checked=item["selected"],
-                            on_change=lambda _checked: (
-                                TrackerState.toggle_alibaba_refresh_selection(item["product_id"])
-                            ),
-                        ),
-                        rx.text(
-                            item["title"], size="2", weight="medium", color=styles.TEXT_PRIMARY
-                        ),
-                        rx.text(
-                            "Proveedor: " + item["supplier_name"],
-                            size="1",
-                            color=MUTED,
-                        ),
-                        rx.text(
-                            "Último precio: " + item["last_price"],
-                            size="2",
-                            color=BRICK,
-                            weight="medium",
-                        ),
-                        rx.cond(
-                            item["published_range"] != "",
-                            rx.text(
-                                "Rango publicado: " + item["published_range"],
-                                size="1",
-                                color=MUTED,
-                            ),
-                        ),
-                        rx.cond(
-                            item["first_price_tag"] != "",
-                            rx.tooltip(
-                                rx.text(
-                                    "Precio observado al seguir: "
-                                    + item["first_price"]
-                                    + " · Discovery",
-                                    size="1",
-                                    color=MUTED,
-                                ),
-                                content=(
-                                    "Este precio proviene de la búsqueda inicial y puede "
-                                    "representar un rango. Las variaciones comienzan cuando se "
-                                    "obtiene un precio comparable mediante seguimiento."
-                                ),
-                            ),
-                            rx.text(
-                                "Precio observado al seguir: " + item["first_price"],
-                                size="1",
-                                color=MUTED,
-                            ),
-                        ),
-                        rx.text(
-                            "Baseline de seguimiento: " + item["baseline"],
-                            size="1",
-                            color=MUTED,
-                        ),
-                        rx.text(
-                            "Última actualización: " + item["last_updated"],
-                            size="1",
-                            color=MUTED,
-                        ),
-                        rx.cond(
-                            item["variation"] == "—",
-                            rx.tooltip(
-                                rx.text("Variación: —", size="1", color=styles.TEXT_PRIMARY),
-                                content=(
-                                    "Se necesita una segunda comprobación comparable para "
-                                    "calcular la variación."
-                                ),
-                            ),
-                            rx.text(
-                                "Variación: " + item["variation"],
-                                size="1",
-                                color=styles.TEXT_PRIMARY,
-                            ),
-                        ),
-                        rx.text(
-                            "Historial (" + item["snapshot_count"] + " snapshots)",
-                            size="1",
-                            weight="medium",
-                            color=styles.TEXT_PRIMARY,
-                        ),
-                        rx.text(item["history"], size="1", color=MUTED, white_space="pre-line"),
-                        rx.hstack(
-                            rx.button(
-                                "Actualizar",
-                                on_click=TrackerState.request_alibaba_refresh_one(
-                                    item["product_id"]
-                                ),
-                                size="1",
-                                variant="outline",
-                            ),
-                            rx.button(
-                                "Dejar de seguir",
-                                on_click=TrackerState.unfollow_alibaba_product(item["product_id"]),
-                                size="1",
-                                variant="outline",
-                            ),
-                            rx.button(
-                                "Buscar comparables en Venezuela",
-                                on_click=TrackerState.prepare_ml_comparables_from_alibaba_tracked(
-                                    item["product_id"]
-                                ),
-                                size="1",
-                                variant="outline",
-                            ),
-                            rx.button(
-                                "Buscar comparables en Facebook",
-                                on_click=(
-                                    TrackerState.prepare_facebook_comparables_from_alibaba_tracked(
-                                        item["product_id"]
-                                    )
-                                ),
-                                size="1",
-                                variant="outline",
-                            ),
-                            spacing="2",
-                        ),
-                        padding="12px 14px",
-                        background_color=CARD,
-                        border=f"1px solid {RULE}",
-                        width="100%",
-                    ),
+                    tracking_card,
                 ),
                 spacing="3",
                 width="100%",
@@ -1327,11 +1220,10 @@ def _alibaba_tracking() -> rx.Component:
                 padding_top="8px",
             ),
         ),
-        padding="14px 16px",
-        background_color=CARD,
-        border=f"1px solid {RULE}",
+        **styles.SURFACE_STYLE,
+        padding="18px 20px",
         width="100%",
-        margin_top="16px",
+        margin_top="0",
     )
 
 
@@ -2099,16 +1991,10 @@ def _alibaba_table() -> rx.Component:
                     TrackerState.alibaba_table_rows,
                     lambda row: rx.table.row(
                         rx.table.cell(
-                            rx.cond(
-                                row["image_url"] != "",
-                                rx.image(
-                                    src=row["image_url"],
-                                    alt="",
-                                    width="48px",
-                                    height="48px",
-                                    object_fit="cover",
-                                ),
-                                rx.box(width="48px", height="48px"),
+                            product_thumbnail(
+                                row["image_url"],
+                                alt=row["title"],
+                                size="56px",
                             )
                         ),
                         rx.table.cell(row["title"], color=styles.TEXT_PRIMARY),
@@ -2319,9 +2205,8 @@ def _facebook_products_form() -> rx.Component:
             spacing="5",
             width="100%",
         ),
-        background_color=CARD,
-        border=f"1px solid {RULE}",
-        padding="22px",
+        **styles.SURFACE_STYLE,
+        padding="16px 18px",
         width="100%",
     )
 
@@ -2419,6 +2304,7 @@ def _facebook_products_table() -> rx.Component:
         rx.table.root(
             rx.table.header(
                 rx.table.row(
+                    rx.table.column_header_cell("Imagen"),
                     rx.table.column_header_cell("Producto"),
                     rx.table.column_header_cell("Precio"),
                     rx.table.column_header_cell("Moneda"),
@@ -2431,10 +2317,17 @@ def _facebook_products_table() -> rx.Component:
                 rx.foreach(
                     TrackerState.facebook_product_results,
                     lambda row: rx.table.row(
+                        rx.table.cell(
+                            product_thumbnail(
+                                row["image_url"],
+                                alt=row["title"],
+                                size="56px",
+                            )
+                        ),
                         rx.table.cell(row["title"]),
                         rx.table.cell(
                             rx.vstack(
-                                rx.text(row["price"], color=BRICK, weight="medium"),
+                                rx.text(row["price"], color=styles.FACEBOOK, weight="medium"),
                                 rx.text(row["source_price_note"], size="1", color=MUTED),
                                 rx.text(row["usd_price"], size="2", color=GREEN, weight="medium"),
                                 rx.text(row["usd_provenance"], size="1", color=MUTED),
@@ -2647,9 +2540,8 @@ def _ml_form() -> rx.Component:
             spacing="5",
             width="100%",
         ),
-        background_color=CARD,
-        border=f"1px solid {RULE}",
-        padding="22px",
+        **styles.SURFACE_STYLE,
+        padding="16px 18px",
         width="100%",
     )
 
@@ -2817,14 +2709,14 @@ def _ml_table() -> rx.Component:
                     TrackerState.ml_visible_rows,
                     lambda row: rx.table.row(
                         rx.table.cell(
-                            rx.cond(
-                                row["thumbnail_url"] != "",
-                                rx.image(src=row["thumbnail_url"], width="48px", height="48px"),
-                                rx.text("—", color=MUTED),
+                            product_thumbnail(
+                                row["thumbnail_url"],
+                                alt=row["title"],
+                                size="56px",
                             )
                         ),
                         rx.table.cell(row["title"], color=styles.TEXT_PRIMARY),
-                        rx.table.cell(row["price"], color=styles.TEXT_PRIMARY),
+                        rx.table.cell(row["price"], color=styles.MERCADOLIBRE, weight="bold"),
                         rx.table.cell(row["currency"], color=styles.TEXT_PRIMARY),
                         rx.table.cell(row["condition"], color=styles.TEXT_PRIMARY),
                         rx.table.cell(row["seller_name"], color=styles.TEXT_PRIMARY),
@@ -3057,63 +2949,101 @@ def _market_tab(label: str, value: str, on_click: object) -> rx.Component:
     )
 
 
-def dashboard() -> rx.Component:
-    return rx.box(
-        rx.box(
-            _header(),
-            rx.hstack(
-                _market_tab(
-                    "Facebook H0019",
-                    "facebook",
-                    TrackerState.show_facebook_tab,
-                ),
-                _market_tab(
-                    "Facebook Marketplace Venezuela",
-                    "facebook_products",
-                    TrackerState.show_facebook_products_tab,
-                ),
-                _market_tab("Alibaba", "alibaba", TrackerState.show_alibaba_tab),
-                _market_tab(
-                    "Mercado Libre Venezuela",
-                    "mercadolibre",
-                    TrackerState.show_mercadolibre_tab,
-                ),
-                spacing="6",
+def _executive_dashboard() -> rx.Component:
+    return rx.vstack(
+        page_header(),
+        marketplace_summary_row(),
+        comparison_matrix(),
+        compact_alibaba_search(),
+        spacing="4",
+        width="100%",
+        align_items="stretch",
+    )
+
+
+def _workspace() -> rx.Component:
+    return rx.cond(
+        TrackerState.workspace_view == WORKSPACE_DASHBOARD,
+        _executive_dashboard(),
+        rx.cond(
+            TrackerState.workspace_view == WORKSPACE_SEARCHES,
+            rx.vstack(
+                page_header(),
+                _alibaba_form(),
+                _alibaba_body(),
+                spacing="4",
                 width="100%",
-                border_bottom=f"1px solid {RULE}",
-                margin_bottom="18px",
             ),
             rx.cond(
-                TrackerState.marketplace_tab == "facebook",
-                rx.vstack(_form(), _body(), spacing="0", width="100%"),
+                TrackerState.workspace_view == WORKSPACE_PRODUCTS,
+                rx.vstack(
+                    page_header(),
+                    _facebook_products_form(),
+                    _facebook_products_body(),
+                    spacing="4",
+                    width="100%",
+                ),
                 rx.cond(
-                    TrackerState.marketplace_tab == "facebook_products",
+                    TrackerState.workspace_view == WORKSPACE_COMPARISONS,
                     rx.vstack(
-                        _facebook_products_form(),
-                        _facebook_products_body(),
-                        spacing="0",
+                        page_header(),
+                        comparison_matrix(),
+                        _ml_form(),
+                        _ml_body(),
+                        spacing="4",
                         width="100%",
                     ),
                     rx.cond(
-                        TrackerState.marketplace_tab == "alibaba",
-                        rx.vstack(
-                            _alibaba_form(),
-                            _alibaba_body(),
-                            _alibaba_tracking(),
-                            _alibaba_negotiation(),
-                            _alibaba_landed_cost(),
-                            spacing="0",
-                            width="100%",
+                        TrackerState.workspace_view == WORKSPACE_TRACKING,
+                        rx.vstack(page_header(), _alibaba_tracking(), spacing="4", width="100%"),
+                        rx.cond(
+                            TrackerState.workspace_view == WORKSPACE_IMPORT,
+                            rx.vstack(
+                                page_header(),
+                                _alibaba_negotiation(),
+                                _alibaba_landed_cost(),
+                                spacing="4",
+                                width="100%",
+                            ),
+                            rx.cond(
+                                TrackerState.workspace_view == WORKSPACE_TOOLS,
+                                rx.vstack(
+                                    page_header(),
+                                    rx.text(
+                                        "Facebook H0019",
+                                        size="4",
+                                        weight="medium",
+                                        color=styles.TEXT_PRIMARY,
+                                    ),
+                                    rx.text(
+                                        "Herramienta especializada de pastillas H0019",
+                                        size="2",
+                                        color=styles.TEXT_MUTED,
+                                    ),
+                                    _form(),
+                                    _body(),
+                                    spacing="4",
+                                    width="100%",
+                                ),
+                                rx.cond(
+                                    TrackerState.workspace_view == WORKSPACE_SETTINGS,
+                                    rx.vstack(
+                                        page_header(),
+                                        _alibaba_ranking_weights(),
+                                        _alibaba_controls(),
+                                        spacing="4",
+                                        width="100%",
+                                    ),
+                                    _executive_dashboard(),
+                                ),
+                            ),
                         ),
-                        rx.vstack(_ml_form(), _ml_body(), spacing="0", width="100%"),
                     ),
                 ),
             ),
-            max_width="1080px",
-            width="100%",
-            margin="0 auto",
-            padding="36px 20px 64px",
         ),
-        background_color=PAPER,
-        min_height="100vh",
     )
+
+
+def dashboard() -> rx.Component:
+    return app_shell(_workspace())

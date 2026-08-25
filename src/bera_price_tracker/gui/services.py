@@ -15,6 +15,7 @@ from bera_price_tracker.composition import ApplicationComposition, build_composi
 from bera_price_tracker.config import Settings, resolve_process_settings
 from bera_price_tracker.domain.models import MarketplaceSource, SearchQuery
 from bera_price_tracker.gui.display import as_decimal, format_price, is_valid_price
+from bera_price_tracker.gui.images import safe_public_image_url
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +319,7 @@ def alibaba_product_to_row(product: object) -> dict[str, Any]:
         "supplier_name": str(getattr(product, "supplier_name", "") or ""),
         "supplier_country": str(getattr(product, "supplier_country", "") or ""),
         "url": str(getattr(product, "product_url", "") or ""),
-        "image_url": str(getattr(product, "image_url", "") or ""),
+        "image_url": safe_public_image_url(getattr(product, "image_url", "") or ""),
         "product_id": str(getattr(product, "product_id", "") or ""),
         "price_min": "" if min_price is None else str(min_price),
         "price_max": "" if max_price is None else str(max_price),
@@ -1412,6 +1413,7 @@ def facebook_product_listing_to_row(listing: object, relevance: object) -> dict[
         "relevance_label": relevance_label(score),
         "relevance_tokens": f"{matched}/{total} términos de la búsqueda",
         "is_outlier": False,
+        "image_url": safe_public_image_url(getattr(listing, "image_url", "") or ""),
     }
 
 
@@ -1586,7 +1588,7 @@ def mercadolibre_listing_to_row(scored: Any) -> dict[str, Any]:
         "condition": _blank_or_dash(listing.condition),
         "seller_name": _blank_or_dash(listing.seller_name),
         "shipping": shipping,
-        "thumbnail_url": listing.thumbnail_url or "",
+        "thumbnail_url": safe_public_image_url(listing.thumbnail_url or ""),
         "country": _blank_or_dash(listing.country),
         "representative": "" if price is None else f"{price:f}",
         "relevance_value": scored.relevance_score,
