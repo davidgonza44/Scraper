@@ -3,7 +3,7 @@
   "description": "The existing Facebook application execute remains one Actor run. A later logical strategy may compose multiple bounded calls without redefining this low-level contract.",
   "provider": "facebook",
   "implementation_stage": "A",
-  "runtime_check": null,
+  "runtime_check": "facebook_one_execute",
   "given": {
     "low_level_operation": "SearchFacebookMarketplaceProducts.execute",
     "logical_search": "one generic Búsquedas operation per selected provider and generation"

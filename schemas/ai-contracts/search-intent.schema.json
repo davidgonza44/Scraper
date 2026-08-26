@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "search-intent.schema.json",
   "title": "SearchIntent",
-  "description": "Canonical fixture JSON for SearchIntent, not dataclasses.asdict() output. Python selected_providers is a tuple[str, ...]; JSON uses a string array. Python requested_geographic_scopes is tuple[tuple[str, str | None], ...]; JSON uses {provider, scope} objects. display_limit is a finite visible maximum, not an acquisition count. SearchIntent only requires a positive integer; AcquisitionBudgetPolicy is the runtime authority for supported membership (default 1 / 3 / 5 / 10, MAX_DISPLAY_LIMIT >= 10). Cross-field invariants that JSON Schema does not enforce: requested geographic scopes must belong only to selected_providers, and at most one requested geographic scope exists per provider. Those are validated by SearchIntent and by contract tests.",
+  "description": "Canonical fixture JSON for SearchIntent, not dataclasses.asdict() output. Python selected_providers is a tuple[str, ...]; JSON uses a string array. Python requested_geographic_scopes is tuple[tuple[str, str | None], ...]; JSON uses {provider, scope} objects. display_limit is the separate visible maximum. The acquisition-volume concepts are acquisition_budget and acquisition_requested. SearchIntent only requires a positive integer display_limit; AcquisitionBudgetPolicy is the runtime authority for supported membership (default 1 / 3 / 5 / 10, MAX_DISPLAY_LIMIT >= 10). Provider identifiers are non-blank strings; the structural PR A contract is provider-neutral and execution/policy decide support. Current BERA marketplace vocabulary is constrained on GoldenSearchCase, not here. Cross-field invariants that JSON Schema does not enforce: requested geographic scopes must belong only to selected_providers, and at most one requested geographic scope exists per provider. Those are validated by SearchIntent and by contract tests.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,13 +15,13 @@
     "original_user_query": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^.*\\S.*$",
-      "description": "User query in fixture JSON. Must contain a non-whitespace character. The application normalizes internal whitespace; a whitespace-only string is not a valid SearchIntent."
+      "pattern": "\\S",
+      "description": "User query in fixture JSON. Must contain at least one non-whitespace character. The application normalizes internal whitespace, including newlines; a whitespace-only string is not a valid SearchIntent."
     },
     "display_limit": {
       "type": "integer",
       "minimum": 1,
-      "description": "Maximum usable listings displayed per selected provider. Not acquisition_budget and not acquisition_requested. Canonical fixtures use policy-supported values 1 / 3 / 5 / 10."
+      "description": "Separate visible maximum of usable listings displayed per selected provider. Not acquisition work. Canonical fixtures use policy-supported values 1 / 3 / 5 / 10."
     },
     "selected_providers": {
       "type": "array",
@@ -29,7 +29,8 @@
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "enum": ["alibaba", "facebook", "mercadolibre"]
+        "minLength": 1,
+        "pattern": "\\S"
       }
     },
     "generation": {
@@ -48,7 +49,8 @@
         "properties": {
           "provider": {
             "type": "string",
-            "enum": ["alibaba", "facebook", "mercadolibre"]
+            "minLength": 1,
+            "pattern": "\\S"
           },
           "scope": {
             "type": ["string", "null"],

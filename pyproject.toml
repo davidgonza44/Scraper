@@ -30,6 +30,7 @@ dev = [
     "ruff>=0.9",
     "mutmut>=3.7,<4",
     "jsonschema>=4.23,<5",
+    "referencing>=0.35,<1",
 ]
 
 [project.scripts]

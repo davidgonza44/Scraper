@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "provider-run-result.schema.json",
   "title": "ProviderRunResult",
-  "description": "One logical provider search outcome. The result owns generation; callers must not relabel a stale result by supplying a separate generation. Cross-field invariants requiring application validation: metrics.usable == len(ordered_usable_pool); metrics.displayed == len(canonical_session_results); canonical_session_results == ordered_usable_pool[:metrics.displayed]; SUCCESS requires usable >= 1; EMPTY requires usable == 0; ERROR requires empty pools, usable == 0, displayed == 0, and no fabricated geographic coverage.",
+  "description": "Canonical fixture JSON for one logical provider search outcome, not dataclasses.asdict() output. provider is a non-blank string; the structural PR A contract is provider-neutral. The result owns generation; callers must not relabel a stale result by supplying a separate generation. Cross-field invariants requiring application validation: metrics.usable == len(ordered_usable_pool); metrics.displayed == len(canonical_session_results); canonical_session_results == ordered_usable_pool[:metrics.displayed]; SUCCESS requires usable >= 1; EMPTY requires usable == 0; ERROR requires empty pools, usable == 0, displayed == 0, and no fabricated geographic coverage.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,7 +16,9 @@
   "properties": {
     "provider": {
       "type": "string",
-      "enum": ["alibaba", "facebook", "mercadolibre"]
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "Non-blank provider identifier. Not a BERA marketplace enum."
     },
     "generation": {
       "type": "integer",
