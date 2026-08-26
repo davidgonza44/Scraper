@@ -4,11 +4,25 @@
 
 ### Requirement: Session completion copy reflects provider statuses
 
-The session SHALL render `Búsqueda completada` only when at least one provider succeeds, none errors, and all coverage is `COMPLETE`; `Búsqueda completada · Sin resultados` only when all are empty with `COMPLETE` coverage; `Búsqueda completada con incidencias` when any coverage is `PARTIAL` or an error coexists with another terminal outcome; and `Búsqueda con error` when all selected providers error.
+The session SHALL render `Búsqueda completada` when at least one provider succeeds, none errors, and all **applicable** coverage is `COMPLETE`; `Búsqueda completada · Sin resultados` when all providers are empty and all applicable coverage is `COMPLETE`; incidence copy when applicable coverage is `PARTIAL` or errors coexist with another terminal outcome; and error copy when all providers error. Coverage that is not applicable to a provider/search is ignored and MUST NOT become `PARTIAL`.
 
 #### Scenario: All providers empty
 - **GIVEN** every selected provider status is `EMPTY`
 - **AND** every applicable coverage status is `COMPLETE`
+- **WHEN** session copy renders
+- **THEN** it is `Búsqueda completada · Sin resultados`
+
+#### Scenario: Alibaba-only success ignores non-applicable coverage
+- **GIVEN** Alibaba is the only selected provider
+- **AND** Alibaba status is `SUCCESS`
+- **AND** geographic coverage is not applicable
+- **WHEN** session copy renders
+- **THEN** it is `Búsqueda completada`
+
+#### Scenario: Alibaba-only empty ignores non-applicable coverage
+- **GIVEN** Alibaba is the only selected provider
+- **AND** Alibaba status is `EMPTY`
+- **AND** geographic coverage is not applicable
 - **WHEN** session copy renders
 - **THEN** it is `Búsqueda completada · Sin resultados`
 

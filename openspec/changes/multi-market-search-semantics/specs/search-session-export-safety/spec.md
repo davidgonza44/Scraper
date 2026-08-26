@@ -22,7 +22,18 @@ CSV SHALL contain one row per real listing in each provider's frozen canonical s
 
 ### Requirement: Exported provenance and metrics are truthful
 
-CSV MAY include `original_user_query`, `provider_query`, `provider_query_origin`, `requested_geographic_scope`, `effective_geographic_scope`, `coverage_status`, `generation`, `display_requested`, `acquisition_budget`, actual `acquisition_requested`, and other provider metrics. It SHALL include only genuinely known values and SHALL NOT invent zero.
+Every CSV row SHALL contain columns `original_user_query`, `provider_query`, `provider_query_origin`, `requested_geographic_scope`, `effective_geographic_scope`, `coverage_status`, `generation`, `display_requested`, `acquisition_budget`, and `acquisition_requested`. The defined provider metric columns `provider_fetched`, `provider_mapped`, `provider_rejected`, `provider_usable`, and `provider_displayed` SHALL also remain present. Unknown/unobservable values are blank/unavailable, never numeric zero. Geographic columns remain present for non-applicable providers and use the documented blank/not-applicable representation.
+
+#### Scenario: Alibaba-only export retains required provenance columns
+- **GIVEN** an Alibaba-only settled session where geographic coverage is not applicable
+- **WHEN** CSV is exported
+- **THEN** every required query, scope, generation, limit, budget, requested-work, and provider-metric column is present
+- **AND** geographic values use the documented blank/not-applicable representation
+
+#### Scenario: Provider query origin and generation cannot be omitted
+- **WHEN** any canonical session result is exported
+- **THEN** `provider_query_origin` and `generation` columns are present
+- **AND** their known values are retained
 
 #### Scenario: Export retains requested and effective scope
 - **GIVEN** requested scope is Toda Venezuela

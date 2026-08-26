@@ -9,7 +9,7 @@
 - [ ] A.3 Define the pure pipeline: acquired → mapped/policy-evaluated → ordered usable pool → frozen canonical session prefix → presentation projections. Verify `usable` counts the pool while `displayed` and canonical membership count only its `display_limit` prefix.
 - [ ] A.4 Evolve/consolidate existing `ProviderAcquisitionMetrics` and provider-specific acquisition metrics into one `ProviderRunMetrics` contract with aggregate internal-acquisition requested/fetched values, documented deduplication boundaries, and optional unknown-safe mapped/rejected values; do not maintain parallel sources of truth or impose arithmetic identities.
 - [ ] A.5 Define one logical generic operation that composes existing bounded single-acquisition provider operations; preserve Facebook's existing one-execute/one-Actor-run low-level contract and unrelated workflow semantics.
-- [ ] A.6 Derive provider status independently from optional coverage. Test partial incidence, complete empty copy, and `ERROR` with unavailable coverage/effective scope.
+- [ ] A.6 Derive provider status independently from coverage; ignore non-applicable coverage, test Alibaba-only normal completion, partial incidence, complete empty copy, and `ERROR` with unavailable coverage.
 - [ ] A.7 Keep deterministic rules in small pure application/GUI modules where practical; use `TrackerState` for orchestration, generation checks, and serialization rather than as a new domain/service layer.
 - [ ] A.8 Add provider-neutral fake multi-acquisition tests for COMPLETE/PARTIAL coverage, partial success/empty incidence copy, exhausted budgets, actual requested work, safe/identity-less deduplication, and acquisition 10 / usable 8 / display 3.
 
@@ -44,7 +44,7 @@
 ## Implementation PR E — Currency, export, lifecycle, and browser compatibility gate
 
 - [ ] E.1 Remove Alibaba unknown-currency-as-USD fallbacks, retain visible published prices when allowed, and explain unconfirmed currency/unavailable USD statistics. Regression-test no implicit FX and `$` not proving USD.
-- [ ] E.2 Export exactly one row per frozen result with requested/effective scope fields, optional coverage, `acquisition_budget`, and actual `acquisition_requested`; keep export disabled until all providers are terminal.
+- [ ] E.2 Require stable query/scope/generation/display/budget/requested-work and provider metric columns on every CSV row; preserve blank/not-applicable values and wait for all providers to become terminal.
 - [ ] E.3 Preserve and regression-test CSV formula-injection protection and UTF-8 BOM.
 - [ ] E.4 Ensure **Nueva búsqueda** clears transient state; reject stale routing, translation, and provider continuations before they mutate provenance, launch downstream work, or change export membership.
 - [ ] E.5 At 1440x900 with network-blocked offline fixtures, verify: all providers one result; uneven 3/2/1; display 10 with unrelated-looking candidates retained positionally; Mercado Libre EMPTY with details; unknown Alibaba currency; all EMPTY; partial error; **Nueva búsqueda**; CSV; marketplace-specific ratings/images; and non-identity disclosure.

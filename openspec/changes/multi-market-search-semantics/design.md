@@ -89,7 +89,8 @@ A selected provider that cannot start because required configuration or credenti
 
 - `COMPLETE`: every acquisition required by the documented requested-scope strategy completed, or one genuine provider search truthfully covered the requested scope.
 - `PARTIAL`: a proper subset completed and produced a truthful partial/broad effective scope, whether or not usable results were found.
-- unavailable/not established: no truthful coverage exists, such as `ERROR` before any successful acquisition or missing configuration. Effective scope is unavailable and diagnostics render **No disponible**.
+- not applicable: geographic coverage does not apply to that provider/search (for example Alibaba generic search). Effective scope and coverage status may use the documented not-applicable/blank representation and are ignored by session coverage aggregation.
+- unavailable/not established: geographic coverage applies but no truthful coverage exists, such as `ERROR` before any successful acquisition. Effective scope is unavailable and diagnostics render **No disponible**.
 
 Example: requested `Toda Venezuela`, effective `Cobertura amplia/parcial de Venezuela`, coverage `PARTIAL`. Useful canonical results are retained. Partial `SUCCESS` or `EMPTY` outcomes create an incidence. If configuration is missing or failure occurs before truthful coverage, status is `ERROR`, effective scope and coverage are unavailable, and normal error copy wins; unavailable coverage never creates or suppresses an incidence by itself.
 
@@ -133,13 +134,13 @@ Session labels derive from provider statuses and coverage outcomes:
 
 | Condition | Copy |
 |---|---|
-| At least one `SUCCESS`, no `ERROR`, all coverage `COMPLETE` | `Búsqueda completada` |
-| All selected providers `EMPTY`, all coverage `COMPLETE` | `Búsqueda completada · Sin resultados` |
+| At least one `SUCCESS`, no `ERROR`, all applicable coverage `COMPLETE` | `Búsqueda completada` |
+| All selected providers `EMPTY`, all applicable coverage `COMPLETE` | `Búsqueda completada · Sin resultados` |
 | Any selected provider coverage `PARTIAL` | `Búsqueda completada con incidencias` |
 | At least one `ERROR` and at least one other `SUCCESS` or `EMPTY` | `Búsqueda completada con incidencias` |
 | All selected providers `ERROR` | `Búsqueda con error` |
 
-Unavailable coverage on an `ERROR` provider does not alter these error rules. `SUCCESS` and `EMPTY` require established `COMPLETE` or `PARTIAL` coverage when geographic scope applies.
+Not-applicable coverage is excluded from coverage conditions, so Alibaba-only `SUCCESS` and `EMPTY` sessions complete normally. Unavailable coverage on an `ERROR` provider does not alter error rules. Where geographic scope applies, `SUCCESS` and `EMPTY` require established `COMPLETE` or `PARTIAL` coverage.
 
 The comparison table shows concise disclosure such as **Comparables de la misma búsqueda · identidad exacta no confirmada**. Implementation may refine wording but may not suggest exact matching.
 
@@ -191,7 +192,7 @@ An Alibaba listing with an unconfirmed source currency may remain visible, but U
 
 ## Export, ratings, images, and session lifecycle
 
-CSV emits one row per real canonical session result in the frozen displayed prefix. It may include requested/effective scope, coverage status, query, generation, acquisition budget, actual requested count, and other truthful metrics. Export remains disabled until every selected provider reaches terminal `SUCCESS`, `EMPTY`, or `ERROR`; completed partial/error sessions may then export. Existing formula-injection protection and UTF-8 BOM remain mandatory.
+CSV emits one row per real canonical session result in the frozen displayed prefix. Its schema always contains the required query/session/scope columns and defined provider metric columns, even when a value is blank, unavailable, or not applicable. Export remains disabled until every selected provider is terminal; partial/error sessions may then export. Existing formula-injection protection and UTF-8 BOM remain mandatory.
 
 Alibaba uses its own image and genuine `reviewScore`; Facebook uses its own primary scraped photo and no fabricated rating; Mercado Libre uses its own thumbnail and genuine `ratingAverage`. Relevance, opportunity, `supplierServiceScore`, and seller reputation tiers never become product stars.
 
