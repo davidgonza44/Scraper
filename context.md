@@ -6,10 +6,10 @@ Do not copy detailed OpenSpec requirements here.
 ## Precedence
 
 1. OpenSpec
-2. repository contracts
+2. repository implementation/contracts
 3. architecture docs
-4. AI contract schemas/fixtures
-5. `context.md`
+4. AI schemas/golden fixtures
+5. `context.md` / implementation convenience
 
 ## What BERA is
 
@@ -33,8 +33,10 @@ frontend to React, Next.js, or Vite.
 
 ## Active staged OpenSpec change
 
-`openspec/changes/multi-market-search-semantics/` is implemented through
-staged PRs A–E. Do not implement later stages early.
+The change `openspec/changes/multi-market-search-semantics/` is planned as
+staged implementation PRs A–E. Only Implementation PR A is currently
+implemented on main. PRs B–E remain unimplemented. Do not implement later
+stages early.
 
 ## Current implementation stage
 
