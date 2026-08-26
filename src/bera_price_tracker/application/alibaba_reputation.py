@@ -74,8 +74,8 @@ def parse_rating_0_5(raw: object) -> Decimal | None:
         return None
     if isinstance(raw, Decimal):
         value = raw
-    elif isinstance(raw, int):
-        value = Decimal(raw)
+    elif isinstance(raw, (int, float)):
+        value = Decimal(str(raw))
     elif isinstance(raw, str):
         text = raw.strip().replace(",", ".")
         if not text:
@@ -122,8 +122,8 @@ def parse_review_count(raw: object) -> Decimal | None:
         return None
     if isinstance(raw, Decimal):
         value = raw
-    elif isinstance(raw, int):
-        value = Decimal(raw)
+    elif isinstance(raw, (int, float)):
+        value = Decimal(str(raw))
     elif isinstance(raw, str):
         text = raw.strip().replace(",", "")
         if not text:

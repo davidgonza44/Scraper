@@ -130,6 +130,7 @@ class Listing:
     usd_exchange_rate_at: datetime | None = None
     price_min: Decimal | None = None
     price_max: Decimal | None = None
+    image_url: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, MarketplaceSource):
@@ -190,6 +191,7 @@ class Listing:
             raise ValueError("price_min must not exceed price_max")
         object.__setattr__(self, "price_min", price_min)
         object.__setattr__(self, "price_max", price_max)
+        object.__setattr__(self, "image_url", _optional_text(self.image_url, "image_url"))
 
     @property
     def key(self) -> ListingKey:

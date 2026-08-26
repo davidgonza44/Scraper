@@ -281,6 +281,11 @@ def _fixture_controls() -> rx.Component:
             on_click=TrackerState.apply_partial_search_fixture,
             **styles.SECONDARY_BUTTON_STYLE,
         ),
+        rx.button(
+            "Vista de prueba · diagnósticos",
+            on_click=TrackerState.apply_zero_result_diagnostic_fixture,
+            **styles.SECONDARY_BUTTON_STYLE,
+        ),
         spacing="2",
         flex_wrap="wrap",
     )

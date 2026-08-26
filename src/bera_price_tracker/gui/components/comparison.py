@@ -85,16 +85,23 @@ def marketplace_cell(
     rating_available: object = False,
     rating_filled: object = 0,
     rating_label: object = "Sin calificación",
+    rating_caption: object = "",
+    trust_line: object = "",
 ) -> rx.Component:
     return rx.cond(
         has_listing,
         rx.vstack(
-            product_thumbnail(image_url, alt=title, size="64px"),
+            product_thumbnail(image_url, alt=title, size="80px"),
             price_metric(price, color=price_color),
             rx.cond(line_one != "", rx.text(line_one, size="1", color=styles.TEXT_MUTED)),
             rx.cond(line_two != "", rx.text(line_two, size="1", color=styles.TEXT_SECONDARY)),
             rx.cond(line_three != "", rx.text(line_three, size="1", color=styles.TEXT_SECONDARY)),
+            rx.cond(
+                rating_caption != "",
+                rx.text(rating_caption, size="1", color=styles.TEXT_MUTED),
+            ),
             rating_stars(rating_available, rating_filled, rating_label),
+            rx.cond(trust_line != "", rx.text(trust_line, size="1", color=styles.TEXT_SECONDARY)),
             rx.cond(
                 match_label != "",
                 status_badge(match_label, tone="neutral"),
@@ -167,6 +174,8 @@ def comparison_row(row: rx.Var) -> rx.Component:
             rating_available=row["alibaba_rating_available"],
             rating_filled=row["alibaba_rating_filled"],
             rating_label=row["alibaba_rating_label"],
+            rating_caption=row["alibaba_rating_caption"],
+            trust_line=row["alibaba_trust_line"],
         ),
         marketplace_cell(
             has_listing=row["facebook_has_listing"],
@@ -201,6 +210,8 @@ def comparison_row(row: rx.Var) -> rx.Component:
             rating_available=row["ml_rating_available"],
             rating_filled=row["ml_rating_filled"],
             rating_label=row["ml_rating_label"],
+            rating_caption=row["ml_rating_caption"],
+            trust_line=row["ml_trust_line"],
         ),
         analysis_cell(row),
         display="grid",

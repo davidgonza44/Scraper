@@ -482,8 +482,8 @@ def test_summary_and_table_headers_use_brand_ids() -> None:
         PLATFORM_FACEBOOK,
         PLATFORM_ML,
     ]
-    assert cards[0]["rating_available"] is True
-    assert cards[0]["rating_filled"] == 5
+    assert cards[0]["rating_available"] is False
+    assert cards[0]["rating_filled"] == 0
     assert cards[1]["rating_available"] is False
     assert cards[1]["rating_label"] == "Sin calificación"
     comparison_source = (

@@ -47,6 +47,11 @@ class MercadoLibreListing:
     condition: str | None = None
     thumbnail_url: str | None = None
     seller_name: str | None = None
+    seller_reputation: str | None = None
+    seller_status: str | None = None
+    official_store: bool | None = None
+    rating_average: str | None = None
+    review_count: str | None = None
     free_shipping: bool | None = None
     country: str | None = None
     site_id: str | None = None
@@ -66,6 +71,18 @@ class MercadoLibreListing:
             self, "thumbnail_url", _optional_text(self.thumbnail_url, "thumbnail_url")
         )
         object.__setattr__(self, "seller_name", _optional_text(self.seller_name, "seller_name"))
+        object.__setattr__(
+            self, "seller_reputation", _optional_text(self.seller_reputation, "seller_reputation")
+        )
+        object.__setattr__(
+            self, "seller_status", _optional_text(self.seller_status, "seller_status")
+        )
+        if self.official_store is not None and not isinstance(self.official_store, bool):
+            raise TypeError("official_store must be a bool")
+        object.__setattr__(
+            self, "rating_average", _optional_text(self.rating_average, "rating_average")
+        )
+        object.__setattr__(self, "review_count", _optional_text(self.review_count, "review_count"))
         if self.free_shipping is not None and not isinstance(self.free_shipping, bool):
             raise TypeError("free_shipping must be a bool")
         object.__setattr__(self, "country", _optional_text(self.country, "country"))

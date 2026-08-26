@@ -71,6 +71,7 @@ def _record(
     formatted_price: str | None = "$10",
     location: str | None = "Caracas",
     url: str | None = "https://www.facebook.com/marketplace/item/1",
+    image_url: str | None = None,
 ) -> ApifyFacebookListing:
     return ApifyFacebookListing(
         product_id=product_id,
@@ -80,6 +81,7 @@ def _record(
         formatted_price=formatted_price,
         location=location,
         url=url,
+        image_url=image_url,
     )
 
 
@@ -188,6 +190,7 @@ def test_generic_search_filters_before_returning_results() -> None:
     assert result.listings[0].title == "Free Shipping Wireless Mouse"
     assert result.metrics == FacebookProductSearchMetrics(
         fetched=4,
+        requested=5,
         usable=1,
         free_price=1,
         invalid_price=2,
@@ -217,7 +220,7 @@ def test_real_smoke_vef_fixture_preserves_source_and_adds_policy_usd() -> None:
     )
 
     assert fake.calls == [("wireless mouse", "caracas", 5)]
-    assert result.metrics == FacebookProductSearchMetrics(fetched=5, usable=5)
+    assert result.metrics == FacebookProductSearchMetrics(fetched=5, requested=5, usable=5)
     assert len(result.listings) == 5
     for listing, (amount, formatted) in zip(result.listings, observed, strict=True):
         assert listing.price == amount
@@ -598,3 +601,22 @@ def test_h0019_provider_contract_remains_specialized() -> None:
 
     assert "classifier" in FacebookMarketplaceProvider.__dataclass_fields__
     assert "classifier" not in FacebookMarketplaceProductSearch.__dataclass_fields__
+
+
+def test_priced_listing_propagates_primary_photo() -> None:
+    result, _fake = _search(_record(image_url="https://scontent.xx.fbcdn.net/v/t1/bate.jpg"))
+    assert result.metrics.usable == 1
+    assert result.listings[0].image_url == "https://scontent.xx.fbcdn.net/v/t1/bate.jpg"
+
+
+def test_free_listing_with_image_is_still_rejected() -> None:
+    result, _fake = _search(
+        _record(
+            price=Decimal("0"),
+            formatted_price="Free",
+            image_url="https://scontent.xx.fbcdn.net/v/t1/free.jpg",
+        )
+    )
+    assert result.listings == ()
+    assert result.metrics.free_price == 1
+    assert result.metrics.usable == 0

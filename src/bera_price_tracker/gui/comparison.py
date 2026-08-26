@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from bera_price_tracker.gui.images import safe_public_image_url
-from bera_price_tracker.gui.search_session import opportunity_gauge, seller_rating
+from bera_price_tracker.gui.search_session import opportunity_gauge, product_rating_display
 
 UI_SUCCESS = "SUCCESS"
 
@@ -123,6 +123,8 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
             "alibaba_rating_available": False,
             "alibaba_rating_filled": 0,
             "alibaba_rating_label": "Sin calificación",
+            "alibaba_rating_caption": "",
+            "alibaba_trust_line": "",
             "opportunity_available": False,
             "opportunity_score": "0",
             "opportunity_percent": "0%",
@@ -130,8 +132,18 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
         }
     relevance_value = _int_attr(row, "relevance_value")
     moq = _attr(row, "moq")
-    rating = seller_rating(_attr(row, "review_score"))
+    rating = product_rating_display(
+        _attr(row, "review_score"), review_count=_attr(row, "review_count")
+    )
     gauge = opportunity_gauge(_int_attr(row, "score_value"), _attr(row, "score"))
+    trust_parts: list[str] = []
+    supplier = _attr(row, "supplier_name")
+    service = _attr(row, "supplier_service_score")
+    if service:
+        trust_parts.append(f"Servicio: {service}")
+    years = _attr(row, "gold_supplier_years")
+    if years:
+        trust_parts.append(f"Gold Supplier: {years} años")
     return {
         "alibaba_has_listing": True,
         "alibaba_image_url": safe_public_image_url(_attr(row, "image_url")),
@@ -139,7 +151,7 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
         "alibaba_price": _attr(row, "price"),
         "alibaba_range": _published_range(row),
         "alibaba_moq": f"MOQ: {moq}" if moq else "",
-        "alibaba_supplier": _attr(row, "supplier_name"),
+        "alibaba_supplier": supplier,
         "alibaba_relevance": _attr(row, "relevance"),
         "alibaba_match_label": match_label(relevance_value, has_listing=True),
         "alibaba_url": _attr(row, "url"),
@@ -148,6 +160,8 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
         "alibaba_rating_available": bool(rating["available"]),
         "alibaba_rating_filled": int(rating["filled"]),
         "alibaba_rating_label": str(rating["label"]),
+        "alibaba_rating_caption": str(rating.get("caption") or ""),
+        "alibaba_trust_line": " · ".join(trust_parts),
         "opportunity_available": bool(gauge["available"]),
         "opportunity_score": str(gauge["score"]),
         "opportunity_percent": str(gauge["percent"]),
@@ -214,10 +228,22 @@ def _ml_cell(row: Any) -> dict[str, object]:
             "ml_rating_available": False,
             "ml_rating_filled": 0,
             "ml_rating_label": "Sin calificación",
+            "ml_rating_caption": "",
+            "ml_trust_line": "",
         }
     relevance_value = _int_attr(row, "relevance_value")
     condition = _attr(row, "condition")
     seller = _attr(row, "seller_name")
+    rating = product_rating_display(
+        _attr(row, "rating_average"), review_count=_attr(row, "review_count")
+    )
+    trust_parts: list[str] = []
+    reputation = _attr(row, "seller_reputation")
+    if reputation:
+        trust_parts.append(f"Reputación: {reputation}")
+    status = _attr(row, "seller_status")
+    if status:
+        trust_parts.append(status)
     return {
         "ml_has_listing": True,
         "ml_image_url": safe_public_image_url(_attr(row, "thumbnail_url")),
@@ -228,9 +254,11 @@ def _ml_cell(row: Any) -> dict[str, object]:
         "ml_relevance": _attr(row, "relevance"),
         "ml_match_label": match_label(relevance_value, has_listing=True),
         "ml_url": _attr(row, "permalink"),
-        "ml_rating_available": False,
-        "ml_rating_filled": 0,
-        "ml_rating_label": "Sin calificación",
+        "ml_rating_available": bool(rating["available"]),
+        "ml_rating_filled": int(rating["filled"]),
+        "ml_rating_label": str(rating["label"]),
+        "ml_rating_caption": str(rating.get("caption") or ""),
+        "ml_trust_line": " · ".join(trust_parts),
     }
 
 
@@ -411,6 +439,10 @@ def _fill_product_row(
         row["product_image_url"] = safe_public_image_url(_attr(alibaba_row, "image_url"))
         if not product_subtitle:
             row["product_subtitle"] = _attr(alibaba_row, "supplier_name") or row["product_subtitle"]
+    elif facebook_row is not None:
+        row["product_image_url"] = safe_public_image_url(_attr(facebook_row, "image_url"))
+    elif ml_row is not None:
+        row["product_image_url"] = safe_public_image_url(_attr(ml_row, "thumbnail_url"))
     row.update(_alibaba_cell(alibaba_row))
     row.update(_facebook_cell(facebook_row))
     row.update(_ml_cell(ml_row))
