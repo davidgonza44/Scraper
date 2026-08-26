@@ -4,14 +4,14 @@
 
 ## Implementation PR A — Search intent, snapshot, acquisition, metrics, and status
 
-- [ ] A.1 Introduce provider-neutral contracts with `requested_geographic_scope`, optional `effective_geographic_scope`, optional `coverage_status`, provider status, generation, and bounded `display_limit`.
-- [ ] A.2 Implement `AcquisitionBudgetPolicy` returning finite `acquisition_budget`; separately measure actual `acquisition_requested`. Keep these as the only acquisition-volume concepts.
-- [ ] A.3 Define the pure pipeline: acquired → mapped/policy-evaluated → ordered usable pool → frozen canonical session prefix → presentation projections. Verify `usable` counts the pool while `displayed` and canonical membership count only its `display_limit` prefix.
-- [ ] A.4 Evolve/consolidate existing `ProviderAcquisitionMetrics` and provider-specific acquisition metrics into one `ProviderRunMetrics` contract with aggregate internal-acquisition requested/fetched values, documented deduplication boundaries, and optional unknown-safe mapped/rejected values; do not maintain parallel sources of truth or impose arithmetic identities.
-- [ ] A.5 Define one logical generic operation that composes existing bounded single-acquisition provider operations; preserve Facebook's existing one-execute/one-Actor-run low-level contract and unrelated workflow semantics.
-- [ ] A.6 Derive provider status independently from coverage; ignore non-applicable coverage, test Alibaba-only normal completion, partial incidence, complete empty copy, and `ERROR` with unavailable coverage.
-- [ ] A.7 Keep deterministic rules in small pure application/GUI modules where practical; use `TrackerState` for orchestration, generation checks, and serialization rather than as a new domain/service layer.
-- [ ] A.8 Add provider-neutral fake multi-acquisition tests for COMPLETE/PARTIAL coverage, partial success/empty incidence copy, exhausted budgets, actual requested work, safe/identity-less deduplication, and acquisition 10 / usable 8 / display 3.
+- [x] A.1 Introduce provider-neutral contracts with `requested_geographic_scope`, optional `effective_geographic_scope`, optional `coverage_status`, provider status, generation, and bounded `display_limit`.
+- [x] A.2 Implement `AcquisitionBudgetPolicy` returning finite `acquisition_budget`; separately measure actual `acquisition_requested`. Keep these as the only acquisition-volume concepts.
+- [x] A.3 Define the pure pipeline: acquired → mapped/policy-evaluated → ordered usable pool → frozen canonical session prefix → presentation projections. Verify `usable` counts the pool while `displayed` and canonical membership count only its `display_limit` prefix.
+- [x] A.4 Evolve/consolidate existing `ProviderAcquisitionMetrics` and provider-specific acquisition metrics into one `ProviderRunMetrics` contract with aggregate internal-acquisition requested/fetched values, documented deduplication boundaries, and optional unknown-safe mapped/rejected values; do not maintain parallel sources of truth or impose arithmetic identities.
+- [x] A.5 Define one logical generic operation that composes existing bounded single-acquisition provider operations; preserve Facebook's existing one-execute/one-Actor-run low-level contract and unrelated workflow semantics.
+- [x] A.6 Derive provider status independently from coverage; ignore non-applicable coverage, test Alibaba-only normal completion, partial incidence, complete empty copy, and `ERROR` with unavailable coverage.
+- [x] A.7 Keep deterministic rules in small pure application/GUI modules where practical; use `TrackerState` for orchestration, generation checks, and serialization rather than as a new domain/service layer.
+- [x] A.8 Add provider-neutral fake multi-acquisition tests for COMPLETE/PARTIAL coverage, partial success/empty incidence copy, exhausted budgets, actual requested work, safe/identity-less deduplication, and acquisition 10 / usable 8 / display 3.
 
 ## Implementation PR B — Positional comparison and exact-identity isolation
 
