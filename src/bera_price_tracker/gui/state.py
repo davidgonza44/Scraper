@@ -2555,6 +2555,10 @@ class TrackerState(rx.State):
             landed = self._landed_for_ml_product_currency(
                 selected_id, self.ml_alibaba_context.get("currency")
             )
+        elif self.search_session_active:
+            # Generic Búsquedas results have no truthful Alibaba product
+            # context. Leftover landed cost belongs to a different product.
+            landed = None
         else:
             landed = self.alibaba_landed_result if self.alibaba_landed_has_result else None
         row = services.compare_mercadolibre_with_landed_cost(

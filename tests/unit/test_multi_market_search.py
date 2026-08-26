@@ -430,6 +430,150 @@ def test_late_standalone_ml_error_does_not_repopulate_cleared_session(
     assert state.ml_has_comparison is False
 
 
+def test_generic_session_ml_compare_does_not_use_old_landed_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    state = TrackerState()
+    _bind_comparable_context(state, "P-OLD", "Old mouse")
+    state.alibaba_landed_has_result = True
+    state.alibaba_landed_result = {
+        "landed_cost_per_unit_raw": "6.43",
+        "landed_cost_per_unit": "$6.43",
+        "currency": "USD",
+    }
+    state.alibaba_landed_product_id = "P-OLD"
+
+    plan = plan_search(mode=MODE_MULTI, query="headphones", limit=3)
+    state.search_session_active = True
+    state.search_session_query = plan.query
+    state._prepare_scoped_search(plan)
+    state._finalize_mercadolibre_search(
+        search_product_id="",
+        query="headphones",
+        rows=[
+            MercadoLibreResultRow(
+                title="session headphones",
+                price_raw="9.00",
+                currency="USD",
+                relevance_value=80,
+            )
+        ],
+        ui_status=UI_SUCCESS,
+    )
+
+    assert state.ml_has_alibaba_context is False
+    assert state.ml_association_product_id == ""
+    assert state.alibaba_landed_has_result is True
+    assert state.alibaba_landed_product_id == "P-OLD"
+    assert state.alibaba_landed_result["landed_cost_per_unit_raw"] == "6.43"
+
+    state.compare_ml_with_landed_cost()
+    assert state.ml_comparison.get("landed", "") == ""
+    assert state.ml_comparison.get("comparable") == "0"
+    assert state.ml_comparison.get("conservative_profit", "") == ""
+    assert state.ml_comparison.get("typical_profit", "") == ""
+    assert state.ml_comparison.get("high_profit", "") == ""
+    assert "6.43" not in str(state.ml_comparison)
+    assert state.ml_show_alibaba_association is False
+    association = state.ml_alibaba_association
+    assert association["visible"] == "0"
+    assert association["has_profitability"] == "0"
+    assert association["landed"] == ""
+    assert state.alibaba_landed_has_result is True
+    assert state.alibaba_landed_product_id == "P-OLD"
+
+
+def test_run_scoped_search_generic_session_does_not_inherit_old_alibaba_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    state = TrackerState()
+    _bind_comparable_context(state, "P-OLD", "Old mouse")
+    state.alibaba_landed_has_result = True
+    state.alibaba_landed_result = {
+        "landed_cost_per_unit_raw": "6.43",
+        "landed_cost_per_unit": "$6.43",
+        "currency": "USD",
+    }
+    state.alibaba_landed_product_id = "P-OLD"
+    calls = {"alibaba": 0, "facebook": 0, "ml": 0}
+
+    def run_alibaba(*_args: object, **_kwargs: object) -> dict[str, object]:
+        calls["alibaba"] += 1
+        return {
+            "results": [{"title": "session alibaba", "product_id": "P-NEW", "score_value": 80}],
+            "summary": {"resultados": "1"},
+            "stats_raw": {},
+            "ui_status": UI_SUCCESS,
+        }
+
+    def run_facebook(*_args: object, **_kwargs: object) -> dict[str, object]:
+        calls["facebook"] += 1
+        return {
+            "results": [{"title": "session facebook", "external_id": "fb-new"}],
+            "statistics": [],
+            "summary": {"usable": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    def run_ml(*_args: object, **_kwargs: object) -> dict[str, object]:
+        calls["ml"] += 1
+        return {
+            "results": [
+                {
+                    "title": "session ml",
+                    "external_id": "MLV-NEW",
+                    "price_raw": "9.00",
+                    "currency": "USD",
+                    "relevance_value": 80,
+                }
+            ],
+            "summary": {"comparables": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_alibaba_search", run_alibaba)
+    monkeypatch.setattr(services, "run_facebook_product_search", run_facebook)
+    monkeypatch.setattr(services, "run_mercadolibre_search", run_ml)
+
+    state.search_mode = MODE_MULTI
+    state.search_query = "headphones"
+    state.search_limit = 3
+    asyncio.run(cast(Any, TrackerState.run_scoped_search).fn(state))
+
+    assert calls == {"alibaba": 1, "facebook": 1, "ml": 1}
+    assert state.facebook_product_association_product_id == ""
+    assert state.ml_association_product_id == ""
+    assert "P-OLD" not in str(state.facebook_product_provenance)
+    assert state.facebook_product_provenance.get("external_id", "") != "P-OLD"
+    assert state.ml_show_alibaba_association is False
+    assert state.facebook_product_show_provenance is False
+    assert state.ml_has_alibaba_context is False
+    assert all(row.product_id != "P-OLD" for row in state.alibaba_results)
+    matching_old = [row for row in state.comparison_rows if row.product_id == "P-OLD"]
+    assert matching_old == []
+    for row in state.comparison_rows:
+        assert row.product_id != "P-OLD"
+        if row.facebook_has_listing or row.ml_has_listing:
+            assert row.product_id != "P-OLD"
+
+    assert state.alibaba_landed_has_result is True
+    assert state.alibaba_landed_product_id == "P-OLD"
+    state.compare_ml_with_landed_cost()
+    assert "6.43" not in str(state.ml_comparison)
+    assert state.ml_comparison.get("landed", "") == ""
+    assert state.ml_comparison.get("comparable") == "0"
+    association = state.ml_alibaba_association
+    assert association["visible"] == "0"
+    assert association["has_profitability"] == "0"
+    assert association["landed"] == ""
+
+
 def test_unsupported_plan_limit_never_reaches_runners() -> None:
     log = ProviderCallLog()
     with pytest.raises(ValueError, match="1, 3 o 5"):
