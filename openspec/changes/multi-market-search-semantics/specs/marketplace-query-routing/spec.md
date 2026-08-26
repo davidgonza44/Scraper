@@ -4,7 +4,7 @@
 
 ### Requirement: Original and provider-specific queries retain provenance
 
-Each search session SHALL retain `original_user_query` and `generation`. Each selected provider SHALL retain `provider_query`, `provider_query_origin`, and the provider-local market/geographic scope required to reproduce that search; allowed origins are `USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, and `FALLBACK`. Venezuela providers SHALL default to **Toda Venezuela** and MAY support narrower city/market scopes. This provenance SHALL answer what the user searched, what each provider received, what scope it used, and which generation produced the result without creating a generic geospatial subsystem. Diagnostics and exports MAY expose these fields safely; the primary UI SHALL emphasize the user's entered query.
+Each search session SHALL retain `original_user_query` and `generation`. Each selected provider SHALL retain `provider_query`, `provider_query_origin`, and the truthful provider-local market/geographic scope required to reproduce that search; allowed origins are `USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, and `FALLBACK`. **Toda Venezuela** may be declared only for a genuine nationwide search or the complete finite configured nationwide partition set; otherwise provenance uses accurate partial/broad or narrower scope. Diagnostics and exports MAY expose these fields safely.
 
 #### Scenario: Provider queries preserve original intent
 - **GIVEN** the user searches `baseball glove`
@@ -12,8 +12,8 @@ Each search session SHALL retain `original_user_query` and `generation`. Each se
 - **THEN** the session retains `baseball glove` as the original query
 - **AND** every selected provider records its actual query and origin
 
-#### Scenario: Default provider-local scope is reproducible
-- **GIVEN** Facebook Venezuela runs with its default Toda Venezuela scope
+#### Scenario: Provider-local scope is reproducible
+- **GIVEN** Facebook completes truthful nationwide coverage for a requested Toda Venezuela scope
 - **WHEN** its result is committed
 - **THEN** the snapshot retains the original query, Facebook provider query and origin, Toda Venezuela scope, and generation
 
@@ -66,12 +66,31 @@ The system SHALL reuse existing BERA translation/query-generation infrastructure
 
 ### Requirement: Venezuela geographic scope is configurable and deterministic
 
-Venezuela generic search SHALL default to **Toda Venezuela** and MAY offer supported narrower city/market scopes such as Caracas. For Facebook, trustworthy acquisition provenance from the selected provider search/partition MAY establish Venezuela or narrower scope without a listing-level location string, unless the documented existing provider contract requires that field. Explicit foreign evidence SHALL always reject the candidate. Narrower scopes SHALL use trustworthy partition provenance or normalized explicit reviewed identifiers/aliases and SHALL NOT use arbitrary fuzzy matches or ambiguous standalone terms. Mercado Libre's existing MLV/Venezuela evidence contract SHALL NOT be weakened.
+Venezuela generic search MAY offer **Toda Venezuela**, supported narrower city/market scopes such as Caracas, and accurately named bounded broad/partial coverage. For Facebook, **Toda Venezuela** requires one genuine nationwide provider search when supported or completion of the entire finite configured nationwide partition set. Trustworthy acquisition provenance MAY establish scope without a listing-level location unless the existing contract requires it. Explicit foreign evidence always rejects. Narrower scopes use trustworthy partition provenance or reviewed identifiers/aliases without fuzzy/ambiguous matching. Mercado Libre's existing MLV/Venezuela contract is unchanged.
 
-#### Scenario: Toda Venezuela is the default
-- **GIVEN** the user does not choose a narrower supported geographic scope
+#### Scenario: Toda Venezuela is requested
+- **GIVEN** the UI requests Toda Venezuela rather than a narrower supported scope
 - **WHEN** a Venezuela provider query is created
-- **THEN** its scope is Toda Venezuela
+- **THEN** the strategy uses genuine nationwide acquisition or the complete finite configured nationwide partition set
+- **AND** final scope copy depends on the coverage actually completed
+
+#### Scenario: Genuine nationwide acquisition supports Toda Venezuela
+- **GIVEN** the provider supports one genuine nationwide search
+- **WHEN** that search completes within its finite budget
+- **THEN** the declared scope may be Toda Venezuela
+- **AND** provider acquisition/result order is preserved after integrity validation and deduplication
+
+#### Scenario: Complete partition set supports Toda Venezuela
+- **GIVEN** Facebook nationwide coverage requires a finite configured city/market partition set
+- **WHEN** every required partition completes
+- **THEN** the declared scope may be Toda Venezuela
+- **AND** results are deduplicated and placed in deterministic BERA aggregate order
+
+#### Scenario: Partial partition coverage is not Toda Venezuela
+- **GIVEN** only a bounded subset of Venezuela partitions is searched
+- **WHEN** enough results are obtained or the finite budget ends
+- **THEN** the scope is labelled as accurate broad/partial Venezuela coverage
+- **AND** it is not labelled Toda Venezuela
 
 #### Scenario: Truthful Venezuela evidence passes country scope
 - **GIVEN** Toda Venezuela is selected

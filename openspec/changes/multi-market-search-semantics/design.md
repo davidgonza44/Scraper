@@ -18,7 +18,7 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 ## Architecture and data flow
 
 1. A new search generation creates `SearchIntent(original_user_query, display_limit, selected_providers, generation)`; `display_limit` is a supported positive value no greater than centralized finite `MAX_DISPLAY_LIMIT`, and the supported set explicitly includes 10.
-2. Query routing produces one `ProviderQuery` per selected provider with `provider_query`, `provider_query_origin` (`USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, or `FALLBACK`), and the provider-local market/geographic scope needed to reproduce the request. The default Venezuela scope is **Toda Venezuela**; supported narrower scopes may include Caracas.
+2. Query routing produces one `ProviderQuery` per selected provider with `provider_query`, `provider_query_origin` (`USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, or `FALLBACK`), and the truthful provider-local market/geographic scope needed to reproduce the request. **Toda Venezuela** is declared only after a genuine nationwide search or complete finite nationwide partition coverage; narrower or partial scopes are named accurately.
 3. A centralized acquisition policy computes `acquisition_limit(provider, display_limit, geographic_scope)` and caps/bounds the aggregate provider strategy.
 4. The orchestrator starts one logical search operation for each selected provider. The provider strategy may perform multiple bounded internal acquisitions to cover scope, partitions, or pagination, but the orchestrator does not start a replacement logical operation when mapping or policy rejects candidates.
 5. Each adapter returns or is wrapped into a `ProviderRunResult` containing the deterministically deduplicated and ordered usable pool, consolidated metrics, safe rejection counters, query/market/generation provenance, and an execution outcome.
@@ -42,19 +42,19 @@ The UI label is **Máximo por plataforma**. A display maximum is not a guarantee
 
 The policy is a centralized deterministic function of provider, `display_limit`, geographic scope, and provider hard caps. A central policy module defines a finite `MAX_DISPLAY_LIMIT >= 10`, the finite maximum internal acquisitions per provider/logical search, and the finite aggregate acquisition budget per provider. All limits are testable and SHALL NOT be scattered across adapters/views. It SHALL request at least the display limit when supported and MAY add a bounded rejection buffer. Provider hard limits may mean fewer results are possible; Alibaba's maximum 500 is never a routine pool.
 
-A provider strategy MAY split the aggregate acquisition budget across multiple bounded internal acquisitions—for example pagination or partitions needed for **Toda Venezuela**. It SHOULD terminate early once at least `display_limit` unique valid candidates exist, unless a documented provider ordering algorithm requires completing a bounded set to determine their canonical order. When the maximum acquisitions or aggregate budget is exhausted, it returns fewer results rather than continuing. Exact finite values remain an implementation-evidence decision recorded here before implementation.
+A provider strategy MAY split the aggregate acquisition budget across multiple bounded internal acquisitions. It SHOULD terminate early once at least `display_limit` unique valid candidates exist only if doing so preserves canonical ordering and the truth of the declared geographic scope. Explicit **Toda Venezuela** cannot terminate after only early city partitions: it requires either one genuine nationwide search or completion of the entire finite configured nationwide partition set. If a finite budget cannot truthfully cover that scope, results use accurate partial/broad Venezuela copy. Exact finite values remain an implementation-evidence decision recorded here before implementation.
 
 ### Canonical aggregate provider ordering
 
-When a provider offers one genuine nationwide search, BERA SHOULD preserve that provider-native ordering after provider-integrity validation and identity deduplication. When nationwide coverage requires pages, partitions, or multiple internal acquisitions, BERA SHALL deduplicate candidates by stable provider identity and combine them using a documented deterministic provider-specific aggregation algorithm before constructing the ordered usable pool. A duplicate observed in multiple partitions appears once.
+For any genuine single provider acquisition, generic **Búsquedas** MUST preserve provider acquisition/result order after required provider-integrity validation and stable-identity deduplication. Alibaba opportunity, ranking, relevance, seller reputation, price sorting, and every other BERA ranking/presentation control are annotations or specialized-view projections and MUST NOT reorder this frozen generic canonical order. When coverage requires multiple acquisitions with no truthful provider-native global order, BERA SHALL deduplicate by stable provider identity and use a documented deterministic provider-specific aggregation algorithm. A duplicate observed in multiple partitions appears once.
 
 Partition concatenation order SHALL NOT be presented as a truthful global provider ranking unless the provider contract explicitly establishes that ordering. For partitioned searches, the resulting order is named the **deterministic BERA aggregate provider ordering**, not a single provider-native result order. Each provider implementation MUST document its identity key, deduplication precedence, aggregation/order keys, tie breakers, and interaction with early termination. Positional comparison freezes this resulting order when the run commits to the session snapshot.
 
 ### Generic-search candidate validity
 
-Generic **Búsquedas** performs only deterministic provider-integrity and safety validation. Legitimate rejection includes malformed/unmappable records; missing required identity, title, or URL; invalid/missing price where the provider's generic contract requires price; explicit foreign evidence for Venezuela scope; duplicate provider identity; and other already-justified deterministic provider-policy violations.
+Generic **Búsquedas** performs only deterministic provider-integrity and safety validation. A missing field rejects only when required by that provider's existing generic-search mapper/integrity contract. Alibaba may map a title-bearing product without `product_id`, `product_url`, image, rating, reputation, or other optional metadata. Mercado Libre retains required external ID/title and MLV/Venezuela provenance, but permalink is not universally mandatory when other valid MLV evidence exists. Facebook retains its existing priced-only and required-integrity fields. Other legitimate rejection includes malformed/unmappable records, explicit foreign evidence, stable provider-identity duplicates, and existing justified provider-policy violations.
 
-Cross-market similarity, category/title similarity, price attractiveness, seller reputation, opportunity score, or a relevance threshold MUST NOT reject a candidate. Relevance or opportunity MAY affect a provider's documented canonical ordering where already supported, but never validity. Missing optional image, rating, seller reputation, or other non-required display metadata MUST NOT by itself reject an otherwise valid listing.
+Cross-market similarity, category/title similarity, price attractiveness, seller reputation, opportunity score, or a relevance threshold MUST NOT reject a candidate. These values may be annotations or specialized-view projections, but MUST NOT reorder a genuine single-acquisition generic result order after it freezes. A multi-acquisition aggregation algorithm may use only its documented deterministic merge keys, never a subsequent UI ranking control. Missing optional metadata MUST NOT reject an otherwise valid listing.
 
 ### Consolidated ProviderRunMetrics
 
@@ -100,15 +100,15 @@ Generic search uses a dedicated type with:
 - optional `mercadolibre_candidate`.
 - `identity_confirmed = false`, invariant and not user-settable.
 
-Row count is the maximum displayed count among selected providers. Candidate N comes from position N in that provider's frozen canonical order: provider-native nationwide order when genuinely available, otherwise its documented deterministic BERA aggregate provider ordering. Missing cells remain empty and are rendered as `—`; no listing is repeated to fill a row. There is no global cross-market rank score.
+Row count is the maximum displayed count among selected providers. Candidate N comes from position N in that provider's frozen canonical order: acquisition/result order for any genuine single acquisition, otherwise its documented deterministic BERA aggregate provider ordering. Missing cells remain empty and are rendered as `—`; no listing is repeated to fill a row. There is no global cross-market rank score.
 
 Generic comparison is purely positional. No cross-market similarity, relatedness, equivalence, compatibility, title, image, or category test may filter, discard, promote, demote, or replace a valid candidate in any provider list. A future identical-product or high-confidence matching flow must be separate and cannot mutate generic-search provider results.
 
 ### ExactProductContext
 
-Exact-product association remains a separate model and entry path. It requires both product IDs to be non-empty and exactly equal. Search position, title, fuzzy title, relevance, image similarity, or rank can never create or authorize it.
+Exact-product association remains a separate model and entry path. The existing workflow's explicit association IDs/context product IDs must be non-empty and exactly agree according to its current contract. Native Alibaba, Facebook, and Mercado Libre listing IDs occupy independent provider namespaces; string equality between native IDs never establishes cross-market identity. Search position, native listing-ID equality, title, fuzzy title, relevance, image similarity, or rank can never create or authorize an association.
 
-Positional alignment MUST NOT authorize landed/import cost, profitability ceiling, negotiation context, tracking identity, supplier refresh, price history, exact Alibaba association, or product-specific persistence. No positional candidate is attached to those workflows absent the existing exact-ID invariant.
+Positional alignment MUST NOT authorize landed/import cost, profitability ceiling, negotiation context, tracking identity, supplier refresh, price history, exact Alibaba association, or product-specific persistence. No positional candidate is attached to those workflows absent the existing explicit association/context-ID invariant.
 
 ## Canonical session and presentation
 
@@ -163,9 +163,9 @@ The snapshot always retains `original_user_query`, each `provider_query`, `provi
 
 ## Configurable Venezuela geographic scope
 
-Generic Venezuela search defaults to **Toda Venezuela**. `ProviderQuery` retains the selected provider-local geographic scope, and the UI may offer supported narrower scopes such as a city/market (including Caracas). This is a small provider-scope contract, not a generic geospatial subsystem.
+Generic Venezuela search may expose **Toda Venezuela** only with truthful nationwide coverage. `ProviderQuery` retains the actual provider-local geographic scope, and the UI may offer supported narrower scopes such as a city/market (including Caracas) or accurately named partial/broad Venezuela coverage. This is a small provider-scope contract, not a generic geospatial subsystem.
 
-For Facebook **Toda Venezuela**, trustworthy acquisition provenance from a provider search/partition may establish scope even when a listing-level location string is absent, unless the existing provider contract genuinely requires that field. Explicit foreign evidence always rejects the candidate. For narrower scopes, trustworthy partition provenance or explicit normalized reviewed identifiers/aliases may establish scope according to the documented provider contract; arbitrary fuzzy matching and ambiguous standalone tokens remain prohibited. Mercado Libre's existing MLV/Venezuela evidence contract is unchanged.
+For Facebook, prefer one genuine nationwide provider search when supported. Otherwise **Toda Venezuela** requires the complete finite configured nationwide partition set, followed by stable deduplication and deterministic aggregate ordering. Collecting only enough early partitions to fill `display_limit` MUST NOT be labelled **Toda Venezuela**; bounded subsets use accurate partial/broad Venezuela copy. Trustworthy acquisition provenance may establish candidate scope without listing-level location unless the existing contract requires it; explicit foreign evidence always rejects. Mercado Libre's MLV/Venezuela evidence contract is unchanged.
 
 ## Geographic and monetary provenance
 
@@ -181,6 +181,8 @@ CSV emits one row per real canonical session result in the frozen displayed pref
 
 Alibaba uses its own image and genuine `reviewScore`; Facebook uses its own primary scraped photo and no fabricated rating; Mercado Libre uses its own thumbnail and genuine `ratingAverage`. Relevance, opportunity, `supplierServiceScore`, and seller reputation tiers never become product stars.
 
+Each positional cell preserves and renders truthfully when available: marketplace-owned image, title, published price/currency, listing URL, supplier/seller name, genuine product rating/review count, genuine seller/supplier reputation or service metadata, and existing provider-specific useful fields such as Alibaba MOQ or Mercado Libre condition. Unavailable fields render blank/`—`. Facebook seller/rating data is never fabricated, and absence of optional cell fields does not invalidate the candidate.
+
 **Nueva búsqueda** increments/changes generation and clears results, diagnostics, provider-query provenance, and exportable session data while retaining persistent tracking. A result tagged with an older generation cannot repopulate the new snapshot.
 
 Single-market generic **Búsquedas** follows the identical pipeline, configurable limit, geographic provenance, and one-logical-operation rule for its selected provider.
@@ -195,7 +197,7 @@ New deterministic acquisition policy, metric derivation, query provenance/routin
 - Provider caps or bounded scope strategies may return fewer usable results than requested; the UI maximum remains a ceiling rather than a guarantee.
 - Optional metrics improve truthfulness but require UI/export consumers to handle unknown values explicitly.
 - Positional comparison improves generic search readability but requires strong type and copy boundaries to prevent accidental exact-association reuse.
-- Default **Toda Venezuela** can require more internal acquisitions and cost than a city scope; bounded strategies and truthful country evidence control that risk.
+- Requested **Toda Venezuela** can require more internal acquisitions and cost than a city scope; finite complete-partition strategies and truthful scope copy control that risk.
 
 ## Open Questions
 

@@ -15,7 +15,7 @@ This change defines one coherent, bounded, observable search-session contract fo
 - Build generic comparison rows purely by provider result position using a dedicated `SearchPositionComparisonRow`; never cross-filter, discard, reorder, or match one provider's valid results based on similarity to another provider. Provider-integrity/safety validation alone determines validity. Positional alignment cannot establish identity, equivalence, compatibility, or provenance authorization.
 - Freeze the displayed prefix of the ordered usable pool as canonical session results; derive comparison, summary cards, total results, exports, and session labels from that prefix rather than the extra acquisition buffer or presentation projections.
 - Route provider-specific queries while retaining canonical `original_user_query`, `provider_query`, `provider_query_origin`, provider-local market/geographic scope, and generation, reusing existing query-generation/translation infrastructure with an offline-safe fallback.
-- Define configurable provider geographic scope with **Toda Venezuela** as the default and supported narrower city/market scopes (including Caracas), while retaining truthful Venezuela evidence and deterministic scope evaluation.
+- Define configurable provider geographic scope. **Toda Venezuela** is used only for a genuine nationwide search or the complete finite configured nationwide partition set; bounded subsets use accurate partial/broad-scope copy. Supported narrower city/market scopes include Caracas.
 - Preserve fail-closed currency behavior and add truthful UX for visible Alibaba prices whose source currency is unknown.
 - Preserve marketplace-specific ordering, images, ratings, CSV security, stale-response protection, and exact-product workflows.
 
@@ -36,9 +36,9 @@ This change defines one coherent, bounded, observable search-session contract fo
 ## Impact
 
 - **Domain/application models:** add explicit search intent (including provider-local market scope), provider execution result/metrics, provider query provenance, frozen session snapshot, and positional comparison types. Evolve existing acquisition metrics rather than creating a competing source of truth.
-- **Generic search orchestration:** start one logical provider search operation per selected provider and generation. Its centralized provider strategy may perform bounded internal Actor/API acquisitions for pagination, partitioning, or geographic coverage; deterministically deduplicate and aggregate them, stop early when enough unique valid candidates exist, and return fewer results at the finite budget rather than continue indefinitely.
+- **Generic search orchestration:** start one logical provider search operation per selected provider and generation. Its centralized strategy may perform bounded internal acquisitions, deterministically deduplicate/aggregate them, and stop early only when doing so preserves truthful declared geographic coverage. Explicit **Toda Venezuela** requires a genuine nationwide search or the complete finite configured nationwide partition set.
 - **Provider adapters/mappers:** expose safe aggregate counts and truthful rejection reasons without exposing or retaining raw actor payloads.
-- **Generic Reflex UI:** rename the limit control, render positional comparison rows and disclosure, use canonical counts/statuses, add compact diagnostics, and explain unknown Alibaba currency.
+- **Generic Reflex UI:** rename the limit control, render truthful provider-owned listing fields in positional cells, use canonical counts/statuses, add compact diagnostics, and explain unknown Alibaba currency. Missing optional fields render blank/`—` and never trigger fabrication.
 - **Export:** retain one row per real canonical session result (not each extra usable buffer candidate), with truthful optional query, market-scope, generation, and metric provenance columns.
 - **Tests:** add offline unit/integration fixtures and 1440x900 Playwright coverage; no live provider or translation calls.
 - **Cost:** acquisition policy scales deterministically from the configured display maximum and may use bounded provider-internal steps, so larger limits/scopes can increase records, underlying calls, and processing. `MAX_DISPLAY_LIMIT`, per-provider maximum internal acquisitions, and aggregate acquisition budgets are finite, centralized, testable, and prohibited from using Alibaba 500 as a routine pool.
@@ -72,5 +72,5 @@ Implementation MUST remain compatible with current marketplace provider adapters
 Fundamental semantics are settled. Only these implementation-evidence details may be resolved before their respective implementation task begins:
 
 1. The exact initial supported display options, finite `MAX_DISPLAY_LIMIT` value (at least 10), scaling function, provider caps, maximum internal acquisitions, and aggregate budgets needed without excessive cost.
-2. Which narrower geographic scopes and reviewed aliases the current provider adapters/fixtures can support in addition to default **Toda Venezuela**.
+2. The complete finite Facebook partition set that can truthfully support **Toda Venezuela**, and which narrower or explicitly partial/broad scopes and reviewed aliases current adapters/fixtures support.
 3. Final compact Spanish diagnostic wording, provided it preserves every specified distinction and does not imply unavailable metrics are zero.

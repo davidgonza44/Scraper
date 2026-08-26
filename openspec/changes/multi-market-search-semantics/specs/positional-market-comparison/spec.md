@@ -4,7 +4,7 @@
 
 ### Requirement: Generic comparison aligns canonical candidates by position
 
-Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position in each provider's canonical order: genuine provider-native nationwide order when available, otherwise the documented deterministic BERA aggregate provider ordering after stable-identity deduplication. The ordering and canonical session prefix SHALL freeze when `ProviderRunResult` is committed to the current-generation session snapshot. Row count SHALL equal the maximum displayed candidate count among selected providers. Missing cells SHALL remain empty; candidates SHALL NOT be duplicated to fill cells.
+Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position. A genuine single acquisition MUST preserve provider acquisition/result order after required integrity validation and stable deduplication. Only multiple acquisitions lacking truthful global native order use documented deterministic BERA aggregate ordering. Alibaba opportunity/ranking/relevance, seller reputation, price sorting, and other BERA controls MUST NOT reorder frozen generic results. The order freezes when `ProviderRunResult` commits. Missing cells remain empty and candidates are never duplicated.
 
 Generic comparison SHALL be purely positional. Cross-market similarity, relatedness, equivalence, compatibility, category, title, or image comparisons SHALL NOT filter, discard, promote, demote, reorder, or replace valid candidates in any provider list. Any future identical-product/high-confidence matching flow SHALL be separate from generic search and SHALL NOT mutate its provider lists.
 
@@ -51,7 +51,7 @@ Generic search SHALL use `SearchPositionComparisonRow` with rank, optional marke
 
 ### Requirement: Position never authorizes provenance-dependent workflows
 
-The system SHALL NOT use position, title, fuzzy title, relevance, image similarity, or search rank to authorize landed/import cost, profitability ceiling, negotiation context, tracking identity, supplier refresh, price history, exact Alibaba association, or product-specific persistence. Exact-product context SHALL continue to require both product IDs to be non-empty and exactly equal.
+The system SHALL NOT use position, title, fuzzy title, relevance, image similarity, search rank, or native provider-listing ID equality to authorize landed/import cost, profitability ceiling, negotiation context, tracking identity, supplier refresh, price history, exact association, or product-specific persistence. Existing explicit association IDs/context product IDs SHALL be non-empty and exactly agree under the existing exact-product contract. Native marketplace IDs are independent namespaces and equality between them establishes nothing.
 
 #### Scenario: Landed cost stays with exact product A
 - **GIVEN** an exact Alibaba product A has landed-cost context
@@ -59,10 +59,15 @@ The system SHALL NOT use position, title, fuzzy title, relevance, image similari
 - **WHEN** generic comparison renders or persists session state
 - **THEN** landed-cost context is not attached to either positional candidate
 
-#### Scenario: Empty or unequal IDs cannot establish identity
-- **GIVEN** two positional candidates have empty or unequal product IDs
+#### Scenario: Association context IDs must explicitly agree
+- **GIVEN** the exact-product workflow's association/context IDs are empty or do not agree
 - **WHEN** exact context eligibility is evaluated
 - **THEN** exact context is denied regardless of title, image, relevance, or rank similarity
+
+#### Scenario: Equal native listing ID strings do not establish identity
+- **GIVEN** listings from two marketplaces coincidentally have the same native ID string
+- **WHEN** generic positional comparison is built
+- **THEN** no exact-product association or context is created
 
 ### Requirement: Summary counts use canonical current-session results
 
@@ -82,7 +87,7 @@ Generic summary cards SHALL derive counts from the frozen canonical session resu
 
 ### Requirement: Ordering and opportunity remain marketplace-specific
 
-Position N SHALL mean position N in that provider's documented canonical aggregate ordering: Alibaba's existing ranking/opportunity/relevance behavior, Facebook's existing deterministic result behavior, and Mercado Libre's existing deterministic result/relevance behavior, adapted deterministically when multiple internal acquisitions are required. Relevance may order but SHALL NOT act as a generic-search validity threshold. The system SHALL NOT synthesize a global cross-market rank or opportunity score. Alibaba opportunity MAY render only with the Alibaba candidate that owns it.
+Position N SHALL preserve provider acquisition/result order for a genuine single acquisition. Only multiple acquisitions without truthful native global order use documented deterministic BERA aggregate ordering. Alibaba opportunity, relevance, seller reputation, price sorting, and other BERA controls remain annotations or specialized projections and SHALL NOT reorder frozen generic results. No global cross-market rank/opportunity is synthesized; Alibaba opportunity MAY render only with its Alibaba candidate.
 
 #### Scenario: Row without Alibaba has no Alibaba opportunity
 - **GIVEN** a positional row contains only Facebook and Mercado Libre candidates
@@ -97,3 +102,19 @@ Alibaba SHALL use its own image and genuine `reviewScore` for product stars; Fac
 - **GIVEN** three providers have candidates at the same rank
 - **WHEN** the row renders
 - **THEN** each cell uses only that listing's marketplace-owned image and genuine rating fields
+
+### Requirement: Positional cells render truthful provider-owned fields
+
+Each candidate cell SHALL preserve and render when available its marketplace-owned image, title, published price/currency, listing URL, supplier/seller name, genuine product rating/review count, genuine seller/supplier reputation/service metadata, and existing useful provider-specific fields such as Alibaba MOQ or Mercado Libre condition. Unavailable optional fields SHALL render blank/`—`, SHALL NOT invalidate the candidate, and SHALL NOT be fabricated. Facebook seller or rating data SHALL never be invented.
+
+#### Scenario: Available listing fields render in their own cell
+- **GIVEN** a candidate provides title, price/currency, URL, seller, genuine rating/reviews, reputation metadata, image, and provider-specific fields
+- **WHEN** its positional cell renders
+- **THEN** those values are preserved truthfully in that marketplace cell
+
+#### Scenario: Optional cell fields are absent
+- **GIVEN** a valid candidate lacks image, rating, review count, seller/reputation metadata, or provider-specific optional fields
+- **WHEN** its positional cell renders
+- **THEN** unavailable fields are blank or `—`
+- **AND** the candidate remains present
+- **AND** no Facebook seller or rating value is fabricated

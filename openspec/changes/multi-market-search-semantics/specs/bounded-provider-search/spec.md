@@ -35,7 +35,7 @@ The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated c
 
 ### Requirement: Acquisition limits are explicit, centralized, and bounded
 
-The system SHALL represent aggregate `acquisition_limit` separately from `display_limit`. A centralized deterministic provider strategy SHALL define and test finite `MAX_DISPLAY_LIMIT`, per-provider maximum internal acquisitions per logical search, and aggregate acquisition budget; it SHALL support display 10 and request at least that many candidates when supported. The strategy MAY divide the budget into bounded internal acquisitions and SHOULD stop early after enough unique valid candidates exist, subject to completing any documented bounded ordering requirement. On budget exhaustion it SHALL return fewer results. Alibaba's maximum 500 SHALL NOT be used as a normal pool. Exact initial values SHALL be documented from implementation evidence before code implementation.
+The system SHALL represent aggregate `acquisition_limit` separately from `display_limit`. A centralized deterministic provider strategy SHALL define and test finite `MAX_DISPLAY_LIMIT`, per-provider maximum internal acquisitions per logical search, and aggregate acquisition budget; it SHALL support display 10. The strategy MAY divide the budget into bounded internal acquisitions and SHOULD stop early after enough unique valid candidates exist only when canonical ordering and declared geographic coverage remain truthful. Explicit **Toda Venezuela** requires a genuine nationwide search or the complete finite configured nationwide partition set. On budget exhaustion it SHALL return fewer results and SHALL use partial/broad-scope copy if nationwide coverage was incomplete. Alibaba's maximum 500 SHALL NOT be used as a normal pool.
 
 #### Scenario: Invalid first candidate within one pool
 - **GIVEN** `display_limit = 1`
@@ -54,6 +54,7 @@ The system SHALL represent aggregate `acquisition_limit` separately from `displa
 #### Scenario: Acquisition stops early when filled
 - **GIVEN** a provider strategy has collected enough unique valid candidates to fill `display_limit`
 - **AND** no additional bounded acquisition is required to determine canonical aggregate order
+- **AND** early termination does not overstate the declared geographic scope
 - **WHEN** the strategy evaluates its termination condition
 - **THEN** it performs no further internal acquisition
 
@@ -145,7 +146,20 @@ The system SHALL classify a completed logical provider operation with at least o
 
 ### Requirement: Provider-specific validation remains fail-closed
 
-Generic search SHALL reject candidates only for documented deterministic provider-integrity/safety policy, such as malformed/unmappable records; missing required identity/title/URL; invalid/missing price where required; explicit foreign evidence under Venezuela scope; duplicate provider identity; or other existing justified provider-policy violations. It SHALL NOT reject for cross-market similarity, category/title similarity, price attractiveness, seller reputation, opportunity, or relevance threshold. Optional missing image, rating, reputation, or other non-required display metadata SHALL NOT reject an otherwise valid candidate. Facebook remains priced-only; Mercado Libre retains its MLV/Venezuela contract. Monetary rules remain fail-closed.
+Generic search SHALL reject candidates only for documented deterministic provider-integrity/safety policy. A missing field rejects only when required by that provider's existing generic mapper/integrity contract. Alibaba may accept a title-bearing product without ID, URL, image, rating, or reputation; Mercado Libre retains required external ID/title and MLV evidence without making permalink universal; Facebook retains priced-only and its required integrity fields. Malformed/unmappable records, explicit foreign evidence, stable-identity duplicates, and existing justified violations remain rejectable. Cross-market similarity, category/title similarity, price attractiveness, reputation, opportunity, or relevance thresholds SHALL NOT reject. Optional metadata absence SHALL NOT reject.
+
+#### Scenario: Alibaba optional identity and URL are absent
+- **GIVEN** an Alibaba product has the title required by its existing mapper
+- **AND** `product_id`, `product_url`, image, rating, and reputation are absent
+- **WHEN** provider-integrity validity is evaluated
+- **THEN** those optional absences alone do not reject the product
+
+#### Scenario: Mercado Libre has valid provenance without permalink
+- **GIVEN** a Mercado Libre candidate has its required external ID and title
+- **AND** valid MLV/Venezuela evidence exists through the current contract
+- **AND** permalink is absent
+- **WHEN** provider-integrity validity is evaluated
+- **THEN** permalink absence alone does not reject the candidate
 
 #### Scenario: Facebook mixed acquisition pool
 - **GIVEN** the Facebook pool contains a Free/Gratis listing, an invalid-price listing, and a valid priced listing
