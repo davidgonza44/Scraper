@@ -1,0 +1,112 @@
+@startuml
+title BERA - Implemented PR A logical provider search (application core)
+
+actor User
+participant TrackerState
+participant "PR A caller\n(tests / future GUI wiring)" as Caller
+participant SearchIntent
+participant AcquisitionBudgetPolicy as Policy
+participant BoundedAcquisitionPlan as Plan
+participant "execute_bounded_provider_search()" as LogicalSearch
+participant "Existing Provider Operation" as ProviderOperation
+participant "Provider Adapter / Port" as Provider
+participant ProviderRunMetrics as Metrics
+participant ProviderRunResult as Result
+participant SearchSessionSnapshot as Snapshot
+
+note over User, TrackerState
+  Current GUI path (unchanged in PR A):
+  User -> TrackerState.search() still uses the existing
+  provider GUI flow. TrackerState does not yet create
+  SearchIntent, invoke AcquisitionBudgetPolicy, call
+  execute_bounded_provider_search(), or commit
+  SearchSessionSnapshot.
+end note
+
+User -> TrackerState : existing search (current runtime)
+TrackerState -> ProviderOperation : existing GUI provider calls
+ProviderOperation --> TrackerState : existing GUI results
+
+== Implemented PR A core (not yet called by TrackerState) ==
+
+Caller -> SearchIntent : create generation-bound intent
+note right of SearchIntent
+  Structural check only:
+  display_limit is a positive integer.
+  Supported membership is not decided here.
+end note
+Caller -> Policy : validate_intent / validate_display_limit
+Policy --> Caller : effective policy accepts or rejects the limit
+Caller -> Policy : create_plan / validate_plan
+Policy -> Plan : approved finite budget + max acquisitions
+Plan --> Caller : policy-backed plan
+Caller -> LogicalSearch : execute(intent, approved plan, policy)
+
+loop bounded internal acquisitions
+  LogicalSearch -> ProviderOperation : execute(step)
+  ProviderOperation -> Provider : existing bounded search(...)
+  Provider --> ProviderOperation : provider response
+  ProviderOperation --> LogicalSearch : safe AcquisitionBatch
+  LogicalSearch -> LogicalSearch : provider-integrity validation
+  LogicalSearch -> LogicalSearch : stable-ID dedup only
+  LogicalSearch -> LogicalSearch : aggregate candidates
+  alt enough usable candidates AND safe early termination
+    LogicalSearch -> LogicalSearch : stop when ordering/scope remain truthful
+  else approved budget remains
+    LogicalSearch -> LogicalSearch : continue next planned step
+  end
+end
+
+LogicalSearch -> Metrics : build truthful aggregate metrics
+note right of Metrics
+  acquisition_budget != acquisition_requested
+  Example: budget = 30
+  two executed steps of 5
+  requested = 10
+  If an executed step raises before
+  observable fetched/mapped/rejected,
+  those aggregates stay unknown.
+end note
+
+LogicalSearch -> Result : create generation-bound ProviderRunResult
+note right of Result
+  Result contains:
+  generation copied from SearchIntent
+  SUCCESS / EMPTY / ERROR members only
+  COMPLETE / PARTIAL / unavailable
+  ordered usable pool
+  frozen canonical prefix
+end note
+LogicalSearch -> LogicalSearch : canonical_session_results = ordered_usable_pool[0:display_limit]
+LogicalSearch --> Caller : ProviderRunResult
+Caller -> Snapshot : commit(result)
+alt result.generation == intent.generation
+  Snapshot -> Snapshot : immutable provider commit
+else stale result generation
+  Snapshot -> Snapshot : ignore/reject stale result
+end
+Snapshot --> Caller : current frozen session state
+
+note over TrackerState, Caller
+  TrackerState remains the existing GUI coordinator.
+  It does not implement budget policy, provider strategy,
+  deduplication, or provider-specific geographic logic.
+  Wiring it to this sequence is deferred.
+end note
+
+note over LogicalSearch, ProviderOperation
+  Multiple internal calls belong to ONE logical provider search.
+  They are not orchestrator retries.
+  Existing low-level provider semantics remain unchanged.
+  Facebook execute() -> one Actor run remains valid.
+end note
+
+note over Plan, Result
+  Geographic source of truth in PR A:
+  requested scope lives on SearchIntent / plan;
+  effective scope and coverage_status are derived
+  from the plan onto ProviderRunResult.
+  AcquisitionBatch does not carry effective scope.
+  Concrete Facebook Venezuela partitions are PR D.
+end note
+@enduml
