@@ -26,15 +26,17 @@ current runtime behavior. PRs B–E remain unimplemented.
 
 ## Source of truth
 
-Architecture precedence:
-
-1. OpenSpec specifications
+1. OpenSpec
 2. repository implementation/contracts
-3. these diagrams
+3. architecture docs
+4. AI schemas/golden fixtures
+5. `context.md` / implementation convenience
 
-The diagrams are explanatory and must be updated when architecture changes.
+The diagrams sit at architecture docs. They are explanatory and must be
+updated when architecture changes.
 
-The active OpenSpec change `multi-market-search-semantics` defines staged
-implementation PRs A through E. A diagram must never be used to justify
-behavior that contradicts OpenSpec or existing provider contracts, and
-must not document unimplemented wiring as current architecture.
+The active OpenSpec change `multi-market-search-semantics` is planned as
+staged implementation PRs A through E. Only Implementation PR A is currently
+implemented on main. PRs B–E remain unimplemented. A diagram must never be
+used to justify behavior that contradicts OpenSpec or existing provider
+contracts, and must not document unimplemented wiring as current architecture.

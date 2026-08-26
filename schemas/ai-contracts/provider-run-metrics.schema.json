@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "provider-run-metrics.schema.json",
+  "title": "ProviderRunMetrics",
+  "description": "Truthful aggregate metrics for one logical generic-provider search. display_limit / display_requested is the separate visible maximum. The acquisition-volume concepts are acquisition_budget and acquisition_requested. Do not invent acquisition_limit. JSON Schema cannot prove displayed == min(usable, display_requested) or acquisition_requested <= acquisition_budget; application validation and golden-fixture tests enforce those invariants. fetched, mapped, and rejected stay null when unobservable. Never fabricate unknown stages as 0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "display_requested",
+    "acquisition_budget",
+    "acquisition_requested",
+    "fetched",
+    "mapped",
+    "rejected",
+    "usable",
+    "displayed"
+  ],
+  "properties": {
+    "display_requested": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "User-visible maximum requested for that provider. Always known."
+    },
+    "acquisition_budget": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Finite aggregate ceiling approved by AcquisitionBudgetPolicy. Not work already requested."
+    },
+    "acquisition_requested": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Sum of candidate limits from internal acquisitions that actually executed. Unused budget is excluded."
+    },
+    "fetched": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Raw records received when truthfully observable; otherwise null."
+    },
+    "mapped": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Records converted into BERA's narrow safe model when observable; otherwise null."
+    },
+    "rejected": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Policy/mapping rejections when the stage boundary is truthful; otherwise null."
+    },
+    "usable": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Size of the ordered usable pool after integrity policy and identity-only dedup."
+    },
+    "displayed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Must equal min(usable, display_requested). Canonical session membership uses this prefix."
+    }
+  }
+}

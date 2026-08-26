@@ -1,0 +1,49 @@
+{
+  "id": "alibaba-identity-less-similar-candidates-remain-distinct",
+  "description": "Two title-bearing Alibaba candidates with no stable identity remain distinct even when title, image, and price look the same.",
+  "provider": "alibaba",
+  "implementation_stage": "A",
+  "runtime_check": "search_session_core",
+  "given": {
+    "intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["alibaba"],
+      "generation": 7
+    },
+    "policy": {
+      "alibaba": {
+        "maximum_internal_acquisitions": 1,
+        "maximum_acquisition_budget": 30,
+        "candidate_buffer_multiplier": 3
+      }
+    },
+    "steps": [{ "key": "step-1", "candidate_limit": 5 }],
+    "batches": {
+      "step-1": {
+        "candidates": [
+          { "title": "same title", "image": "same.jpg", "price": "10" },
+          { "title": "same title", "image": "same.jpg", "price": "10" }
+        ]
+      }
+    }
+  },
+  "expected": {
+    "status": "SUCCESS",
+    "usable": 2,
+    "distinct": true
+  },
+  "must_not": [
+    "deduplicate by title",
+    "deduplicate by image",
+    "deduplicate by price",
+    "invent identity from rank or fuzzy similarity"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "openspec/changes/multi-market-search-semantics/design.md",
+    "docs/architecture/README.md",
+    "docs/architecture/multi-market-search-core.puml",
+    "docs/architecture/multi-market-search-sequence.puml"
+  ]
+}

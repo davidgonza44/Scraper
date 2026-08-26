@@ -29,6 +29,8 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.9",
     "mutmut>=3.7,<4",
+    "jsonschema>=4.23,<5",
+    "referencing>=0.35,<1",
 ]
 
 [project.scripts]
@@ -88,4 +90,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["reflex", "reflex.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["jsonschema", "jsonschema.*", "referencing", "referencing.*"]
 ignore_missing_imports = true

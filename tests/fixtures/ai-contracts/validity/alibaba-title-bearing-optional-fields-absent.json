@@ -1,0 +1,32 @@
+{
+  "id": "alibaba-title-bearing-optional-fields-absent",
+  "description": "A title-bearing Alibaba candidate remains usable when product_id, product_url, image, rating, and reputation are absent.",
+  "provider": "alibaba",
+  "implementation_stage": "A",
+  "runtime_check": "alibaba_mapper",
+  "given": {
+    "raw": {
+      "title": "Synthetic baseball glove listing"
+    }
+  },
+  "expected": {
+    "usable": true,
+    "title": "Synthetic baseball glove listing",
+    "optional_absent": [
+      "product_id",
+      "product_url",
+      "image_url",
+      "review_score",
+      "supplier_service_score"
+    ]
+  },
+  "must_not": [
+    "reject solely because optional fields are absent",
+    "fabricate a product_id, URL, image, or rating"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "src/bera_price_tracker/domain/alibaba.py",
+    "src/bera_price_tracker/infrastructure/providers/alibaba.py"
+  ]
+}

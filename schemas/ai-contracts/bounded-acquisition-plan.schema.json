@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bounded-acquisition-plan.schema.json",
+  "title": "BoundedAcquisitionPlan",
+  "description": "Canonical fixture JSON for a policy-backed finite plan, not dataclasses.asdict() output. Python steps are InternalAcquisitionStep tuples; JSON uses objects. provider is a non-blank string: the structural PR A contract is provider-neutral, and execution/policy decide support. Cross-field invariants JSON Schema does not encode: step keys are unique; len(steps) cannot exceed maximum_internal_acquisitions; each candidate_limit must fit acquisition_budget; geographic plans (requested_geographic_scope != null) require truthful complete and partial effective scopes; acquisition_budget and maximum_internal_acquisitions remain policy-owned. Concrete Facebook Venezuela partition catalogs belong to OpenSpec PR D and must not appear here as if implemented.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "acquisition_budget",
+    "maximum_internal_acquisitions",
+    "steps"
+  ],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "Non-blank provider identifier. Not a BERA marketplace enum."
+    },
+    "acquisition_budget": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "maximum_internal_acquisitions": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "candidate_limit"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "Non-blank step key. Uniqueness across steps is an application invariant."
+          },
+          "candidate_limit": { "type": "integer", "minimum": 1 },
+          "required_for_complete_coverage": { "type": "boolean", "default": true }
+        }
+      }
+    },
+    "requested_geographic_scope": { "type": ["string", "null"] },
+    "complete_effective_geographic_scope": { "type": ["string", "null"] },
+    "partial_effective_geographic_scope": { "type": ["string", "null"] },
+    "allow_early_termination": { "type": "boolean", "default": true }
+  }
+}

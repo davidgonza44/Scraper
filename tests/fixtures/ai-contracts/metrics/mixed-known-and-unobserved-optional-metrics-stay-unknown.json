@@ -1,0 +1,73 @@
+{
+  "id": "mixed-known-and-unobserved-optional-metrics-stay-unknown",
+  "description": "If one executed internal acquisition has known optional metrics and a later executed acquisition fails before those stages are observed, the aggregate optional metrics remain unknown.",
+  "provider": "facebook",
+  "implementation_stage": "A",
+  "runtime_check": "search_session_core",
+  "given": {
+    "intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["facebook"],
+      "generation": 7,
+      "requested_geographic_scopes": [
+        { "provider": "facebook", "scope": "Toda Venezuela" }
+      ]
+    },
+    "policy": {
+      "facebook": {
+        "maximum_internal_acquisitions": 2,
+        "maximum_acquisition_budget": 30,
+        "candidate_buffer_multiplier": 4
+      }
+    },
+    "scope": "Toda Venezuela",
+    "steps": [
+      { "key": "step-1", "candidate_limit": 5 },
+      { "key": "step-2", "candidate_limit": 5 }
+    ],
+    "batches": {
+      "step-1": {
+        "candidates": [
+          { "title": "one", "identity": "1" },
+          { "title": "two", "identity": "2" },
+          { "title": "three", "identity": "3" },
+          { "title": "four", "identity": "4" },
+          { "title": "five", "identity": "5" }
+        ],
+        "fetched": 5,
+        "mapped": 5,
+        "rejected": 0
+      },
+      "step-2": { "error": "failed before optional metrics were observed" }
+    }
+  },
+  "expected": {
+    "status": "SUCCESS",
+    "coverage_status": "PARTIAL",
+    "executed_steps": ["step-1", "step-2"],
+    "canonical_titles": ["one", "two", "three"],
+    "metrics": {
+      "display_requested": 3,
+      "acquisition_budget": 12,
+      "acquisition_requested": 10,
+      "fetched": null,
+      "mapped": null,
+      "rejected": null,
+      "usable": 5,
+      "displayed": 3
+    }
+  },
+  "must_not": [
+    "sum known fetched with an assumed zero for the failed step",
+    "report aggregate fetched as 5 when a later executed step is unobservable",
+    "fabricate optional pipeline counts"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "openspec/changes/multi-market-search-semantics/design.md",
+    "docs/architecture/README.md",
+    "docs/architecture/multi-market-search-core.puml",
+    "docs/architecture/multi-market-search-sequence.puml"
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "id": "mercadolibre-later-valid-mlv-after-missing-venezuela",
+  "description": "An earlier record without Venezuela evidence is rejected; a later valid MLV record may remain usable in the same logical search.",
+  "provider": "mercadolibre",
+  "implementation_stage": "A",
+  "runtime_check": "mercadolibre_search_boundary",
+  "given": {
+    "raw_items": [
+      {
+        "id": "MLB111111111",
+        "siteId": "MLB",
+        "title": "Foreign marketplace baseball glove",
+        "permalink": "https://produto.mercadolivre.com.br/MLB-111111111"
+      },
+      {
+        "id": "MLV900000002",
+        "siteId": "MLV",
+        "title": "Guante de béisbol Venezuela",
+        "permalink": "https://articulo.mercadolibre.com.ve/MLV-900000002-guante"
+      }
+    ]
+  },
+  "expected": {
+    "mapped": [null, "MLV900000002"],
+    "logical_searches": 1
+  },
+  "must_not": [
+    "start a second logical provider search merely to replace the rejected record",
+    "treat the foreign record as usable",
+    "discard the later valid MLV record because an earlier record failed"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "src/bera_price_tracker/infrastructure/providers/mercadolibre_apify.py"
+  ]
+}

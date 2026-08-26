@@ -1,0 +1,43 @@
+{
+  "id": "facebook-mixed-free-invalid-valid-priced-pool",
+  "description": "Facebook generic search is priced-only: Free/Gratis and invalid prices are rejected; a valid priced listing remains usable.",
+  "provider": "facebook",
+  "implementation_stage": "A",
+  "runtime_check": "facebook_priced_only",
+  "given": {
+    "pool": [
+      {
+        "title": "Gratis baseball glove",
+        "amount": null,
+        "formatted_price": "Gratis",
+        "expected_decision": "free_price"
+      },
+      {
+        "title": "Invalid-price baseball glove",
+        "amount": null,
+        "formatted_price": "$0",
+        "expected_decision": "invalid_price"
+      },
+      {
+        "title": "Valid priced baseball glove",
+        "amount": "25.00",
+        "formatted_price": "USD 25.00",
+        "expected_decision": "priced"
+      }
+    ]
+  },
+  "expected": {
+    "usable_titles": ["Valid priced baseball glove"],
+    "rejected": ["Gratis baseball glove", "Invalid-price baseball glove"]
+  },
+  "must_not": [
+    "admit Free or Gratis listings",
+    "admit an invalid or zero price",
+    "fabricate seller ratings",
+    "invent Facebook fields not present in provider evidence"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "src/bera_price_tracker/application/facebook_products.py"
+  ]
+}

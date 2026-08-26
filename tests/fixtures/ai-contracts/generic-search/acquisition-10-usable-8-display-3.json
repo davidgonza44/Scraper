@@ -1,0 +1,63 @@
+{
+  "id": "acquisition-10-usable-8-display-3",
+  "description": "Over-acquisition fills a usable pool of 8, but only the first 3 become canonical session results.",
+  "provider": "alibaba",
+  "implementation_stage": "A",
+  "runtime_check": "search_session_core",
+  "given": {
+    "intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["alibaba"],
+      "generation": 7
+    },
+    "policy": {
+      "alibaba": {
+        "maximum_internal_acquisitions": 1,
+        "maximum_acquisition_budget": 10,
+        "candidate_buffer_multiplier": 4
+      }
+    },
+    "steps": [{ "key": "step-1", "candidate_limit": 10 }],
+    "batches": {
+      "step-1": {
+        "candidates": [
+          { "title": "item-0" },
+          { "title": "item-1" },
+          { "title": "item-2" },
+          { "title": "item-3" },
+          { "title": "item-4" },
+          { "title": "item-5" },
+          { "title": "item-6" },
+          { "title": "item-7" }
+        ]
+      }
+    }
+  },
+  "expected": {
+    "status": "SUCCESS",
+    "metrics": {
+      "display_requested": 3,
+      "acquisition_budget": 10,
+      "acquisition_requested": 10,
+      "fetched": 8,
+      "mapped": 8,
+      "rejected": 0,
+      "usable": 8,
+      "displayed": 3
+    },
+    "canonical_titles": ["item-0", "item-1", "item-2"]
+  },
+  "must_not": [
+    "treat display_limit as the acquisition count",
+    "make extra usable buffer candidates canonical session results",
+    "fabricate additional listings to fill unused display slots"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "openspec/changes/multi-market-search-semantics/design.md",
+    "docs/architecture/README.md",
+    "docs/architecture/multi-market-search-core.puml",
+    "docs/architecture/multi-market-search-sequence.puml"
+  ]
+}

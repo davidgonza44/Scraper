@@ -1,0 +1,53 @@
+{
+  "id": "title-image-price-are-not-identity",
+  "description": "Title equality, image equality, price equality, search rank, and fuzzy similarity never become stable identity.",
+  "provider": "alibaba",
+  "implementation_stage": "A",
+  "runtime_check": "search_session_core",
+  "given": {
+    "intent": {
+      "original_user_query": "mouse",
+      "display_limit": 3,
+      "selected_providers": ["alibaba"],
+      "generation": 7
+    },
+    "policy": {
+      "alibaba": {
+        "maximum_internal_acquisitions": 1,
+        "maximum_acquisition_budget": 30,
+        "candidate_buffer_multiplier": 3
+      }
+    },
+    "steps": [{ "key": "step-1", "candidate_limit": 5 }],
+    "batches": {
+      "step-1": {
+        "candidates": [
+          { "title": "mouse", "image": "mouse.jpg", "price": "12" },
+          { "title": "mouse", "image": "mouse.jpg", "price": "12" },
+          {
+            "title": "mouse",
+            "identity": "sku-1",
+            "image": "mouse.jpg",
+            "price": "12"
+          }
+        ]
+      }
+    }
+  },
+  "expected": {
+    "usable": 3,
+    "ordered_titles": ["mouse", "mouse", "mouse"]
+  },
+  "must_not": [
+    "merge identity-less similar candidates",
+    "treat search rank as identity",
+    "treat fuzzy similarity as identity"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "openspec/changes/multi-market-search-semantics/specs/positional-market-comparison/spec.md",
+    "docs/architecture/README.md",
+    "docs/architecture/multi-market-search-core.puml",
+    "docs/architecture/multi-market-search-sequence.puml"
+  ]
+}

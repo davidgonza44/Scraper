@@ -1,0 +1,28 @@
+{
+  "id": "facebook-one-execute-one-actor-run",
+  "description": "The existing Facebook application execute remains one Actor run. A later logical strategy may compose multiple bounded calls without redefining this low-level contract.",
+  "provider": "facebook",
+  "implementation_stage": "A",
+  "runtime_check": "facebook_one_execute",
+  "given": {
+    "low_level_operation": "SearchFacebookMarketplaceProducts.execute",
+    "logical_search": "one generic Búsquedas operation per selected provider and generation"
+  },
+  "expected": {
+    "facebook_execute_equals_one_actor_run": true,
+    "logical_search_may_compose_existing_bounded_operations": true
+  },
+  "must_not": [
+    "silently redefine Facebook execute as multiple Actor runs",
+    "treat planned internal acquisitions as orchestrator retries",
+    "move Facebook partition strategy into TrackerState"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/tasks.md",
+    "openspec/changes/multi-market-search-semantics/design.md",
+    "src/bera_price_tracker/application/facebook_products.py",
+    "docs/architecture/README.md",
+    "docs/architecture/multi-market-search-core.puml",
+    "docs/architecture/multi-market-search-sequence.puml"
+  ]
+}

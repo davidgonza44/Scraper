@@ -1,0 +1,30 @@
+{
+  "id": "mercadolibre-valid-mlv-without-permalink",
+  "description": "Mercado Libre keeps required external ID, title, and MLV evidence. Permalink absence alone does not reject.",
+  "provider": "mercadolibre",
+  "implementation_stage": "A",
+  "runtime_check": "mercadolibre_mapper",
+  "given": {
+    "raw": {
+      "id": "MLV900000001",
+      "siteId": "MLV",
+      "title": "Guante de béisbol sintético",
+      "price": "12.50",
+      "currency": "USD"
+    }
+  },
+  "expected": {
+    "usable": true,
+    "external_id": "MLV900000001",
+    "permalink": null
+  },
+  "must_not": [
+    "reject solely because permalink is missing",
+    "weaken MLV or Venezuela provenance requirements"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "src/bera_price_tracker/infrastructure/providers/mercadolibre_apify.py",
+    "src/bera_price_tracker/domain/mercadolibre.py"
+  ]
+}
