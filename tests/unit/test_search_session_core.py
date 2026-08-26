@@ -375,9 +375,7 @@ def test_error_before_coverage_does_not_invent_coverage() -> None:
     intent = _intent(provider="facebook", scope=scope)
     result = _run(
         intent=intent,
-        plan=_plan(
-            policy=policy, provider="facebook", display_limit=3, limits=(5,), scope=scope
-        ),
+        plan=_plan(policy=policy, provider="facebook", display_limit=3, limits=(5,), scope=scope),
         policy=policy,
         batches={"step-1": RuntimeError("not configured")},
     )
