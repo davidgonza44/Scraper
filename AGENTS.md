@@ -48,3 +48,5 @@ early, and do not mark later-stage tasks complete.
   `execute()` remains one Actor run unless OpenSpec explicitly changes that.
 - `TrackerState` orchestrates and serializes. Do not move budget policy,
   provider strategy, or identity rules into it.
+
+`context.md` is orientation only and is not authoritative.

@@ -20,6 +20,8 @@
   ],
   "source_refs": [
     "openspec/changes/multi-market-search-semantics/specs/positional-market-comparison/spec.md",
-    "openspec/changes/multi-market-search-semantics/design.md"
+    "openspec/changes/multi-market-search-semantics/design.md",
+    "docs/architecture/README.md",
+    "docs/architecture/multi-market-search-core.puml"
   ]
 }
