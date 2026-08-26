@@ -55,7 +55,7 @@
         "search_session_core",
         null
       ],
-      "description": "Optional current-code check. search_session_core is skipped until Implementation PR A is present."
+      "description": "Optional current-code check. search_session_core executes against bera_price_tracker.application.search_session. An ImportError fails the test. Later-stage B-E fixtures may keep runtime_check null."
     },
     "given": {
       "type": "object"

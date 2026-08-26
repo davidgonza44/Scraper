@@ -11,8 +11,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from jsonschema.exceptions import ValidationError
 from jsonschema.validators import Draft202012Validator
 from referencing import Registry, Resource
+
+from bera_price_tracker.application import search_session
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = ROOT / "schemas" / "ai-contracts"
@@ -101,6 +104,11 @@ def test_fixture_validates_and_is_safe(
         target = ROOT / ref
         assert target.is_file(), f"missing source_ref {ref}"
     _validate_nested_contracts(case)
+    if isinstance(case["given"].get("intent"), dict):
+        _assert_search_intent_application_invariants(case["given"]["intent"])
+    for key in ("stale_intent", "current_intent"):
+        if isinstance(case["given"].get(key), dict):
+            _assert_search_intent_application_invariants(case["given"][key])
 
 
 def _validate_nested_contracts(case: Mapping[str, Any]) -> None:
@@ -126,6 +134,16 @@ def _assert_metrics_invariants(metrics: Mapping[str, Any]) -> None:
     displayed = int(metrics["displayed"])
     assert displayed == min(usable, display_requested)
     assert int(metrics["acquisition_requested"]) <= int(metrics["acquisition_budget"])
+
+
+def _assert_search_intent_application_invariants(payload: Mapping[str, Any]) -> None:
+    """Cross-field SearchIntent rules that JSON Schema does not encode."""
+
+    selected = tuple(payload["selected_providers"])
+    scopes = tuple(payload.get("requested_geographic_scopes") or ())
+    providers_in_scopes = [str(item["provider"]) for item in scopes]
+    assert not (set(providers_in_scopes) - set(selected))
+    assert len(set(providers_in_scopes)) == len(providers_in_scopes)
 
 
 def test_later_stage_fixtures_are_not_marked_implemented() -> None:
@@ -209,6 +227,20 @@ def test_facebook_low_level_execute_remains_one_actor_run() -> None:
     assert "one execute maps to one Actor run" in (SearchFacebookMarketplaceProducts.__doc__ or "")
 
 
+def test_search_session_core_is_a_required_application_module() -> None:
+    assert search_session.SearchIntent is not None
+    assert SEARCH_SESSION_CASES
+    ids = {case["id"] for _stem, _path, case in SEARCH_SESSION_CASES}
+    assert "mixed-known-and-unobserved-optional-metrics-stay-unknown" in ids
+    stage_a_core = [
+        case["id"]
+        for _stem, _path, case in CASES
+        if case["implementation_stage"] == "A"
+        and case.get("runtime_check") == "search_session_core"
+    ]
+    assert len(stage_a_core) == len(SEARCH_SESSION_CASES)
+
+
 @pytest.mark.parametrize(
     ("stem", "path", "case"),
     SEARCH_SESSION_CASES,
@@ -219,8 +251,95 @@ def test_search_session_core_fixtures_when_implemented(
     path: Path,
     case: dict[str, Any],
 ) -> None:
-    module = pytest.importorskip("bera_price_tracker.application.search_session")
-    _assert_search_session_case(module, case)
+    _assert_search_session_case(search_session, case)
+
+
+def test_mixed_unknown_metrics_fixture_executes_search_session_core() -> None:
+    case = _load_json(
+        FIXTURE_DIR / "metrics" / "mixed-known-and-unobserved-optional-metrics-stay-unknown.json"
+    )
+    assert case["runtime_check"] == "search_session_core"
+    _assert_search_session_case(search_session, case)
+    result_metrics = case["expected"]["metrics"]
+    assert result_metrics["acquisition_requested"] == 10
+    assert result_metrics["fetched"] is None
+    assert result_metrics["mapped"] is None
+    assert result_metrics["rejected"] is None
+
+
+def _intent_fixture_payload(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "original_user_query": "baseball glove",
+        "display_limit": 3,
+        "selected_providers": ["alibaba"],
+        "generation": 7,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_search_intent_schema_rejects_whitespace_only_query() -> None:
+    payload = _intent_fixture_payload(original_user_query="   ")
+    with pytest.raises(ValidationError):
+        _validator("search-intent.schema.json").validate(payload)
+    with pytest.raises(ValueError, match="must not be blank"):
+        search_session.SearchIntent(
+            original_user_query="   ",
+            display_limit=3,
+            selected_providers=("alibaba",),
+            generation=7,
+        )
+
+
+def test_search_intent_schema_is_not_direct_dataclass_serialization() -> None:
+    payload = _intent_fixture_payload(
+        requested_geographic_scopes=[{"provider": "alibaba", "scope": None}]
+    )
+    _validator("search-intent.schema.json").validate(payload)
+    intent = _intent(search_session, payload)
+    assert intent.requested_geographic_scopes == (("alibaba", None),)
+    assert not isinstance(intent.selected_providers, list)
+
+
+def test_search_intent_rejects_scope_for_unselected_provider() -> None:
+    payload = _intent_fixture_payload(
+        selected_providers=["alibaba"],
+        requested_geographic_scopes=[{"provider": "facebook", "scope": "Toda Venezuela"}],
+    )
+    _validator("search-intent.schema.json").validate(payload)
+    with pytest.raises(ValueError, match="requested scopes must belong to selected providers"):
+        _intent(search_session, payload)
+
+
+def test_search_intent_rejects_duplicate_provider_scopes() -> None:
+    payload = _intent_fixture_payload(
+        selected_providers=["facebook"],
+        requested_geographic_scopes=[
+            {"provider": "facebook", "scope": "Caracas"},
+            {"provider": "facebook", "scope": "Valencia"},
+        ],
+    )
+    _validator("search-intent.schema.json").validate(payload)
+    with pytest.raises(ValueError, match="requested scopes must be unique per provider"):
+        _intent(search_session, payload)
+
+
+def test_search_intent_display_limit_membership_is_owned_by_policy() -> None:
+    payload = _intent_fixture_payload(display_limit=11)
+    _validator("search-intent.schema.json").validate(payload)
+    intent = _intent(search_session, payload)
+    assert intent.display_limit == 11
+    policy = search_session.AcquisitionBudgetPolicy(
+        provider_rules={
+            "alibaba": search_session.ProviderBudgetRule(
+                maximum_internal_acquisitions=1,
+                maximum_acquisition_budget=30,
+                candidate_buffer_multiplier=1,
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="not supported"):
+        policy.validate_intent(intent)
 
 
 def _assert_search_session_case(module: Any, case: Mapping[str, Any]) -> None:
