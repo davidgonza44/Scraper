@@ -3,7 +3,7 @@ title BERA - Multi-market Search Core (Implementation PR A)
 
 skinparam classAttributeIconSize 0
 
-package "Application - PR A" {
+package "Implemented PR A application core" {
   class SearchIntent {
     +original_user_query: str
     +display_limit: int
@@ -18,6 +18,7 @@ package "Application - PR A" {
     +acquisition_budget(provider, display_limit)
     +maximum_internal_acquisitions(provider)
     +validate_display_limit()
+    +validate_intent()
     +create_plan()
     +validate_plan()
   }
@@ -107,10 +108,10 @@ package "Existing Application / Provider Boundary" {
   }
 }
 
-package "GUI / Orchestration" {
+package "Existing GUI path (not wired to PR A core)" {
   class TrackerState {
-    +start_search()
-    +coordinate()
+    +search()
+    +search_alibaba()
     +serialize_for_ui()
   }
 }
@@ -121,7 +122,7 @@ BoundedAcquisitionPlan --> InternalAcquisitionStep : contains *
 SearchIntent --> LogicalSearch
 BoundedAcquisitionPlan --> LogicalSearch
 AcquisitionBudgetPolicy --> LogicalSearch : required at execute
-LogicalSearch --> ExistingProviderOperation : composes bounded calls
+LogicalSearch ..> ExistingProviderOperation : intended composition of bounded calls
 ExistingProviderOperation --> ProviderPort
 ExistingProviderOperation --> AcquisitionBatch
 LogicalSearch --> ProviderRunMetrics : aggregates
@@ -131,13 +132,16 @@ ProviderRunResult --> ProviderStatus
 ProviderRunResult --> CoverageStatus
 SearchIntent --> SearchSessionSnapshot
 ProviderRunResult --> SearchSessionSnapshot : immutable commit
-TrackerState --> SearchIntent : creates / coordinates
-TrackerState --> LogicalSearch : orchestrates
-TrackerState --> SearchSessionSnapshot : owns current snapshot
+
+TrackerState ..> SearchIntent : deferred wiring (not in PR A)
+TrackerState ..> LogicalSearch : deferred wiring (not in PR A)
+TrackerState ..> SearchSessionSnapshot : deferred wiring (not in PR A)
 
 note right of ProviderRunResult
   Result owns its generation.
   A stale result cannot be relabelled by the caller.
+  status must be a ProviderStatus member.
+  coverage_status must be None or CoverageStatus.
 end note
 
 note right of SearchSessionSnapshot
@@ -150,13 +154,16 @@ note right of ProviderRunMetrics
   displayed = min(usable, display_requested)
   usable = len(ordered_usable_pool)
   displayed = len(canonical_session_results)
+  Optional fetched/mapped/rejected stay unknown
+  if any executed step lacks a truthful value.
 end note
 
 note right of AcquisitionBudgetPolicy
-  Canonical source of truth for:
-  display limits
+  Canonical runtime authority for:
+  supported display limits
   acquisition_budget
   maximum internal acquisitions
+  SearchIntent only checks a positive integer.
   Executable plans must be derived from
   or validated against this policy.
 end note
@@ -164,6 +171,7 @@ end note
 note bottom of LogicalSearch
   One logical provider search may compose multiple bounded existing operations.
   It MUST NOT start a second logical search merely to refill rejected/mapping-lost candidates.
+  Current callers are PR A tests. Future GUI wiring is deferred.
 end note
 
 note right of AcquisitionBatch
@@ -177,16 +185,18 @@ end note
 note right of ExistingProviderOperation
   Preserve low-level contracts.
   Example: Facebook execute() = one Actor run
+  Existing GUI search still calls these
+  operations directly, not via LogicalSearch.
 end note
 
 note right of TrackerState
-  TrackerState coordinates.
-  Do NOT move:
-  provider strategy
-  budget policy
-  deduplication
-  domain rules
-  into TrackerState.
+  Current runtime: existing GUI search path.
+  Do NOT move into TrackerState:
+  provider strategy, budget policy,
+  deduplication, or domain rules.
+  Creating SearchIntent / invoking the policy /
+  execute_bounded_provider_search() / commit
+  is deferred integration, not current wiring.
 end note
 
 package "Deferred staged work" {
