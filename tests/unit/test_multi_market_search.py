@@ -137,6 +137,7 @@ def test_single_market_ml_usable_listing_stays_in_generic_search_ui(
     from bera_price_tracker.application.services import SearchMercadoLibreProducts
     from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
     from bera_price_tracker.gui import services
+    from bera_price_tracker.gui.navigation import WORKSPACE_SEARCHES
     from bera_price_tracker.infrastructure.providers.mercadolibre_apify import (
         map_mercadolibre_item,
     )
@@ -177,6 +178,7 @@ def test_single_market_ml_usable_listing_stays_in_generic_search_ui(
     monkeypatch.setattr(services, "run_facebook_product_search", forbidden)
 
     state = TrackerState()
+    state.workspace_view = WORKSPACE_SEARCHES
     state.search_mode = MODE_SINGLE
     state.search_platform = PLATFORM_ML
     state.search_query = PILOT_QUERY
@@ -227,6 +229,55 @@ def test_ml_summary_card_counts_canonical_row_not_zero_comparables() -> None:
     )
     assert card["result_count"] == "1"
     assert card["status"] == "ready"
+
+
+def test_comparison_rows_use_filters_in_comparisons_not_generic_search() -> None:
+    """Generic Búsquedas keeps canonical rows; Comparaciones respects view filters."""
+
+    from bera_price_tracker.gui.navigation import WORKSPACE_COMPARISONS, WORKSPACE_SEARCHES
+
+    state = TrackerState()
+    state.alibaba_ui_status = UI_SUCCESS
+    state.alibaba_results = [
+        AlibabaResultRow(
+            title="Cheap mouse",
+            product_id="ali-cheap",
+            price="$1.00",
+            representative="1.00",
+            relevance_value=90,
+        )
+    ]
+    state.ml_ui_status = UI_SUCCESS
+    state.ml_results = [
+        MercadoLibreResultRow(
+            title="Low relevance ML",
+            external_id="MLV-LOW",
+            price="$9.00",
+            price_raw="9.00",
+            representative="9.00",
+            relevance_value=20,
+        )
+    ]
+    state.alibaba_price_min = "999"
+    state.ml_min_relevance = 60
+    assert state.alibaba_visible_rows == []
+    assert state.ml_visible_rows == []
+
+    state.workspace_view = WORKSPACE_SEARCHES
+    assert state.search_total_results == "2"
+    search_cards = {card.platform_id: card for card in state.marketplace_summaries}
+    assert search_cards[PLATFORM_ALIBABA].result_count == "1"
+    assert search_cards[PLATFORM_ML].result_count == "1"
+    search_rows = state.comparison_rows
+    assert any(row.alibaba_has_listing for row in search_rows)
+    assert any(row.ml_has_listing for row in search_rows)
+
+    state.workspace_view = WORKSPACE_COMPARISONS
+    comparison_cards = {card.platform_id: card for card in state.marketplace_summaries}
+    assert comparison_cards[PLATFORM_ALIBABA].result_count == "0"
+    assert comparison_cards[PLATFORM_ML].result_count == "0"
+    assert state.comparison_rows == []
+    assert state.search_total_results == "2"
 
 
 def test_facebook_free_listing_is_rejected_without_retry() -> None:

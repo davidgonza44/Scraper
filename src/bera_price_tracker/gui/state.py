@@ -3200,12 +3200,23 @@ class TrackerState(rx.State):
                 summary[key] = value
         return summary
 
+    def _uses_canonical_search_rows(self) -> bool:
+        """Generic Búsquedas uses stored rows; Comparaciones keeps view filters."""
+
+        return self.workspace_view == WORKSPACE_SEARCHES
+
     @rx.var
     def marketplace_summaries(self) -> list[MarketplaceSummaryCard]:
+        alibaba_rows = (
+            self.alibaba_results
+            if self._uses_canonical_search_rows()
+            else self.alibaba_visible_rows
+        )
+        ml_rows = self.ml_results if self._uses_canonical_search_rows() else self.ml_visible_rows
         raw = marketplace_summary.build_marketplace_summaries(
             alibaba_ui_status=self.alibaba_ui_status,
             alibaba_summary=self.alibaba_summary,
-            alibaba_rows=self.alibaba_results,
+            alibaba_rows=alibaba_rows,
             facebook_ui_status=self.facebook_product_ui_status,
             facebook_summary=self.facebook_product_summary,
             facebook_statistics=self.facebook_product_statistics,
@@ -3213,7 +3224,7 @@ class TrackerState(rx.State):
             facebook_error=self.facebook_product_error,
             ml_ui_status=self.ml_ui_status,
             ml_summary=self._ml_diagnostic_summary(),
-            ml_rows=self.ml_results,
+            ml_rows=ml_rows,
         )
         attached = search_diagnostics.attach_diagnostics(
             raw,
@@ -3252,9 +3263,15 @@ class TrackerState(rx.State):
             or self.ml_query.strip()
         )
         raw = comparison.build_comparison_rows(
-            alibaba_rows=self.alibaba_results,
+            alibaba_rows=(
+                self.alibaba_results
+                if self._uses_canonical_search_rows()
+                else self.alibaba_visible_rows
+            ),
             facebook_rows=self.facebook_product_results,
-            ml_rows=self.ml_results,
+            ml_rows=(
+                self.ml_results if self._uses_canonical_search_rows() else self.ml_visible_rows
+            ),
             alibaba_status=self.alibaba_ui_status,
             facebook_status=self.facebook_product_ui_status,
             ml_status=self.ml_ui_status,
