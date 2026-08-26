@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -197,6 +198,135 @@ def test_stale_generation_does_not_overwrite_newer_search() -> None:
     )
     assert state.alibaba_results == []
     assert all(row.title != "stale mouse" for row in state.alibaba_results)
+
+
+def _bind_comparable_context(state: TrackerState, product_id: str, title: str) -> None:
+    from bera_price_tracker.gui import services
+
+    state.alibaba_query = "mouse"
+    state.alibaba_results = [AlibabaResultRow(product_id=product_id, title=title)]
+    state.prepare_facebook_comparables_from_alibaba_result(product_id)
+    state._prepare_ml_comparables(
+        external_id=product_id,
+        title=title,
+        supplier="Supplier",
+        supplier_price="$4.00",
+        currency="USD",
+    )
+    state.facebook_product_association_product_id = product_id
+    state.ml_association_product_id = product_id
+    state.facebook_product_last_search_query = "mouse"
+    state.ml_last_search_query = (
+        services.suggest_mercadolibre_query(
+            current_query="",
+            fallback_query="mouse",
+        )
+        or "mouse"
+    )
+
+
+def test_scoped_search_detaches_comparable_context_and_keeps_session_neutral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    state = TrackerState()
+    _bind_comparable_context(state, "P-OLD", "Old mouse")
+    assert state.facebook_product_has_alibaba_context is True
+    assert state.ml_has_alibaba_context is True
+    assert state._facebook_product_active_id() == "P-OLD"
+    assert state._ml_active_search_product_id() == "P-OLD"
+
+    plan = plan_search(mode=MODE_MULTI, query="headphones", limit=3)
+    state._prepare_scoped_search(plan)
+
+    assert state.facebook_product_has_alibaba_context is False
+    assert state.ml_has_alibaba_context is False
+    assert state._facebook_product_active_id() == ""
+    assert state._ml_active_search_product_id() == ""
+    assert state.facebook_product_association_product_id == ""
+    assert state.ml_association_product_id == ""
+    assert state.facebook_product_alibaba_context == {}
+    assert state.ml_alibaba_context == {}
+
+    state._finalize_facebook_product_search(
+        product_id="",
+        query="headphones",
+        city=state.facebook_product_city,
+        rows=[FacebookProductResultRow(title="session facebook", relevance_value=80)],
+        ui_status=UI_SUCCESS,
+    )
+    state._finalize_mercadolibre_search(
+        search_product_id="",
+        query="headphones",
+        rows=[MercadoLibreResultRow(title="session ml", relevance_value=70)],
+        ui_status=UI_SUCCESS,
+    )
+    state.alibaba_results = [
+        AlibabaResultRow(
+            product_id="P-OLD",
+            title="Old mouse",
+            score_value=90,
+            score="90",
+        )
+    ]
+    state.alibaba_ui_status = UI_SUCCESS
+
+    assert state.facebook_product_association_product_id == ""
+    assert state.ml_association_product_id == ""
+    assert state.ml_show_alibaba_association is False
+    assert state.facebook_product_show_provenance is False
+    matching = [row for row in state.comparison_rows if row.product_id == "P-OLD"]
+    assert matching
+    assert matching[0].facebook_has_listing is False
+    assert matching[0].ml_has_listing is False
+
+
+def test_nueva_busqueda_detaches_alibaba_comparable_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    state = TrackerState()
+    _bind_comparable_context(state, "P-OLD", "Old mouse")
+    generation = state.facebook_product_translation_generation
+    ml_generation = state.ml_translation_generation
+    state.start_new_search()
+    assert state.facebook_product_has_alibaba_context is False
+    assert state.ml_has_alibaba_context is False
+    assert state._facebook_product_active_id() == ""
+    assert state._ml_active_search_product_id() == ""
+    assert state.facebook_product_association_product_id == ""
+    assert state.ml_association_product_id == ""
+    assert state.facebook_product_translation_generation == generation + 1
+    assert state.ml_translation_generation == ml_generation + 1
+
+
+def test_late_standalone_alibaba_search_does_not_repopulate_cleared_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    state = TrackerState()
+
+    def run_search(*_args: object, **_kwargs: object) -> dict[str, object]:
+        state.start_new_search()
+        return {
+            "results": [{"title": "stale mouse", "product_id": "old"}],
+            "summary": {},
+            "stats_raw": {},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_alibaba_search", run_search)
+    state.alibaba_query = "mouse"
+    state.alibaba_limit = 3
+    asyncio.run(cast(Any, TrackerState.search_alibaba).fn(state))
+    assert state.alibaba_results == []
+    assert all(row.title != "stale mouse" for row in state.alibaba_results)
+    assert state.alibaba_ui_status != UI_SUCCESS
 
 
 def test_unsupported_plan_limit_never_reaches_runners() -> None:

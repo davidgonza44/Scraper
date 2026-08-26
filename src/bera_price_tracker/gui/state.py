@@ -1114,6 +1114,7 @@ class TrackerState(rx.State):
             self.alibaba_error = ""
             self.alibaba_warning = alibaba_credit_warning(limit) or ""
             self.alibaba_ui_status = UI_LOADING
+            generation = self.search_generation
 
         try:
             payload = await asyncio.to_thread(
@@ -1128,6 +1129,7 @@ class TrackerState(rx.State):
                     request_query=query,
                     request_limit=limit,
                     error_message=message,
+                    request_generation=generation,
                 )
             return
 
@@ -1182,6 +1184,7 @@ class TrackerState(rx.State):
                 summary=dict(payload.get("summary") or {}),
                 stats_raw=dict(payload.get("stats_raw") or {}),
                 ui_status=str(payload.get("ui_status") or UI_EMPTY),
+                request_generation=generation,
             )
 
     def set_alibaba_sort(self, value: str) -> None:
@@ -2109,9 +2112,43 @@ class TrackerState(rx.State):
             for item in self._payload_maps(payload, "results")
         ]
 
+    def _detach_alibaba_comparable_context(self) -> None:
+        """Drop Alibaba product binding so a generic session cannot inherit it.
+
+        Comparable Facebook/ML lookups are bound to one Alibaba ``product_id``.
+        A later multi-market or Nueva búsqueda session is not that lookup, so
+        leftover context must not stamp session results onto the old product.
+        """
+
+        self.facebook_product_translation_generation += 1
+        self.facebook_product_has_alibaba_context = False
+        self.facebook_product_alibaba_context = {}
+        self.facebook_product_association_product_id = ""
+        self.facebook_product_provenance = {}
+        self.facebook_product_last_search_query = ""
+        self.facebook_product_translated_title = ""
+        self.facebook_product_translation_warning = ""
+        self.facebook_product_translation_error = ""
+        self.facebook_product_translation_is_loading = False
+        self.facebook_product_translation_ui_status = UI_INITIAL
+
+        self.ml_translation_generation += 1
+        self.ml_has_alibaba_context = False
+        self.ml_alibaba_context = {}
+        self.ml_association_product_id = ""
+        self.ml_last_search_query = ""
+        self.ml_translated_title = ""
+        self.ml_translation_warning = ""
+        self.ml_translation_error = ""
+        self.ml_translation_is_loading = False
+        self.ml_translation_ui_status = UI_INITIAL
+        self.ml_translation_source_language = ""
+        self._invalidate_ml_comparison()
+
     def _prepare_scoped_search(self, plan: search_scope.SearchPlan) -> None:
         self.search_query = plan.query
         self.search_limit = plan.limit
+        self._detach_alibaba_comparable_context()
         selected = set(plan.providers)
         self.alibaba_results = []
         self.alibaba_summary = {}
@@ -2206,8 +2243,9 @@ class TrackerState(rx.State):
                             request_generation=generation,
                         )
                     elif provider == PLATFORM_FACEBOOK:
+                        # Session search is never an Alibaba-comparable lookup.
                         self._finalize_facebook_product_search(
-                            product_id=self._facebook_product_active_id(),
+                            product_id="",
                             query=plan.query,
                             city=plan.city,
                             error_message=services.sanitize_facebook_product_error(exc),
@@ -2215,7 +2253,7 @@ class TrackerState(rx.State):
                         )
                     else:
                         self._finalize_mercadolibre_search(
-                            search_product_id=self._ml_active_search_product_id(),
+                            search_product_id="",
                             query=plan.query,
                             error_message=services.sanitize_mercadolibre_error(exc),
                             request_generation=generation,
@@ -2237,7 +2275,7 @@ class TrackerState(rx.State):
                 elif provider == PLATFORM_FACEBOOK:
                     rows, statistics = self._facebook_rows_from_payload(payload)
                     self._finalize_facebook_product_search(
-                        product_id=self._facebook_product_active_id(),
+                        product_id="",
                         query=plan.query,
                         city=plan.city,
                         rows=rows,
@@ -2248,7 +2286,7 @@ class TrackerState(rx.State):
                     )
                 else:
                     self._finalize_mercadolibre_search(
-                        search_product_id=self._ml_active_search_product_id(),
+                        search_product_id="",
                         query=plan.query,
                         rows=self._ml_rows_from_payload(payload),
                         summary=dict(payload.get("summary") or {}),
@@ -2503,7 +2541,7 @@ class TrackerState(rx.State):
         self.ml_is_loading = False
         self.ml_ui_status = UI_INITIAL
         self.diagnostic_open_platforms = []
-        self._invalidate_ml_comparison()
+        self._detach_alibaba_comparable_context()
 
     def compare_ml_with_landed_cost(self) -> None:
         if self.ml_has_alibaba_context:
