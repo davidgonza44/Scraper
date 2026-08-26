@@ -6,6 +6,8 @@
 
 Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position in each provider's canonical BERA ordering. The ordering and canonical session prefix SHALL freeze when `ProviderRunResult` is committed to the current-generation session snapshot. Row count SHALL equal the maximum displayed candidate count among selected providers. Missing cells SHALL remain empty; candidates SHALL NOT be duplicated to fill cells.
 
+Generic comparison SHALL be purely positional. Cross-market similarity, relatedness, equivalence, compatibility, category, title, or image comparisons SHALL NOT filter, discard, promote, demote, reorder, or replace valid candidates in any provider list. Any future identical-product/high-confidence matching flow SHALL be separate from generic search and SHALL NOT mutate its provider lists.
+
 #### Scenario: Uneven three-two-one results
 - **GIVEN** Alibaba displays A1, A2, A3
 - **AND** Facebook displays F1, F2
@@ -16,11 +18,26 @@ Generic multi-market search SHALL build `SearchPositionComparisonRow` values by 
 - **AND** row 2 contains A2, F2, and an empty Mercado Libre cell
 - **AND** row 3 contains A3 and empty Facebook and Mercado Libre cells
 
+#### Scenario: Ten valid results per provider remain positional
+- **GIVEN** `display_limit = 10`
+- **AND** each selected provider has at least ten valid ordered results
+- **WHEN** generic comparison is built
+- **THEN** each provider contributes exactly its first ten valid results
+- **AND** the table has ten positional rows
+- **AND** no candidate is discarded for lacking similarity to another marketplace candidate
+
 #### Scenario: Presentation sort cannot change Resultado number one
 - **GIVEN** candidate A is frozen as canonical `Resultado #1`
 - **WHEN** a specialized view applies price sorting, relevance filtering, or a ranking preset that places another candidate first in its projection
 - **THEN** A remains generic comparison `Resultado #1`
 - **AND** session totals, export membership, provider status, and the canonical snapshot remain unchanged
+
+#### Scenario: Unrelated-looking candidates remain in provider order
+- **GIVEN** the first valid results from Alibaba, Facebook, and Mercado Libre do not appear similar to each other
+- **WHEN** generic comparison is built
+- **THEN** all three remain in `Resultado #1` in their respective columns
+- **AND** none is discarded or reordered for cross-market relatedness
+- **AND** the row implies neither identity, equivalence, nor compatibility
 
 ### Requirement: Positional comparison has a distinct non-identity model
 

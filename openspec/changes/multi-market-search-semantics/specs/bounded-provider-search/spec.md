@@ -4,7 +4,7 @@
 
 ### Requirement: Display limits represent per-provider visible maxima
 
-The system SHALL interpret UI values 1, 3, and 5 as `display_limit`, the maximum usable listings displayed for each selected marketplace. The control SHALL be labelled **Máximo por plataforma** or equivalent copy that communicates a maximum. It SHALL NOT treat this value as a raw acquisition count or a guaranteed count, and SHALL NOT fabricate or duplicate listings when fewer usable listings exist.
+The system SHALL interpret each supported positive UI value, including 10, as `display_limit`, the maximum usable listings displayed for each selected marketplace. The control SHALL be labelled **Máximo por plataforma** or equivalent copy that communicates a maximum. It SHALL NOT treat this value as a raw acquisition count or a guaranteed count, and SHALL NOT fabricate or duplicate listings when fewer usable listings exist.
 
 #### Scenario: Fewer usable listings than requested
 - **GIVEN** `display_limit = 3`
@@ -29,7 +29,7 @@ The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated c
 
 ### Requirement: Acquisition limits are explicit, centralized, and bounded
 
-The system SHALL represent `acquisition_limit` separately from `display_limit`. A centralized deterministic policy SHALL initially map Alibaba and Mercado Libre display limits 1/3/5 to acquisition limits 5/10/15, and Facebook display limits 1/3/5 to acquisition limit 5. Every value SHALL remain capped by the provider hard maximum. Alibaba's maximum 500 SHALL NOT be used as a normal acquisition pool. Any evidence-based adjustment SHALL be documented in the design before implementation and SHALL remain centralized and bounded.
+The system SHALL represent aggregate `acquisition_limit` separately from `display_limit`. A centralized deterministic provider strategy SHALL scale the bounded acquisition budget from provider, requested display maximum, selected geographic scope, and provider hard caps; it SHALL support display values including 10 and request at least that many candidates when the provider supports it. The strategy MAY divide the budget into multiple bounded internal acquisitions. Alibaba's maximum 500 SHALL NOT be used as a normal pool. Exact functions/caps SHALL be documented in the design from implementation evidence before code implementation and remain centralized and deterministic.
 
 #### Scenario: Invalid first candidate within one pool
 - **GIVEN** `display_limit = 1`
@@ -37,41 +37,48 @@ The system SHALL represent `acquisition_limit` separately from `display_limit`. 
 - **WHEN** provider policy evaluates the original pool
 - **THEN** the valid later candidate is displayed
 - **AND** `displayed = 1`
-- **AND** exactly one provider execution occurred
+- **AND** exactly one logical provider search operation occurred
 
-#### Scenario: Facebook has no buffer at display five
-- **GIVEN** Facebook `display_limit = 5`
-- **WHEN** the policy computes the acquisition request
-- **THEN** `acquisition_requested = 5`
-- **AND** diagnostics/design communicate that the current hard cap provides no additional rejection buffer
+#### Scenario: Display ten is supported
+- **GIVEN** `display_limit = 10`
+- **WHEN** a provider that supports at least ten candidates computes its bounded strategy
+- **THEN** aggregate `acquisition_requested >= 10`
+- **AND** at most the first ten ordered usable candidates become canonical session results
 
-### Requirement: Generic search executes one acquisition per selected provider and generation
+### Requirement: Generic search executes one logical operation per selected provider and generation
 
-In generic **Búsquedas**, Alibaba, Facebook, and Mercado Libre SHALL each have at most one marketplace acquisition execution per selected provider per search generation. A marketplace acquisition execution means one logical externally initiated Actor run, API marketplace search request, or equivalent provider search operation that obtains that provider's bounded pool. In single-market generic search, the selected provider has the same limit. The system SHALL NOT launch a second acquisition execution to refill mapping/policy losses. This rule SHALL NOT redefine CLI collect, tracking, refresh, history, exact-product, specialized workflow, or internal provider-transport behavior outside generic **Búsquedas**.
+In generic **Búsquedas**, the orchestrator SHALL start exactly one logical provider search operation for each selected, configured, startable provider per generation. A provider-owned deterministic strategy MAY perform multiple bounded Actor/API acquisitions internally for scope coverage, partitioning, or pagination; these are parts of the same logical operation, not retries. After strategy completion, the orchestrator SHALL NOT start a second logical operation to refill mapping/policy losses. This rule SHALL NOT redefine CLI collect, tracking, refresh, history, exact-product, specialized workflow, or provider-transport behavior outside generic **Búsquedas**.
 
 #### Scenario: Only two usable candidates exist
 - **GIVEN** `display_limit = 3`
-- **AND** one provider execution exhausts its bounded pool with two usable candidates
+- **AND** one logical provider search operation exhausts its bounded strategy with two usable candidates
 - **WHEN** orchestration completes
 - **THEN** `displayed = 2`
-- **AND** the provider is not executed again
+- **AND** a second logical provider search operation is not started
 
 #### Scenario: Single-market bounded acquisition
 - **GIVEN** only Mercado Libre is selected
 - **AND** `display_limit = 3`
 - **WHEN** search runs
-- **THEN** one Mercado Libre execution requests its bounded candidate pool
+- **THEN** one logical Mercado Libre search operation runs its bounded acquisition strategy
 - **AND** displays at most three usable listings
-- **AND** performs no retry
+- **AND** starts no second logical provider search operation
 
-#### Scenario: Mapping and rejection loss does not trigger refill execution
+#### Scenario: Mapping and rejection loss does not trigger a second logical operation
 - **GIVEN** a provider's one bounded acquisition returns candidates that are lost during mapping or policy rejection
 - **WHEN** fewer than `display_limit` usable candidates remain
-- **THEN** no second Actor/API marketplace search acquisition is launched for that provider and generation
+- **THEN** the orchestrator launches no second logical provider search operation for that provider and generation
+
+#### Scenario: Broad scope uses multiple internal acquisitions
+- **GIVEN** Toda Venezuela requires multiple bounded geographic partitions or pages for a provider
+- **WHEN** its deterministic strategy executes those internal Actor/API acquisitions
+- **THEN** they count as one logical provider search operation
+- **AND** they are not classified as retries
+- **AND** the strategy terminates at its documented bound
 
 ### Requirement: Provider metrics are precise and unknown-safe
 
-The implementation SHALL evolve/consolidate existing `ProviderAcquisitionMetrics` and provider-specific metrics into one run contract exposing `display_requested`, `acquisition_requested`, optional `fetched`, optional `mapped`, optional `rejected`, `usable`, and `displayed` according to `design.md`, rather than maintain competing sources of truth. Every emitted counter SHALL document its measurement boundary. No arithmetic identity between fetched, mapped, rejected, and usable is required. An unobservable metric SHALL be unknown and render **No disponible**, never zero solely because it cannot be observed. Provider-specific rejection counters SHALL remain optional truthful detail.
+The implementation SHALL evolve/consolidate existing `ProviderAcquisitionMetrics` and provider-specific metrics into one run contract exposing `display_requested`, aggregate `acquisition_requested` across internal acquisitions, optional aggregate `fetched`, optional `mapped`, optional `rejected`, `usable`, and `displayed` according to `design.md`, rather than maintain competing sources of truth. Every emitted counter SHALL document its measurement boundary, including deduplication across partitions/pages. No arithmetic identity between fetched, mapped, rejected, and usable is required. An unobservable metric SHALL be unknown and render **No disponible**, never zero solely because it cannot be observed. Provider-specific rejection counters SHALL remain optional truthful detail.
 
 #### Scenario: Unobservable fetched count
 - **GIVEN** an adapter cannot observe raw records received
@@ -82,7 +89,7 @@ The implementation SHALL evolve/consolidate existing `ProviderAcquisitionMetrics
 
 ### Requirement: Provider status derives from execution and canonical usability
 
-The system SHALL classify a completed provider execution with at least one usable listing as `SUCCESS`, a normally completed execution with zero usable listings as `EMPTY`, and a failed execution as `ERROR`. Presentation filters SHALL NOT alter this status.
+The system SHALL classify a completed logical provider operation with at least one usable listing as `SUCCESS`, a normally completed logical operation with zero usable listings as `EMPTY`, and a failed logical operation as `ERROR`. Presentation filters SHALL NOT alter this status.
 
 #### Scenario: Successful Alibaba execution with no fetched records
 - **GIVEN** the Alibaba actor execution completes normally
@@ -113,7 +120,7 @@ Facebook generic search SHALL remain priced-only; Free/Gratis, zero/missing/inva
 - **WHEN** policy validation runs
 - **THEN** the first two are rejected for truthful reasons
 - **AND** the valid listing may fill the display position
-- **AND** only one provider execution occurs
+- **AND** only one logical provider search operation occurs
 
 #### Scenario: Later valid Mercado Libre Venezuela record
 - **GIVEN** the first acquired record lacks MLV/Venezuela evidence
@@ -121,7 +128,7 @@ Facebook generic search SHALL remain priced-only; Free/Gratis, zero/missing/inva
 - **WHEN** policy validation runs
 - **THEN** the first record is rejected
 - **AND** the later record may be displayed
-- **AND** only one provider execution occurs
+- **AND** only one logical provider search operation occurs
 
 ### Requirement: External-call budgets are enforced by implementation and tests
 

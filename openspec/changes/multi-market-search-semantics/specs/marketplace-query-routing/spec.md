@@ -4,7 +4,7 @@
 
 ### Requirement: Original and provider-specific queries retain provenance
 
-Each search session SHALL retain `original_user_query` and `generation`. Each selected provider SHALL retain `provider_query`, `provider_query_origin`, and the provider-local market/geographic scope required to reproduce that search; allowed origins are `USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, and `FALLBACK`. Facebook Venezuela SHALL retain its relevant market/city scope, currently Caracas. This provenance SHALL answer what the user searched, what each provider received, what scope it used, and which generation produced the result without creating a generic geospatial subsystem. Diagnostics and exports MAY expose these fields safely; the primary UI SHALL emphasize the user's entered query.
+Each search session SHALL retain `original_user_query` and `generation`. Each selected provider SHALL retain `provider_query`, `provider_query_origin`, and the provider-local market/geographic scope required to reproduce that search; allowed origins are `USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, and `FALLBACK`. Venezuela providers SHALL default to **Toda Venezuela** and MAY support narrower city/market scopes. This provenance SHALL answer what the user searched, what each provider received, what scope it used, and which generation produced the result without creating a generic geospatial subsystem. Diagnostics and exports MAY expose these fields safely; the primary UI SHALL emphasize the user's entered query.
 
 #### Scenario: Provider queries preserve original intent
 - **GIVEN** the user searches `baseball glove`
@@ -12,10 +12,10 @@ Each search session SHALL retain `original_user_query` and `generation`. Each se
 - **THEN** the session retains `baseball glove` as the original query
 - **AND** every selected provider records its actual query and origin
 
-#### Scenario: Provider-local scope is reproducible
-- **GIVEN** Facebook Venezuela runs for the current Caracas market scope
+#### Scenario: Default provider-local scope is reproducible
+- **GIVEN** Facebook Venezuela runs with its default Toda Venezuela scope
 - **WHEN** its result is committed
-- **THEN** the snapshot retains the original query, Facebook provider query and origin, Caracas/Venezuela scope, and generation
+- **THEN** the snapshot retains the original query, Facebook provider query and origin, Toda Venezuela scope, and generation
 
 ### Requirement: Query routing is marketplace-specific
 
@@ -64,24 +64,32 @@ The system SHALL reuse existing BERA translation/query-generation infrastructure
 - **THEN** Facebook and Mercado Libre may reuse it with `TRANSLATED`
 - **AND** at most one shared Venezuela-localized generation occurred
 
-### Requirement: Facebook Caracas scope uses an explicit deterministic policy
+### Requirement: Venezuela geographic scope is configurable and deterministic
 
-Facebook generic search SHALL use a normalized, explicit reviewed allowlist for Caracas metropolitan locations. It SHALL NOT accept all Venezuela, arbitrary fuzzy matches, or ambiguous standalone terms that may refer to other regions. Missing-location behavior SHALL remain compatible with current behavior unless evidence and rationale are first documented in the design.
+Venezuela generic search SHALL default to **Toda Venezuela** and MAY offer supported narrower city/market scopes such as Caracas. Toda Venezuela SHALL still require truthful Venezuela evidence and reject explicit foreign evidence. Narrower scopes SHALL use normalized explicit reviewed identifiers/aliases and SHALL NOT use arbitrary fuzzy matches or ambiguous standalone terms. Missing/insufficient geographic evidence SHALL fail closed under provider policy.
 
-#### Scenario: Explicit Caracas-area form is accepted
-- **GIVEN** a listing location normalizes to a reviewed unambiguous allowlist entry such as `Caracas, Distrito Capital` or a context-qualified municipality
+#### Scenario: Toda Venezuela is the default
+- **GIVEN** the user does not choose a narrower supported geographic scope
+- **WHEN** a Venezuela provider query is created
+- **THEN** its scope is Toda Venezuela
+
+#### Scenario: Truthful Venezuela evidence passes country scope
+- **GIVEN** Toda Venezuela is selected
+- **AND** a candidate has truthful Venezuela evidence without explicit foreign evidence
 - **WHEN** location policy evaluates it
-- **THEN** the location passes the Caracas-area check
-
-#### Scenario: Broad Venezuela location is not enough
-- **GIVEN** a listing says only that it is in Venezuela outside a reviewed Caracas-area form
-- **WHEN** location policy evaluates it
-- **THEN** it is rejected
+- **THEN** it is not rejected merely for being outside Caracas
 
 #### Scenario: Ambiguous standalone place is not fuzzy-matched
-- **GIVEN** a location contains an ambiguous token without required geographic context
+- **GIVEN** a narrower scope is selected
+- **AND** a location contains an ambiguous token without required geographic context
 - **WHEN** location policy evaluates it
 - **THEN** arbitrary similarity does not cause acceptance
+
+#### Scenario: Supported city scope uses reviewed aliases
+- **GIVEN** the user selects a supported city scope such as Caracas
+- **AND** a candidate has a reviewed unambiguous normalized location identifier for that scope
+- **WHEN** location policy evaluates it
+- **THEN** it passes the narrower scope check
 
 ### Requirement: Mercado Libre Venezuela provenance is not weakened
 
