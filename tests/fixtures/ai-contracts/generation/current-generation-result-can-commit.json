@@ -1,0 +1,38 @@
+{
+  "id": "current-generation-result-can-commit",
+  "description": "A ProviderRunResult owns the generation that produced it. A current-generation result may commit into the matching snapshot.",
+  "provider": "alibaba",
+  "implementation_stage": "A",
+  "runtime_check": "search_session_core",
+  "given": {
+    "intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["alibaba"],
+      "generation": 9
+    },
+    "policy": {
+      "alibaba": {
+        "maximum_internal_acquisitions": 1,
+        "maximum_acquisition_budget": 30,
+        "candidate_buffer_multiplier": 3
+      }
+    },
+    "steps": [{ "key": "step-1", "candidate_limit": 5 }],
+    "batches": {
+      "step-1": { "candidates": [{ "title": "one" }] }
+    }
+  },
+  "expected": {
+    "result_generation": 9,
+    "commit": "accepted"
+  },
+  "must_not": [
+    "commit through a separately supplied generation argument",
+    "mutate the previous immutable snapshot in place"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/design.md",
+    "openspec/changes/multi-market-search-semantics/specs/search-session-export-safety/spec.md"
+  ]
+}

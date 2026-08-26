@@ -1,0 +1,45 @@
+{
+  "id": "stale-generation-cannot-mutate-or-relabel",
+  "description": "A result produced for generation A cannot mutate a generation B snapshot and cannot be relabelled by a separate commit argument.",
+  "provider": "alibaba",
+  "implementation_stage": "A",
+  "runtime_check": "search_session_core",
+  "given": {
+    "stale_intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["alibaba"],
+      "generation": 1
+    },
+    "current_intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["alibaba"],
+      "generation": 2
+    },
+    "policy": {
+      "alibaba": {
+        "maximum_internal_acquisitions": 1,
+        "maximum_acquisition_budget": 30,
+        "candidate_buffer_multiplier": 3
+      }
+    },
+    "steps": [{ "key": "step-1", "candidate_limit": 5 }],
+    "batches": {
+      "step-1": { "candidates": [{ "title": "from-generation-a" }] }
+    }
+  },
+  "expected": {
+    "stale_result_generation": 1,
+    "commit_into_current": "ignored",
+    "snapshot_mutated": false
+  },
+  "must_not": [
+    "relabel generation A as generation B through a separate commit argument",
+    "mutate the current snapshot with stale provider data"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/design.md",
+    "openspec/changes/multi-market-search-semantics/specs/search-session-export-safety/spec.md"
+  ]
+}

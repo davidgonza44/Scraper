@@ -1,0 +1,51 @@
+{
+  "id": "stable-provider-identity-deduplicates",
+  "description": "When a truthful stable provider identity exists, later duplicates are removed and the first representation is kept.",
+  "provider": "alibaba",
+  "implementation_stage": "A",
+  "runtime_check": "search_session_core",
+  "given": {
+    "intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["alibaba"],
+      "generation": 7
+    },
+    "policy": {
+      "alibaba": {
+        "maximum_internal_acquisitions": 2,
+        "maximum_acquisition_budget": 30,
+        "candidate_buffer_multiplier": 4
+      }
+    },
+    "steps": [
+      { "key": "step-1", "candidate_limit": 5 },
+      { "key": "step-2", "candidate_limit": 5 }
+    ],
+    "batches": {
+      "step-1": {
+        "candidates": [
+          { "title": "first representation", "identity": "item-1" }
+        ]
+      },
+      "step-2": {
+        "candidates": [
+          { "title": "duplicate representation", "identity": "item-1" }
+        ]
+      }
+    }
+  },
+  "expected": {
+    "status": "SUCCESS",
+    "ordered_titles": ["first representation"],
+    "usable": 1
+  },
+  "must_not": [
+    "keep both representations of the same stable identity",
+    "invent identity from title or image similarity"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "openspec/changes/multi-market-search-semantics/design.md"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "provider-run-result.schema.json",
+  "title": "ProviderRunResult",
+  "description": "One logical provider search outcome. The result owns generation; callers must not relabel a stale result by supplying a separate generation. Cross-field invariants requiring application validation: metrics.usable == len(ordered_usable_pool); metrics.displayed == len(canonical_session_results); canonical_session_results == ordered_usable_pool[:metrics.displayed]; SUCCESS requires usable >= 1; EMPTY requires usable == 0; ERROR requires empty pools, usable == 0, displayed == 0, and no fabricated geographic coverage.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "generation",
+    "status",
+    "ordered_usable_pool",
+    "canonical_session_results",
+    "metrics"
+  ],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": ["alibaba", "facebook", "mercadolibre"]
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": ["SUCCESS", "EMPTY", "ERROR"]
+    },
+    "ordered_usable_pool": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/candidate" }
+    },
+    "canonical_session_results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/candidate" },
+      "description": "Frozen displayed prefix of ordered_usable_pool."
+    },
+    "metrics": {
+      "$ref": "provider-run-metrics.schema.json"
+    },
+    "requested_geographic_scope": {
+      "type": ["string", "null"]
+    },
+    "effective_geographic_scope": {
+      "type": ["string", "null"]
+    },
+    "coverage_status": {
+      "type": ["string", "null"],
+      "enum": ["COMPLETE", "PARTIAL", null],
+      "description": "COMPLETE or PARTIAL when geographic coverage was established. null means not applicable or unavailable. ERROR must not invent COMPLETE or PARTIAL."
+    },
+    "failure": {
+      "type": ["string", "null"],
+      "description": "Sanitized failure copy for ERROR. Must not expose credentials, tokens, raw config, or stack traces."
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "description": "Synthetic provider-neutral candidate example. Optional marketplace fields stay absent rather than fabricated.",
+      "additionalProperties": true,
+      "properties": {
+        "title": { "type": "string" },
+        "identity": { "type": ["string", "null"] },
+        "image": { "type": ["string", "null"] },
+        "price": { "type": ["string", "null"] },
+        "usable": { "type": "boolean" }
+      }
+    }
+  }
+}

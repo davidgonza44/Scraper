@@ -1,0 +1,25 @@
+{
+  "id": "cross-market-native-id-equality-is-not-identity",
+  "description": "Native listing IDs occupy independent marketplace namespaces. Alibaba 123 and Facebook 123 do not establish exact-product identity.",
+  "provider": ["alibaba", "facebook"],
+  "implementation_stage": "B",
+  "runtime_check": null,
+  "given": {
+    "alibaba_native_id": "123",
+    "facebook_native_id": "123"
+  },
+  "expected": {
+    "cross_market_exact_identity": false,
+    "identity_confirmed": false,
+    "implemented": false
+  },
+  "must_not": [
+    "authorize exact-product workflows",
+    "authorize landed cost, negotiation, tracking, or price history",
+    "treat string equality across marketplace namespaces as identity"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/positional-market-comparison/spec.md",
+    "openspec/changes/multi-market-search-semantics/design.md"
+  ]
+}

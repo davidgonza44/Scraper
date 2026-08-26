@@ -1,0 +1,50 @@
+{
+  "id": "geographic-complete-coverage",
+  "description": "Provider-neutral COMPLETE coverage: every required planned step succeeds. This is not a Facebook Venezuela partition catalog.",
+  "provider": "facebook",
+  "implementation_stage": "A",
+  "runtime_check": "search_session_core",
+  "given": {
+    "intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["facebook"],
+      "generation": 7,
+      "requested_geographic_scopes": [
+        { "provider": "facebook", "scope": "Toda Venezuela" }
+      ]
+    },
+    "policy": {
+      "facebook": {
+        "maximum_internal_acquisitions": 2,
+        "maximum_acquisition_budget": 30,
+        "candidate_buffer_multiplier": 4
+      }
+    },
+    "scope": "Toda Venezuela",
+    "steps": [
+      { "key": "step-1", "candidate_limit": 5, "required_for_complete_coverage": true },
+      { "key": "step-2", "candidate_limit": 5, "required_for_complete_coverage": true }
+    ],
+    "batches": {
+      "step-1": { "candidates": [{ "title": "one", "identity": "1" }] },
+      "step-2": { "candidates": [{ "title": "two", "identity": "2" }] }
+    }
+  },
+  "expected": {
+    "status": "SUCCESS",
+    "coverage_status": "COMPLETE",
+    "effective_geographic_scope": "Toda Venezuela",
+    "has_incidents": false
+  },
+  "must_not": [
+    "implement a Facebook nationwide partition catalog",
+    "treat early city partitions as Toda Venezuela",
+    "invent coverage when no required step completed"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/marketplace-query-routing/spec.md",
+    "openspec/changes/multi-market-search-semantics/design.md",
+    "openspec/changes/multi-market-search-semantics/tasks.md"
+  ]
+}

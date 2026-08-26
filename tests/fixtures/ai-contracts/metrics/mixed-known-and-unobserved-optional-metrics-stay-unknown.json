@@ -1,0 +1,62 @@
+{
+  "id": "mixed-known-and-unobserved-optional-metrics-stay-unknown",
+  "description": "If one executed internal acquisition has known optional metrics and a later executed acquisition fails before those stages are observed, the aggregate optional metrics remain unknown.",
+  "provider": "facebook",
+  "implementation_stage": "A",
+  "runtime_check": null,
+  "given": {
+    "intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["facebook"],
+      "generation": 7,
+      "requested_geographic_scopes": [
+        { "provider": "facebook", "scope": "Toda Venezuela" }
+      ]
+    },
+    "policy": {
+      "facebook": {
+        "maximum_internal_acquisitions": 2,
+        "maximum_acquisition_budget": 30,
+        "candidate_buffer_multiplier": 4
+      }
+    },
+    "scope": "Toda Venezuela",
+    "steps": [
+      { "key": "step-1", "candidate_limit": 5 },
+      { "key": "step-2", "candidate_limit": 5 }
+    ],
+    "batches": {
+      "step-1": {
+        "candidates": [{ "title": "one", "identity": "1" }],
+        "fetched": 1,
+        "mapped": 1,
+        "rejected": 0
+      },
+      "step-2": { "error": "failed before optional metrics were observed" }
+    }
+  },
+  "expected": {
+    "status": "SUCCESS",
+    "coverage_status": "PARTIAL",
+    "metrics": {
+      "display_requested": 3,
+      "acquisition_budget": 12,
+      "acquisition_requested": 10,
+      "fetched": null,
+      "mapped": null,
+      "rejected": null,
+      "usable": 1,
+      "displayed": 1
+    }
+  },
+  "must_not": [
+    "sum known fetched with an assumed zero for the failed step",
+    "report aggregate fetched as 1 when a later executed step is unobservable",
+    "fabricate optional pipeline counts"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md",
+    "openspec/changes/multi-market-search-semantics/design.md"
+  ]
+}

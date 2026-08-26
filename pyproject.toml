@@ -29,6 +29,7 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.9",
     "mutmut>=3.7,<4",
+    "jsonschema>=4.23,<5",
 ]
 
 [project.scripts]
@@ -87,5 +88,5 @@ module = ["apify_client", "apify_client.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["reflex", "reflex.*"]
+module = ["jsonschema", "jsonschema.*", "referencing", "referencing.*"]
 ignore_missing_imports = true

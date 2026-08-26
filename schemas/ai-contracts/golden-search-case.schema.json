@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "golden-search-case.schema.json",
+  "title": "GoldenSearchCase",
+  "description": "Golden example of multi-market search semantics. Fixtures illustrate OpenSpec; they are not a competing source of truth. implementation_stage A-E marks staged work. Later-stage fixtures describe expected semantics and must not be treated as implemented.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "description",
+    "implementation_stage",
+    "given",
+    "expected",
+    "must_not",
+    "source_refs"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "description": "Stable unique fixture id."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["alibaba", "facebook", "mercadolibre"]
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["alibaba", "facebook", "mercadolibre"]
+          }
+        }
+      ]
+    },
+    "implementation_stage": {
+      "type": "string",
+      "enum": ["A", "B", "C", "D", "E"],
+      "description": "OpenSpec implementation PR that owns this semantic. A is the search-session core. B-E remain unimplemented until their PRs land."
+    },
+    "runtime_check": {
+      "type": ["string", "null"],
+      "enum": [
+        "alibaba_mapper",
+        "facebook_priced_only",
+        "mercadolibre_mapper",
+        "search_session_core",
+        null
+      ],
+      "description": "Optional current-code check. search_session_core is skipped until Implementation PR A is present."
+    },
+    "given": {
+      "type": "object"
+    },
+    "expected": {
+      "type": "object"
+    },
+    "must_not": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "source_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Repository-relative path to an authoritative specification or architecture file."
+      }
+    }
+  }
+}

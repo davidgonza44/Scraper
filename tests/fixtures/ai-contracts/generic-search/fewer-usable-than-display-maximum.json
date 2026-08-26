@@ -1,0 +1,53 @@
+{
+  "id": "fewer-usable-than-display-maximum",
+  "description": "display_limit is a ceiling. Two usable candidates with display_limit 3 yield displayed 2.",
+  "provider": "alibaba",
+  "implementation_stage": "A",
+  "runtime_check": "search_session_core",
+  "given": {
+    "intent": {
+      "original_user_query": "baseball glove",
+      "display_limit": 3,
+      "selected_providers": ["alibaba"],
+      "generation": 7
+    },
+    "policy": {
+      "alibaba": {
+        "maximum_internal_acquisitions": 1,
+        "maximum_acquisition_budget": 30,
+        "candidate_buffer_multiplier": 3
+      }
+    },
+    "steps": [{ "key": "step-1", "candidate_limit": 5 }],
+    "batches": {
+      "step-1": {
+        "candidates": [
+          { "title": "first-usable" },
+          { "title": "second-usable" }
+        ]
+      }
+    }
+  },
+  "expected": {
+    "status": "SUCCESS",
+    "metrics": {
+      "display_requested": 3,
+      "acquisition_budget": 9,
+      "acquisition_requested": 5,
+      "fetched": 2,
+      "mapped": 2,
+      "rejected": 0,
+      "usable": 2,
+      "displayed": 2
+    },
+    "canonical_titles": ["first-usable", "second-usable"]
+  },
+  "must_not": [
+    "fabricate a third listing",
+    "duplicate the first or second listing to fill display_limit",
+    "treat displayed as always equal to display_limit"
+  ],
+  "source_refs": [
+    "openspec/changes/multi-market-search-semantics/specs/bounded-provider-search/spec.md"
+  ]
+}
