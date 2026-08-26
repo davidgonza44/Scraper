@@ -4,7 +4,7 @@
 
 ### Requirement: Generic comparison aligns canonical candidates by position
 
-Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position in each provider's canonical BERA ordering. The ordering and canonical session prefix SHALL freeze when `ProviderRunResult` is committed to the current-generation session snapshot. Row count SHALL equal the maximum displayed candidate count among selected providers. Missing cells SHALL remain empty; candidates SHALL NOT be duplicated to fill cells.
+Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position in each provider's canonical order: genuine provider-native nationwide order when available, otherwise the documented deterministic BERA aggregate provider ordering after stable-identity deduplication. The ordering and canonical session prefix SHALL freeze when `ProviderRunResult` is committed to the current-generation session snapshot. Row count SHALL equal the maximum displayed candidate count among selected providers. Missing cells SHALL remain empty; candidates SHALL NOT be duplicated to fill cells.
 
 Generic comparison SHALL be purely positional. Cross-market similarity, relatedness, equivalence, compatibility, category, title, or image comparisons SHALL NOT filter, discard, promote, demote, reorder, or replace valid candidates in any provider list. Any future identical-product/high-confidence matching flow SHALL be separate from generic search and SHALL NOT mutate its provider lists.
 
@@ -82,7 +82,7 @@ Generic summary cards SHALL derive counts from the frozen canonical session resu
 
 ### Requirement: Ordering and opportunity remain marketplace-specific
 
-Position N SHALL mean position N in that provider's existing canonical ordering: Alibaba's existing ranking/opportunity/relevance behavior, Facebook's existing deterministic relevance/result behavior, and Mercado Libre's existing deterministic result/relevance behavior. The system SHALL NOT synthesize a global cross-market rank or opportunity score. Alibaba opportunity MAY render only with the Alibaba candidate that owns it.
+Position N SHALL mean position N in that provider's documented canonical aggregate ordering: Alibaba's existing ranking/opportunity/relevance behavior, Facebook's existing deterministic result behavior, and Mercado Libre's existing deterministic result/relevance behavior, adapted deterministically when multiple internal acquisitions are required. Relevance may order but SHALL NOT act as a generic-search validity threshold. The system SHALL NOT synthesize a global cross-market rank or opportunity score. Alibaba opportunity MAY render only with the Alibaba candidate that owns it.
 
 #### Scenario: Row without Alibaba has no Alibaba opportunity
 - **GIVEN** a positional row contains only Facebook and Mercado Libre candidates

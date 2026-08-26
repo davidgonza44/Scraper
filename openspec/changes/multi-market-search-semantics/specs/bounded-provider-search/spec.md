@@ -4,7 +4,7 @@
 
 ### Requirement: Display limits represent per-provider visible maxima
 
-The system SHALL interpret each supported positive UI value, including 10, as `display_limit`, the maximum usable listings displayed for each selected marketplace. The control SHALL be labelled **Máximo por plataforma** or equivalent copy that communicates a maximum. It SHALL NOT treat this value as a raw acquisition count or a guaranteed count, and SHALL NOT fabricate or duplicate listings when fewer usable listings exist.
+The system SHALL interpret each supported positive UI value, including 10, as `display_limit`, the maximum usable listings displayed for each selected marketplace. A centralized finite `MAX_DISPLAY_LIMIT >= 10` SHALL reject unsupported, non-positive, or excessive values so the UI/API cannot request unbounded output. The control SHALL be labelled **Máximo por plataforma** or equivalent copy that communicates a maximum. It SHALL NOT treat this value as a raw acquisition count or a guaranteed count, and SHALL NOT fabricate or duplicate listings when fewer usable listings exist.
 
 #### Scenario: Fewer usable listings than requested
 - **GIVEN** `display_limit = 3`
@@ -12,6 +12,12 @@ The system SHALL interpret each supported positive UI value, including 10, as `d
 - **WHEN** the provider result is displayed
 - **THEN** `displayed = 2`
 - **AND** no listing is fabricated or duplicated
+
+#### Scenario: Display limit is centrally bounded
+- **GIVEN** a requested value exceeds `MAX_DISPLAY_LIMIT`
+- **WHEN** search intent is validated
+- **THEN** validation rejects the unsupported value before acquisition begins
+- **AND** no provider strategy receives an unbounded display request
 
 ### Requirement: Canonical session results are the frozen displayed prefix
 
@@ -29,7 +35,7 @@ The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated c
 
 ### Requirement: Acquisition limits are explicit, centralized, and bounded
 
-The system SHALL represent aggregate `acquisition_limit` separately from `display_limit`. A centralized deterministic provider strategy SHALL scale the bounded acquisition budget from provider, requested display maximum, selected geographic scope, and provider hard caps; it SHALL support display values including 10 and request at least that many candidates when the provider supports it. The strategy MAY divide the budget into multiple bounded internal acquisitions. Alibaba's maximum 500 SHALL NOT be used as a normal pool. Exact functions/caps SHALL be documented in the design from implementation evidence before code implementation and remain centralized and deterministic.
+The system SHALL represent aggregate `acquisition_limit` separately from `display_limit`. A centralized deterministic provider strategy SHALL define and test finite `MAX_DISPLAY_LIMIT`, per-provider maximum internal acquisitions per logical search, and aggregate acquisition budget; it SHALL support display 10 and request at least that many candidates when supported. The strategy MAY divide the budget into bounded internal acquisitions and SHOULD stop early after enough unique valid candidates exist, subject to completing any documented bounded ordering requirement. On budget exhaustion it SHALL return fewer results. Alibaba's maximum 500 SHALL NOT be used as a normal pool. Exact initial values SHALL be documented from implementation evidence before code implementation.
 
 #### Scenario: Invalid first candidate within one pool
 - **GIVEN** `display_limit = 1`
@@ -44,6 +50,19 @@ The system SHALL represent aggregate `acquisition_limit` separately from `displa
 - **WHEN** a provider that supports at least ten candidates computes its bounded strategy
 - **THEN** aggregate `acquisition_requested >= 10`
 - **AND** at most the first ten ordered usable candidates become canonical session results
+
+#### Scenario: Acquisition stops early when filled
+- **GIVEN** a provider strategy has collected enough unique valid candidates to fill `display_limit`
+- **AND** no additional bounded acquisition is required to determine canonical aggregate order
+- **WHEN** the strategy evaluates its termination condition
+- **THEN** it performs no further internal acquisition
+
+#### Scenario: Bounded budget is exhausted before display limit
+- **GIVEN** the finite internal-acquisition or aggregate candidate budget is exhausted
+- **AND** fewer than `display_limit` unique valid candidates exist
+- **WHEN** the logical operation completes
+- **THEN** it returns the available candidates
+- **AND** it does not continue indefinitely or fabricate results
 
 ### Requirement: Generic search executes one logical operation per selected provider and generation
 
@@ -75,6 +94,19 @@ In generic **Búsquedas**, the orchestrator SHALL start exactly one logical prov
 - **THEN** they count as one logical provider search operation
 - **AND** they are not classified as retries
 - **AND** the strategy terminates at its documented bound
+
+#### Scenario: Nationwide partitions are deduplicated and ordered deterministically
+- **GIVEN** a nationwide provider search uses multiple geographic partitions
+- **WHEN** the provider constructs its usable pool
+- **THEN** candidates are deduplicated by documented stable provider identity
+- **AND** they are combined using the documented deterministic BERA aggregate provider ordering
+- **AND** partition concatenation is not represented as provider-native global rank
+
+#### Scenario: Duplicate across partitions appears once
+- **GIVEN** the same stable provider listing identity appears in two geographic partitions
+- **WHEN** aggregate ordering is constructed
+- **THEN** the listing appears exactly once
+- **AND** documented deterministic precedence selects the retained representation
 
 ### Requirement: Provider metrics are precise and unknown-safe
 
@@ -113,7 +145,7 @@ The system SHALL classify a completed logical provider operation with at least o
 
 ### Requirement: Provider-specific validation remains fail-closed
 
-Facebook generic search SHALL remain priced-only; Free/Gratis, zero/missing/invalid price, or an image without a valid price SHALL NOT become usable. Mercado Libre SHALL retain Venezuela evidence requirements and reject explicit foreign evidence. Monetary aggregation SHALL preserve `$` alone is not USD, no implicit FX, explicit compatible ISO USD for Alibaba, existing authorized Facebook normalization, and genuine compatible currency statistics for Mercado Libre.
+Generic search SHALL reject candidates only for documented deterministic provider-integrity/safety policy, such as malformed/unmappable records; missing required identity/title/URL; invalid/missing price where required; explicit foreign evidence under Venezuela scope; duplicate provider identity; or other existing justified provider-policy violations. It SHALL NOT reject for cross-market similarity, category/title similarity, price attractiveness, seller reputation, opportunity, or relevance threshold. Optional missing image, rating, reputation, or other non-required display metadata SHALL NOT reject an otherwise valid candidate. Facebook remains priced-only; Mercado Libre retains its MLV/Venezuela contract. Monetary rules remain fail-closed.
 
 #### Scenario: Facebook mixed acquisition pool
 - **GIVEN** the Facebook pool contains a Free/Gratis listing, an invalid-price listing, and a valid priced listing
@@ -129,6 +161,17 @@ Facebook generic search SHALL remain priced-only; Free/Gratis, zero/missing/inva
 - **THEN** the first record is rejected
 - **AND** the later record may be displayed
 - **AND** only one logical provider search operation occurs
+
+#### Scenario: Optional image and rating are missing
+- **GIVEN** a candidate passes all required provider-integrity and safety policy
+- **AND** its optional image and rating are missing
+- **WHEN** validity is determined
+- **THEN** the candidate remains usable
+
+#### Scenario: Cross-market relevance cannot reject a provider result
+- **GIVEN** a valid provider candidate has low similarity or relevance to candidates from another marketplace
+- **WHEN** generic-search validity is determined
+- **THEN** it remains usable in its provider's canonical order
 
 ### Requirement: External-call budgets are enforced by implementation and tests
 

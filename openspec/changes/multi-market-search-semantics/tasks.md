@@ -4,24 +4,24 @@
 
 ## Implementation PR A — Search intent, snapshot, acquisition, metrics, and status
 
-- [ ] A.1 Introduce `SearchIntent`/equivalent with canonical `original_user_query`, selected providers, provider-local market/geographic scopes, generation, and a validated positive configurable `display_limit` supporting values such as 10; label the control **Máximo por plataforma**.
-- [ ] A.2 Introduce explicit aggregate `acquisition_limit` and a centralized deterministic scaling strategy by provider, display limit, scope, and hard caps. Support display 10, document bounded internal-acquisition cost/termination, and prohibit Alibaba 500 as a routine pool.
+- [ ] A.1 Introduce `SearchIntent`/equivalent with canonical `original_user_query`, selected providers, provider-local market/geographic scopes, generation, and a supported positive `display_limit` constrained by centralized finite `MAX_DISPLAY_LIMIT >= 10`; label the control **Máximo por plataforma**.
+- [ ] A.2 Centralize/test finite `MAX_DISPLAY_LIMIT`, per-provider maximum internal acquisitions per logical search, aggregate acquisition budgets, and deterministic scaling by provider/display/scope/hard caps. Document early termination and budget exhaustion; prohibit Alibaba 500 as a routine pool.
 - [ ] A.3 Define the pure pipeline: acquired → mapped/policy-evaluated → ordered usable pool → frozen canonical session prefix → presentation projections. Verify `usable` counts the pool while `displayed` and canonical membership count only its `display_limit` prefix.
 - [ ] A.4 Evolve/consolidate existing `ProviderAcquisitionMetrics` and provider-specific acquisition metrics into one `ProviderRunMetrics` contract with aggregate internal-acquisition requested/fetched values, documented deduplication boundaries, and optional unknown-safe mapped/rejected values; do not maintain parallel sources of truth or impose arithmetic identities.
 - [ ] A.5 Define one logical generic **Búsquedas** operation per selected provider per generation. Permit deterministic bounded provider-internal Actor/API acquisitions for pagination, partitioning, or geographic coverage; prevent an orchestrator-started second logical operation for refill. Preserve unrelated workflow semantics.
 - [ ] A.6 Derive `SUCCESS`, `EMPTY`, and `ERROR` from execution and ordered usable-pool outcome. Treat selected-but-unconfigured providers as sanitized `ERROR`, never `EMPTY`.
 - [ ] A.7 Keep deterministic rules in small pure application/GUI modules where practical; use `TrackerState` for orchestration, generation checks, and serialization rather than as a new domain/service layer.
-- [ ] A.8 Add offline tests for display 1 with an invalid first/later valid candidate; display 3 with only 2 usable; single-market parity; display 10 and provider caps; missing configuration; no second logical refill operation; bounded multi-acquisition scope coverage; and acquisition 10 / usable 8 / canonical display 3.
+- [ ] A.8 Add offline tests for MAX validation, display 10, early termination after enough unique valid candidates, budget exhaustion returning fewer results, missing configuration, no second logical refill operation, bounded nationwide multi-acquisition, duplicate identity across partitions, and acquisition 10 / usable 8 / canonical display 3.
 
 ## Implementation PR B — Positional comparison and exact-identity isolation
 
 - [ ] B.1 Introduce `SearchPositionComparisonRow` with one-based rank, optional provider candidates, and immutable `identity_confirmed = false`; keep it structurally separate from exact-product contexts.
-- [ ] B.2 Freeze provider ordering when `ProviderRunResult` commits to the current-generation snapshot; build generic rows only from frozen canonical prefixes, with maximum displayed row count, empty cells, and no duplicate/fill behavior.
+- [ ] B.2 For genuine nationwide searches preserve provider-native ordering; for partitioned/multi-acquisition searches document stable identity, deduplication precedence, aggregation keys, tie breakers, and deterministic BERA aggregate provider ordering. Freeze that order when `ProviderRunResult` commits.
 - [ ] B.3 Ensure presentation sorting/filtering/ranking presets cannot change generic `Resultado #N`, totals, export membership, status, or snapshot; specialized views may independently project the frozen data.
 - [ ] B.4 Add concise non-identity disclosure, preserve provider-specific ordering, and isolate Alibaba opportunity to Alibaba candidates without a global score.
 - [ ] B.5 Audit exact/provenance workflows so position cannot authorize landed cost, negotiation, profitability, tracking, refresh, history, persistence, or association; retain two non-empty exactly equal product IDs.
 - [ ] B.6 Preserve marketplace-owned images and genuine provider-specific rating rules without cross-market copying.
-- [ ] B.7 Add offline tests for uneven 3/2/1 rows, position-not-identity, landed-cost isolation, canonical result hidden by presentation filtering, total sum semantics, and presentation sorting that cannot change `Resultado #1`, and unrelated-looking first results retained without cross-market filtering.
+- [ ] B.7 Add offline tests for uneven 3/2/1, position-not-identity, native nationwide ordering, deterministic partition aggregation, presentation sorting that cannot change `Resultado #1`, unrelated-looking results retained, optional missing image/rating retained, and no cross-market relevance threshold.
 
 ## Implementation PR C — Provider instrumentation and compact diagnostics
 
@@ -38,8 +38,8 @@
 - [ ] D.2 Route Alibaba to the original query or an independently derived safe international query; never reuse the Venezuela-localized query silently.
 - [ ] D.3 Reuse existing query-generation/translation infrastructure with no language-detection AI or second subsystem, at most one shared Venezuela-localized generation, the deterministic outcome table in `design.md`, and no translation loop.
 - [ ] D.4 Add offline translator fakes for no-translation-needed, unavailable, timeout/failure, empty/invalid, technical-token validation failure, output-identical-to-original, and successful shared Venezuela translation; prove DeepL call count is zero.
-- [ ] D.5 Implement **Toda Venezuela** as the default provider scope with truthful Venezuela evidence. Review fixtures and record supported narrower scopes/aliases before implementing them; use exact normalized/context-qualified membership and reject fuzzy matches, ambiguous tokens, foreign evidence, and insufficient evidence.
-- [ ] D.6 Add query/market/generation provenance tests for default Toda Venezuela, outside-Caracas Venezuelan results, supported city scope, foreign evidence, ambiguity, normalization, and missing evidence.
+- [ ] D.5 Implement **Toda Venezuela** as default. For Facebook, document when trustworthy acquisition/partition provenance establishes scope without listing-level location; always reject explicit foreign evidence. Preserve Mercado Libre's MLV/Venezuela evidence. Review narrower scopes/aliases and prohibit fuzzy/ambiguous matching.
+- [ ] D.6 Add provenance tests for default Toda Venezuela, outside-Caracas results, Facebook missing location with trustworthy acquisition provenance, explicit foreign evidence, supported city scope, ambiguity, normalization, and unchanged MLV evidence.
 
 ## Implementation PR E — Currency, export, lifecycle, and browser compatibility gate
 

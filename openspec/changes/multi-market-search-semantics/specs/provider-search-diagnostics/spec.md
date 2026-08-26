@@ -28,7 +28,7 @@ The production UI SHALL offer **Ver detalles** for useful `EMPTY`, `ERROR`, reje
 
 ### Requirement: Facebook diagnostics retain truthful rejection reasons
 
-Where measurable, Facebook SHALL aggregate Free/Gratis, invalid price, missing ID, duplicate ID, rejected location, missing title, and malformed URL/other policy rejection reasons. Counters SHALL reflect actual policy decisions and SHALL NOT expose raw provider payloads.
+Where measurable, Facebook SHALL aggregate Free/Gratis, invalid price, missing ID, duplicate ID, rejected geographic scope, missing title, and malformed URL/other policy rejection reasons. Geographic rejection SHALL follow the documented scope-evidence contract: trustworthy acquisition/partition provenance may suffice when listing location is absent, while explicit foreign evidence rejects. Counters SHALL reflect actual policy decisions and SHALL NOT expose raw provider payloads.
 
 #### Scenario: Image does not bypass invalid price
 - **GIVEN** a Facebook record has an image and an invalid price

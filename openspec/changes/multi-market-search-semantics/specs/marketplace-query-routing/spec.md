@@ -66,7 +66,7 @@ The system SHALL reuse existing BERA translation/query-generation infrastructure
 
 ### Requirement: Venezuela geographic scope is configurable and deterministic
 
-Venezuela generic search SHALL default to **Toda Venezuela** and MAY offer supported narrower city/market scopes such as Caracas. Toda Venezuela SHALL still require truthful Venezuela evidence and reject explicit foreign evidence. Narrower scopes SHALL use normalized explicit reviewed identifiers/aliases and SHALL NOT use arbitrary fuzzy matches or ambiguous standalone terms. Missing/insufficient geographic evidence SHALL fail closed under provider policy.
+Venezuela generic search SHALL default to **Toda Venezuela** and MAY offer supported narrower city/market scopes such as Caracas. For Facebook, trustworthy acquisition provenance from the selected provider search/partition MAY establish Venezuela or narrower scope without a listing-level location string, unless the documented existing provider contract requires that field. Explicit foreign evidence SHALL always reject the candidate. Narrower scopes SHALL use trustworthy partition provenance or normalized explicit reviewed identifiers/aliases and SHALL NOT use arbitrary fuzzy matches or ambiguous standalone terms. Mercado Libre's existing MLV/Venezuela evidence contract SHALL NOT be weakened.
 
 #### Scenario: Toda Venezuela is the default
 - **GIVEN** the user does not choose a narrower supported geographic scope
@@ -90,6 +90,18 @@ Venezuela generic search SHALL default to **Toda Venezuela** and MAY offer suppo
 - **AND** a candidate has a reviewed unambiguous normalized location identifier for that scope
 - **WHEN** location policy evaluates it
 - **THEN** it passes the narrower scope check
+
+#### Scenario: Facebook missing location uses trustworthy acquisition provenance
+- **GIVEN** a Facebook listing has no listing-level location string
+- **AND** trustworthy acquisition provenance establishes that it came from the selected Venezuela search/partition
+- **WHEN** the documented Facebook provider contract evaluates scope
+- **THEN** missing optional location alone does not reject it unless that contract genuinely requires listing-level location
+
+#### Scenario: Explicit foreign evidence still rejects Facebook candidate
+- **GIVEN** Facebook acquisition provenance indicates Venezuela
+- **AND** the candidate contains explicit foreign-market evidence
+- **WHEN** provider-integrity policy evaluates it
+- **THEN** the candidate is rejected
 
 ### Requirement: Mercado Libre Venezuela provenance is not weakened
 
