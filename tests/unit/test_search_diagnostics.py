@@ -118,6 +118,19 @@ def test_empty_alibaba_card_exposes_requested_fetched_usable() -> None:
     assert values["Válidos"] == "0"
 
 
+def test_diagnostic_usable_fallback_ignores_view_filters() -> None:
+    state = TrackerState()
+    state.apply_complete_search_fixture()
+    state.alibaba_summary.pop("usable")
+    state.alibaba_price_min = "999"
+    assert state.alibaba_visible_rows == []
+    alibaba = next(
+        card for card in state.marketplace_summaries if card.platform_id == PLATFORM_ALIBABA
+    )
+    values = {line.label: line.value for line in alibaba.diagnostic_lines}
+    assert values["Válidos"] == "1"
+
+
 def test_attach_diagnostics_keeps_error_distinct_from_empty() -> None:
     cards = search_diagnostics.attach_diagnostics(
         [

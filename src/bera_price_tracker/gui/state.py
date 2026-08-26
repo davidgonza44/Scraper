@@ -3163,7 +3163,7 @@ class TrackerState(rx.State):
                     ui_status=self.alibaba_ui_status,
                     summary=self.alibaba_summary,
                     requested_limit=self.search_limit,
-                    usable_rows=len(self.alibaba_visible_rows),
+                    usable_rows=len(self.alibaba_results),
                     error=self.alibaba_error,
                 ),
                 search_diagnostics.facebook_diagnostic(
@@ -3177,7 +3177,7 @@ class TrackerState(rx.State):
                     ui_status=self.ml_ui_status,
                     summary=self._ml_diagnostic_summary(),
                     requested_limit=self.search_limit,
-                    usable_rows=len(self.ml_visible_rows),
+                    usable_rows=len(self.ml_results),
                     error=self.ml_error,
                 ),
             ],
@@ -3216,11 +3216,11 @@ class TrackerState(rx.State):
     def current_export_listing_count(self) -> int:
         count = 0
         if self.alibaba_ui_status == UI_SUCCESS:
-            count += len(self.alibaba_visible_rows)
+            count += len(self.alibaba_results)
         if self.facebook_product_ui_status == UI_SUCCESS:
             count += len(self.facebook_product_results)
         if self.ml_ui_status == UI_SUCCESS:
-            count += len(self.ml_visible_rows)
+            count += len(self.ml_results)
         return count
 
     @rx.var
@@ -3252,7 +3252,7 @@ class TrackerState(rx.State):
             ui_status=self.alibaba_ui_status,
             summary=self.alibaba_summary,
             requested_limit=self.search_limit,
-            usable_rows=len(self.alibaba_visible_rows),
+            usable_rows=len(self.alibaba_results),
             error=self.alibaba_error,
         )
         facebook_diag = search_diagnostics.facebook_diagnostic(
@@ -3266,7 +3266,7 @@ class TrackerState(rx.State):
             ui_status=self.ml_ui_status,
             summary=self._ml_diagnostic_summary(),
             requested_limit=self.search_limit,
-            usable_rows=len(self.ml_visible_rows),
+            usable_rows=len(self.ml_results),
             error=self.ml_error,
         )
         rows = search_export.listing_rows_for_export(
@@ -3275,13 +3275,13 @@ class TrackerState(rx.State):
             search_mode=self.search_mode_label,
             requested_limit=self.search_limit,
             alibaba_status=self.alibaba_ui_status,
-            alibaba_rows=self.alibaba_visible_rows,
+            alibaba_rows=self.alibaba_results,
             alibaba_diagnostic=alibaba_diag,
             facebook_status=self.facebook_product_ui_status,
             facebook_rows=self.facebook_product_results,
             facebook_diagnostic=facebook_diag,
             ml_status=self.ml_ui_status,
-            ml_rows=self.ml_visible_rows,
+            ml_rows=self.ml_results,
             ml_diagnostic=ml_diag,
         )
         if not rows:

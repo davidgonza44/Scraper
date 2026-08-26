@@ -9,6 +9,7 @@ from typing import Protocol, cast
 from urllib.parse import urlsplit
 
 from bera_price_tracker.application import MarketplaceSourceUnavailable
+from bera_price_tracker.application.alibaba_reputation import parse_rating_0_5, parse_review_count
 from bera_price_tracker.application.provider_acquisition import ProviderAcquisitionMetrics
 from bera_price_tracker.application.services import validate_mercadolibre_search
 from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
@@ -163,15 +164,22 @@ def _nested_text(record: Mapping[str, object], parent: str, child: str) -> str |
     return _scalar_text(record.get(f"{parent}.{child}"))
 
 
-def _rating_text(value: object) -> str | None:
-    if isinstance(value, bool):
+def _decimal_text(value: Decimal | None) -> str | None:
+    if value is None:
         return None
-    if isinstance(value, float):
-        if value != value or value < 0:
-            return None
-        text = f"{value:.2f}".rstrip("0").rstrip(".")
-        return text or None
-    return _scalar_text(value)
+    return format(value, "f")
+
+
+def _rating_text(value: object) -> str | None:
+    """Return only a finite, genuine product rating on the 0–5 scale."""
+
+    return _decimal_text(parse_rating_0_5(value))
+
+
+def _review_count_text(value: object) -> str | None:
+    """Return only a finite, non-negative numeric review count."""
+
+    return _decimal_text(parse_review_count(value))
 
 
 def _seller_mapping(record: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -292,7 +300,7 @@ def map_mercadolibre_item(raw: object) -> MercadoLibreListing | None:
         seller_status=None if seller is None else _seller_status_text(seller),
         official_store=official_store,
         rating_average=_rating_text(record.get("ratingAverage", record.get("rating_average"))),
-        review_count=_scalar_text(record.get("reviewCount") or record.get("review_count")),
+        review_count=_review_count_text(record.get("reviewCount", record.get("review_count"))),
         free_shipping=free_shipping,
         country=country,
         site_id=site_id,

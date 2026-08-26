@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
-from bera_price_tracker.gui import comparison, search_session
+from bera_price_tracker.gui import comparison, search_export, search_session
 from bera_price_tracker.gui.services import alibaba_product_to_row, mercadolibre_listing_to_row
 from bera_price_tracker.gui.state import (
     UI_SUCCESS,
@@ -43,6 +43,7 @@ def test_supplier_service_score_does_not_become_product_stars() -> None:
     assert row["alibaba_rating_label"] == "Sin calificación"
     assert "Servicio: 4.9" in str(row["alibaba_trust_line"])
     assert "Gold Supplier: 6 años" in str(row["alibaba_trust_line"])
+    assert "Acme" not in str(row["alibaba_trust_line"])
 
 
 def test_bera_reputation_score_does_not_become_stars() -> None:
@@ -131,7 +132,67 @@ def test_mercadolibre_rating_average_becomes_product_stars() -> None:
     assert "742 reseñas" in str(cell["ml_rating_label"])
     assert cell["ml_rating_caption"] == "Calificación del producto"
     assert "Reputación: green_power" in str(cell["ml_trust_line"])
+    assert "TIENDA_VE" not in str(cell["ml_trust_line"])
     assert "★" not in str(cell["ml_trust_line"])
+
+
+def test_mercadolibre_rating_is_validated_at_mapping_boundary() -> None:
+    base = {
+        "id": "MLV123",
+        "title": "Bate ML",
+        "siteId": "MLV",
+    }
+    for invalid in (
+        "",
+        None,
+        float("nan"),
+        float("inf"),
+        -1,
+        "-1",
+        5.1,
+        "5.1",
+        90,
+        "90",
+        "green_power",
+    ):
+        mapped = map_mercadolibre_item({**base, "ratingAverage": invalid})
+        assert mapped is not None
+        assert mapped.rating_average is None
+        rows = search_export.listing_rows_for_export(
+            search_query="bate",
+            searched_at="2026-08-25",
+            search_mode="Una plataforma",
+            requested_limit=1,
+            alibaba_status="EMPTY",
+            facebook_status="EMPTY",
+            ml_status=UI_SUCCESS,
+            ml_rows=[
+                mercadolibre_listing_to_row(
+                    SimpleNamespace(
+                        listing=mapped,
+                        relevance_score=0,
+                        relevance=SimpleNamespace(matched_tokens=0, total_query_tokens=0),
+                    )
+                )
+            ],
+        )
+        assert rows[0]["product_rating"] == ""
+
+    for valid, expected in ((4.8, "4.8"), ("4.8", "4.8"), (5, "5"), ("5", "5")):
+        mapped = map_mercadolibre_item({**base, "ratingAverage": valid})
+        assert mapped is not None
+        assert mapped.rating_average == expected
+
+
+def test_mercadolibre_review_count_is_non_negative_numeric() -> None:
+    base = {"id": "MLV123", "title": "Bate ML", "siteId": "MLV"}
+    for invalid in ("", None, -1, "-1", float("nan"), float("inf"), "many"):
+        mapped = map_mercadolibre_item({**base, "reviewCount": invalid})
+        assert mapped is not None
+        assert mapped.review_count is None
+    mapped = map_mercadolibre_item({**base, "reviewCount": "742"})
+    assert mapped is not None
+    assert mapped.review_count == "742"
 
 
 def test_categorical_seller_reputation_does_not_become_stars() -> None:

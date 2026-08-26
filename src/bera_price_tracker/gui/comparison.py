@@ -138,8 +138,6 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
     gauge = opportunity_gauge(_int_attr(row, "score_value"), _attr(row, "score"))
     trust_parts: list[str] = []
     supplier = _attr(row, "supplier_name")
-    if supplier:
-        trust_parts.append(f"Proveedor: {supplier}")
     service = _attr(row, "supplier_service_score")
     if service:
         trust_parts.append(f"Servicio: {service}")
@@ -240,8 +238,6 @@ def _ml_cell(row: Any) -> dict[str, object]:
         _attr(row, "rating_average"), review_count=_attr(row, "review_count")
     )
     trust_parts: list[str] = []
-    if seller:
-        trust_parts.append(f"Vendedor: {seller}")
     reputation = _attr(row, "seller_reputation")
     if reputation:
         trust_parts.append(f"Reputación: {reputation}")

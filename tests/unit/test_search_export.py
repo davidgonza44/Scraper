@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import csv
 import io
+from typing import cast
+
+import pytest
 
 from bera_price_tracker.gui import search_export
 from bera_price_tracker.gui.state import (
@@ -37,7 +40,9 @@ def test_three_marketplace_listings_export_three_rows() -> None:
                 image_url="https://s.alicdn.com/a.jpg",
                 supplier_name="Supplier A",
                 review_score="4.8",
-                review_count="10",
+                review_count="128",
+                supplier_service_score="4.9",
+                gold_supplier_years="6",
                 score="72",
             )
         ],
@@ -80,6 +85,9 @@ def test_three_marketplace_listings_export_three_rows() -> None:
     assert by_market["Mercado Libre"]["product_rating"] == "4.8"
     assert by_market["Facebook Marketplace"]["product_rating"] == ""
     assert by_market["Alibaba"]["seller_rating"] == ""
+    assert by_market["Alibaba"]["seller_service_score"] == "4.9"
+    assert by_market["Alibaba"]["gold_supplier_years"] == "6"
+    assert by_market["Alibaba"]["product_review_count"] == "128"
     assert by_market["Mercado Libre"]["seller_rating"] == ""
     assert by_market["Mercado Libre"]["seller_reputation"] == "MercadoLíder"
     payload = search_export.render_csv(rows)
@@ -212,3 +220,30 @@ def test_complete_fixture_enables_export_and_nueva_busqueda_disables() -> None:
     state.start_new_search()
     assert state.export_enabled is False
     assert state.current_export_listing_count() == 0
+
+
+def test_view_filters_do_not_remove_current_session_export_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = TrackerState()
+    state.apply_complete_search_fixture()
+    state.alibaba_results = [
+        AlibabaResultRow(title="A", price_raw="1", representative="1"),
+        AlibabaResultRow(title="B", price_raw="2", representative="2"),
+        AlibabaResultRow(title="C", price_raw="3", representative="3"),
+    ]
+    state.alibaba_price_min = "2"
+    state.alibaba_price_max = "2"
+    assert [row.title for row in state.alibaba_visible_rows] == ["B"]
+    assert state.current_export_listing_count() == 5
+
+    captured: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> list[dict[str, str]]:
+        captured.update(kwargs)
+        return [{column: "" for column in search_export.CSV_COLUMNS}]
+
+    monkeypatch.setattr(search_export, "listing_rows_for_export", capture)
+    assert state.export_current_search() is not None
+    exported = cast(list[AlibabaResultRow], captured["alibaba_rows"])
+    assert [row.title for row in exported] == ["A", "B", "C"]
