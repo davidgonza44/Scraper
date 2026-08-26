@@ -410,7 +410,7 @@ def test_structural_search_intent_schema_is_provider_neutral() -> None:
     _validator("search-intent.schema.json").validate(payload)
     intent = _intent(search_session, payload)
     assert intent.selected_providers == ("custom-provider",)
-    golden = {
+    golden: dict[str, Any] = {
         "id": "synthetic-custom-provider",
         "description": "GoldenSearchCase keeps BERA marketplace vocabulary.",
         "provider": "custom-provider",
