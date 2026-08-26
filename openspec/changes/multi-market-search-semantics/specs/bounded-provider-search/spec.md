@@ -35,7 +35,7 @@ The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated c
 
 ### Requirement: Acquisition limits are explicit, centralized, and bounded
 
-The system SHALL represent aggregate `acquisition_limit` separately from `display_limit`. A centralized deterministic provider strategy SHALL define and test finite `MAX_DISPLAY_LIMIT`, per-provider maximum internal acquisitions per logical search, and aggregate acquisition budget; it SHALL support display 10. The strategy MAY divide the budget into bounded internal acquisitions and SHOULD stop early after enough unique valid candidates exist only when canonical ordering and declared geographic coverage remain truthful. Explicit **Toda Venezuela** requires a genuine nationwide search or the complete finite configured nationwide partition set. On budget exhaustion it SHALL return fewer results and SHALL use partial/broad-scope copy if nationwide coverage was incomplete. Alibaba's maximum 500 SHALL NOT be used as a normal pool.
+The system SHALL separate finite aggregate `acquisition_budget` from `acquisition_requested`. Budget is the ceiling available to a strategy; `acquisition_requested` is the sum of candidate limits of internal acquisitions actually executed and excludes unused budget. Central policy defines finite display, internal-acquisition, and aggregate budgets. Strategies stop early only when ordering and coverage remain truthful; incomplete nationwide coverage becomes `PARTIAL`. On exhaustion they return fewer results. Alibaba 500 is not a normal pool.
 
 #### Scenario: Invalid first candidate within one pool
 - **GIVEN** `display_limit = 1`
@@ -64,6 +64,14 @@ The system SHALL represent aggregate `acquisition_limit` separately from `displa
 - **WHEN** the logical operation completes
 - **THEN** it returns the available candidates
 - **AND** it does not continue indefinitely or fabricate results
+
+#### Scenario: Actual requested work excludes unused budget
+- **GIVEN** `acquisition_budget = 30`
+- **AND** two internal acquisitions each request 5 candidates
+- **AND** the strategy safely terminates before using the remaining budget
+- **WHEN** metrics are finalized
+- **THEN** `acquisition_requested = 10`
+- **AND** Pedidos al proveedor reports 10, not 30
 
 ### Requirement: Generic search executes one logical operation per selected provider and generation
 
@@ -109,9 +117,16 @@ In generic **Búsquedas**, the orchestrator SHALL start exactly one logical prov
 - **THEN** the listing appears exactly once
 - **AND** documented deterministic precedence selects the retained representation
 
+#### Scenario: Similar identity-less Alibaba candidates remain distinct
+- **GIVEN** two valid Alibaba candidates lack a usable product ID and any other documented stable identity
+- **AND** their titles, images, or prices appear similar
+- **WHEN** the aggregate pool is constructed
+- **THEN** both candidates remain distinct and usable
+- **AND** no title, image, price, rank, or fuzzy identity is invented
+
 ### Requirement: Provider metrics are precise and unknown-safe
 
-The implementation SHALL evolve/consolidate existing `ProviderAcquisitionMetrics` and provider-specific metrics into one run contract exposing `display_requested`, aggregate `acquisition_requested` across internal acquisitions, optional aggregate `fetched`, optional `mapped`, optional `rejected`, `usable`, and `displayed` according to `design.md`, rather than maintain competing sources of truth. Every emitted counter SHALL document its measurement boundary, including deduplication across partitions/pages. No arithmetic identity between fetched, mapped, rejected, and usable is required. An unobservable metric SHALL be unknown and render **No disponible**, never zero solely because it cannot be observed. Provider-specific rejection counters SHALL remain optional truthful detail.
+The implementation SHALL evolve existing metrics into one contract exposing `display_requested`, finite `acquisition_budget`, actual `acquisition_requested`, optional aggregate `fetched`/`mapped`/`rejected`, `usable`, and `displayed`. Every boundary, including identity-aware deduplication, SHALL be documented. No arithmetic identity is required; unknown remains unknown. Provider-specific reasons remain optional truthful detail.
 
 #### Scenario: Unobservable fetched count
 - **GIVEN** an adapter cannot observe raw records received

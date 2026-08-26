@@ -4,7 +4,7 @@
 
 ### Requirement: Generic comparison aligns canonical candidates by position
 
-Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position. A genuine single acquisition MUST preserve provider acquisition/result order after required integrity validation and stable deduplication. Only multiple acquisitions lacking truthful global native order use documented deterministic BERA aggregate ordering. Alibaba opportunity/ranking/relevance, seller reputation, price sorting, and other BERA controls MUST NOT reorder frozen generic results. The order freezes when `ProviderRunResult` commits. Missing cells remain empty and candidates are never duplicated.
+Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position. A genuine single acquisition MUST preserve provider acquisition/result order after required integrity validation and deduplication only when truthful stable identity exists. Identity-less candidates remain distinct. Only multiple acquisitions lacking truthful global native order use documented deterministic BERA aggregate ordering. BERA controls MUST NOT reorder frozen generic results. Missing cells remain empty and candidates are never fabricated.
 
 Generic comparison SHALL be purely positional. Cross-market similarity, relatedness, equivalence, compatibility, category, title, or image comparisons SHALL NOT filter, discard, promote, demote, reorder, or replace valid candidates in any provider list. Any future identical-product/high-confidence matching flow SHALL be separate from generic search and SHALL NOT mutate its provider lists.
 

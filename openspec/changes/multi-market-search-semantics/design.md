@@ -18,10 +18,10 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 ## Architecture and data flow
 
 1. A new search generation creates `SearchIntent(original_user_query, display_limit, selected_providers, generation)`; `display_limit` is a supported positive value no greater than centralized finite `MAX_DISPLAY_LIMIT`, and the supported set explicitly includes 10.
-2. Query routing produces one `ProviderQuery` per selected provider with `provider_query`, `provider_query_origin` (`USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, or `FALLBACK`), and the truthful provider-local market/geographic scope needed to reproduce the request. **Toda Venezuela** is declared only after a genuine nationwide search or complete finite nationwide partition coverage; narrower or partial scopes are named accurately.
+2. Query routing produces one `ProviderQuery` per selected provider with query provenance and `requested_geographic_scope`. `ProviderRunResult` separately records truthful `effective_geographic_scope` and `coverage_status` (`COMPLETE` or `PARTIAL`).
 3. A centralized acquisition policy computes `acquisition_limit(provider, display_limit, geographic_scope)` and caps/bounds the aggregate provider strategy.
 4. The orchestrator starts one logical search operation for each selected provider. The provider strategy may perform multiple bounded internal acquisitions to cover scope, partitions, or pagination, but the orchestrator does not start a replacement logical operation when mapping or policy rejects candidates.
-5. Each adapter returns or is wrapped into a `ProviderRunResult` containing the deterministically deduplicated and ordered usable pool, consolidated metrics, safe rejection counters, query/market/generation provenance, and an execution outcome.
+5. Each adapter returns or is wrapped into a `ProviderRunResult` containing the deterministically ordered usable pool, with deduplication only where truthful stable identity exists, plus consolidated metrics, coverage, provenance, and execution outcome.
 6. The pipeline is explicitly: acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. The acquisition buffer exists only to improve the chance of filling the display maximum; extra usable buffer candidates are not canonical session results.
 7. Generic comparison constructs positional rows. Exact-product workflows continue to use their separate identity-checked context.
 8. UI summaries, diagnostics, CSV export, and session status read the current generation's canonical session snapshot. Late results from older generations are discarded.
@@ -34,7 +34,7 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 - `display_limit`: supported positive maximum of usable listings displayed per selected provider, constrained by centralized finite `MAX_DISPLAY_LIMIT`; 10 is supported.
 - `selected_providers`: explicit provider set.
 - `generation`: stale-response guard identity.
-- provider-local market/geographic scopes sufficient to reproduce each provider request, without introducing a generic geospatial subsystem.
+- `requested_geographic_scope` per provider, sufficient to reproduce user intent without introducing a generic geospatial subsystem.
 
 The UI label is **Máximo por plataforma**. A display maximum is not a guarantee; the application returns fewer results when fewer usable candidates exist and never fabricates or duplicates candidates.
 
@@ -46,9 +46,9 @@ A provider strategy MAY split the aggregate acquisition budget across multiple b
 
 ### Canonical aggregate provider ordering
 
-For any genuine single provider acquisition, generic **Búsquedas** MUST preserve provider acquisition/result order after required provider-integrity validation and stable-identity deduplication. Alibaba opportunity, ranking, relevance, seller reputation, price sorting, and every other BERA ranking/presentation control are annotations or specialized-view projections and MUST NOT reorder this frozen generic canonical order. When coverage requires multiple acquisitions with no truthful provider-native global order, BERA SHALL deduplicate by stable provider identity and use a documented deterministic provider-specific aggregation algorithm. A duplicate observed in multiple partitions appears once.
+For any genuine single provider acquisition, generic **Búsquedas** MUST preserve provider acquisition/result order after required provider-integrity validation. When a truthful stable provider identity exists, BERA deduplicates on that documented key. It MUST NOT invent identity from title/image similarity, price, rank, or fuzzy matching. Valid Alibaba candidates lacking both usable product ID and another documented stable identity remain distinct and usable even when they look similar. Multiple acquisitions without truthful global order use the documented deterministic aggregation algorithm; only identity-bearing duplicates are removed.
 
-Partition concatenation order SHALL NOT be presented as a truthful global provider ranking unless the provider contract explicitly establishes that ordering. For partitioned searches, the resulting order is named the **deterministic BERA aggregate provider ordering**, not a single provider-native result order. Each provider implementation MUST document its identity key, deduplication precedence, aggregation/order keys, tie breakers, and interaction with early termination. Positional comparison freezes this resulting order when the run commits to the session snapshot.
+Partition concatenation order SHALL NOT be presented as a truthful global provider ranking unless the provider contract explicitly establishes that ordering. For partitioned searches, the resulting order is the **deterministic BERA aggregate provider ordering**. Each provider implementation MUST document stable identity keys when available, no-dedup behavior when unavailable, deduplication precedence, order keys, tie breakers, and early termination. Positional comparison freezes that order.
 
 ### Generic-search candidate validity
 
@@ -61,11 +61,12 @@ Cross-market similarity, category/title similarity, price attractiveness, seller
 The repository's existing `ProviderAcquisitionMetrics` and provider-specific Facebook metrics SHALL be evolved/consolidated into this run contract rather than retained as competing sources of truth. Provider-specific reason counters remain optional detail alongside it. Every field is an optional non-negative integer except where the application itself always knows it. An unknown value renders **No disponible**, never synthetic zero.
 
 - `display_requested`: user-visible maximum requested for that provider; always known.
-- `acquisition_requested`: aggregate bounded candidate budget requested across all internal acquisitions in the logical operation; known when the complete strategy budget is fixed/observable.
+- `acquisition_budget`: finite aggregate ceiling available to the strategy; centralized and known before execution.
+- `acquisition_requested`: sum of candidate limits actually requested by internal acquisitions that actually executed. Unused budget is excluded; budget 30 with two executed requests of 5 yields 10.
 - `fetched`: aggregate raw provider records actually received across internal acquisitions, only if the adapter boundary can observe this truthfully; counting before or after cross-partition deduplication MUST be documented.
 - `mapped`: provider records successfully converted into BERA's narrow safe model.
 - `rejected`: acquired or mapped candidates rejected by provider-specific policy, only where the stage boundary makes the aggregate truthful. Provider-specific reason counters state their counting boundary.
-- `usable`: size of the ordered usable pool after provider-integrity mapping/policy, stable-identity deduplication, and canonical aggregate provider ordering; always known for a completed execution.
+- `usable`: size of the ordered usable pool after provider-integrity policy, deduplication only where truthful stable identity exists, and canonical ordering; identity-less valid candidates remain included.
 - `displayed`: `min(usable, display_requested)`; always known for a completed execution.
 
 Each adapter/instrumentation point SHALL document the measurement boundary for every emitted counter. `mapped` and `rejected` need not be disjoint: rejection can happen before or after narrow mapping, stages may overlap, and some records may be unobservable. Therefore neither `fetched = mapped + rejected` nor `mapped = usable + rejected` is required. Unobservable counters remain unknown. Safe reason counts may be included only with documented, deterministic definitions.
@@ -81,6 +82,15 @@ For example, `display_limit = 3`, `acquisition_requested = 10`, and an ordered u
 Presentation filters do not change provider status. A successfully completed logical operation whose internal acquisition(s) return no records, or records that cannot map, is `EMPTY`, not `ERROR`.
 
 A selected provider that cannot start because required configuration or credentials are missing is `ERROR`, never `EMPTY`. Diagnostics may say that the provider is not configured, but never expose credential names/values, raw configuration, tokens, or stack traces.
+
+### Requested scope, effective coverage, and incidence
+
+`SearchIntent`/`ProviderQuery` retain `requested_geographic_scope`. `ProviderRunResult` and `SearchSessionSnapshot` retain `effective_geographic_scope` and `coverage_status`:
+
+- `COMPLETE`: every acquisition required by the documented requested-scope strategy completed, or one genuine provider search truthfully covered the requested scope.
+- `PARTIAL`: a proper subset completed and produced a truthful partial/broad effective scope, whether or not usable results were found.
+
+Example: requested `Toda Venezuela`, effective `Cobertura amplia/parcial de Venezuela`, coverage `PARTIAL`. Useful canonical results are retained. Partial `SUCCESS` or `EMPTY` outcomes both create a session incidence and MUST NOT claim nationwide `Sin resultados`. If the logical operation fails without a truthful result, status remains `ERROR`.
 
 ### Logical search operation and internal acquisition budget
 
@@ -112,18 +122,19 @@ Positional alignment MUST NOT authorize landed/import cost, profitability ceilin
 
 ## Canonical session and presentation
 
-`SearchSessionSnapshot` owns provider run results, the frozen canonical session result prefix for each provider, provider query and geographic scope provenance, generation, and export rows. The provider's canonical ordering is frozen when its `ProviderRunResult` is committed to the current-generation snapshot. Generic provider cards use `usable` metrics and canonical session result/displayed counts, not `alibaba_visible_rows`, `ml_visible_rows`, relevance filters, or other presentation projections.
+`SearchSessionSnapshot` owns provider results, frozen canonical prefixes, query provenance, requested/effective scopes, coverage status, generation, and export rows. Canonical ordering freezes when `ProviderRunResult` commits. Generic cards use canonical metrics/results, never presentation projections.
 
 Subsequent presentation sorting, price filtering, relevance filtering, ranking-preset changes, or other UI projections MUST NOT change positional `Resultado #N`, totals, export membership, provider status, or the snapshot. Specialized marketplace views may independently sort/filter only their projections.
 
 **Total de resultados** is the sum of displayed marketplace listings, not the number of positional rows. For displayed counts Alibaba 1, Facebook 1, Mercado Libre 0, total is 2.
 
-Session labels are derived solely from selected-provider statuses:
+Session labels derive from provider statuses and coverage outcomes:
 
 | Condition | Copy |
 |---|---|
-| At least one `SUCCESS`, no `ERROR` | `Búsqueda completada` |
-| All selected providers `EMPTY` | `Búsqueda completada · Sin resultados` |
+| At least one `SUCCESS`, no `ERROR`, all coverage `COMPLETE` | `Búsqueda completada` |
+| All selected providers `EMPTY`, all coverage `COMPLETE` | `Búsqueda completada · Sin resultados` |
+| Any selected provider coverage `PARTIAL` | `Búsqueda completada con incidencias` |
 | At least one `ERROR` and at least one other `SUCCESS` or `EMPTY` | `Búsqueda completada con incidencias` |
 | All selected providers `ERROR` | `Búsqueda con error` |
 
@@ -133,7 +144,7 @@ Alibaba opportunity remains attached only to an Alibaba candidate. Rows containi
 
 ## Provider diagnostics and schema drift
 
-**Ver detalles** is a compact expandable production control when useful for `EMPTY`, `ERROR`, rejection/filtering, or mapping loss. It shows **Máximo a mostrar**, aggregate **Pedidos al proveedor**, aggregate **Recibidos**, **Mapeados**, **Rechazados**, **Usables**, and **Mostrados**, rendering unknown metrics as **No disponible**. It is not a new diagnostics dashboard. If an internal acquisition count is shown, it is explicitly labelled as internal calls/partitions and never as multiple user searches or retries.
+**Ver detalles** is available for `EMPTY`, `ERROR`, rejection/filtering, mapping loss, or `PARTIAL` coverage. It shows requested/effective scope, coverage status, **Máximo a mostrar**, finite budget where useful, actual aggregate **Pedidos al proveedor**, **Recibidos**, **Mapeados**, **Rechazados**, **Usables**, and **Mostrados**. Partial diagnostics explain incomplete scope with sanitized copy and no sensitive provider details. Unknown remains **No disponible**.
 
 - **Facebook:** aggregate truthful reasons for Free/Gratis, invalid price, missing ID, duplicate ID, rejected location, missing title, and malformed URL/other currently measurable policy rejection. Priced-only is mandatory; an image never bypasses price validation.
 - **Mercado Libre:** where observable, aggregate missing ID, missing title, missing Venezuela evidence, explicit foreign marketplace evidence, and mapped successfully. `fetched > 0 && mapped == 0` displays a sanitized schema/mapping-loss explanation distinct from `fetched == 0`.
@@ -159,11 +170,11 @@ Routing reuses existing BERA query-generation/translation infrastructure and add
 
 At most one shared Venezuela-localized generation may be reused by Facebook and Mercado Libre. There is no translation loop. Alibaba derivation is independent and cannot silently consume that localized output. Tests use fakes and make zero DeepL calls.
 
-The snapshot always retains `original_user_query`, each `provider_query`, `provider_query_origin`, provider-local market/geographic scope, and `generation`; diagnostics/export may expose them safely. The main UI continues to emphasize what the user entered.
+The snapshot always retains `original_user_query`, each `provider_query`, `provider_query_origin`, requested scope, effective scope, coverage status, and `generation`; diagnostics/export may expose them safely. Every asynchronous routing, translation, and provider continuation MUST compare its initiating generation before committing provenance or starting downstream work.
 
 ## Configurable Venezuela geographic scope
 
-Generic Venezuela search may expose **Toda Venezuela** only with truthful nationwide coverage. `ProviderQuery` retains the actual provider-local geographic scope, and the UI may offer supported narrower scopes such as a city/market (including Caracas) or accurately named partial/broad Venezuela coverage. This is a small provider-scope contract, not a generic geospatial subsystem.
+Generic Venezuela search may expose **Toda Venezuela** only with truthful nationwide coverage. `ProviderQuery` retains the requested scope; `ProviderRunResult` retains the effective completed scope and coverage status. The UI may offer narrower scopes or accurately named partial/broad coverage. This is not a generic geospatial subsystem.
 
 For Facebook, prefer one genuine nationwide provider search when supported. Otherwise **Toda Venezuela** requires the complete finite configured nationwide partition set, followed by stable deduplication and deterministic aggregate ordering. Collecting only enough early partitions to fill `display_limit` MUST NOT be labelled **Toda Venezuela**; bounded subsets use accurate partial/broad Venezuela copy. Trustworthy acquisition provenance may establish candidate scope without listing-level location unless the existing contract requires it; explicit foreign evidence always rejects. Mercado Libre's MLV/Venezuela evidence contract is unchanged.
 
@@ -177,7 +188,7 @@ An Alibaba listing with an unconfirmed source currency may remain visible, but U
 
 ## Export, ratings, images, and session lifecycle
 
-CSV emits one row per real canonical session result in the frozen displayed prefix, never one row for an extra usable acquisition-buffer candidate and never one merged identity row per positional comparison. Presentation filters do not remove or add canonical session results. Truthfully known fields may include original/provider query, market scope, generation, and the seven provider metrics; unavailable fields remain unavailable rather than zero. Existing spreadsheet-formula injection protection and UTF-8 BOM remain mandatory.
+CSV emits one row per real canonical session result in the frozen displayed prefix. It may include requested/effective scope, coverage status, query, generation, acquisition budget, actual requested count, and other truthful metrics. Export remains disabled until every selected provider reaches terminal `SUCCESS`, `EMPTY`, or `ERROR`; completed partial/error sessions may then export. Existing formula-injection protection and UTF-8 BOM remain mandatory.
 
 Alibaba uses its own image and genuine `reviewScore`; Facebook uses its own primary scraped photo and no fabricated rating; Mercado Libre uses its own thumbnail and genuine `ratingAverage`. Relevance, opportunity, `supplierServiceScore`, and seller reputation tiers never become product stars.
 
@@ -189,7 +200,7 @@ Single-market generic **Búsquedas** follows the identical pipeline, configurabl
 
 ## Responsibility boundaries
 
-New deterministic acquisition policy, metric derivation, query provenance/routing decisions, frozen-session selection, and positional-row construction SHOULD be implemented in small pure application/GUI modules where practical. `TrackerState` coordinates calls, generation checks, and serialization; it SHOULD NOT absorb all policy/domain logic or become a new service layer. This boundary requires no new framework, microservice, or generic geospatial architecture.
+New deterministic acquisition policy, coverage/metric derivation, routing, frozen-session selection, and positional rows SHOULD live in small pure modules. The generic strategy SHOULD compose existing bounded single-acquisition operations—especially Facebook's existing one-execute/one-Actor-run use case—rather than silently changing their low-level contracts. `TrackerState` coordinates calls, generation checks, and serialization; it is not a new service layer.
 
 ## Risks and trade-offs
 
@@ -201,4 +212,4 @@ New deterministic acquisition policy, metric derivation, query provenance/routin
 
 ## Open Questions
 
-Only implementation-evidence details remain: the centralized scaling/cap/internal-acquisition budgets for configurable limits; supported narrower Venezuela scopes and reviewed aliases; and final compact Spanish diagnostic copy. All core semantics and safety invariants above are final.
+Only implementation-evidence details remain: centralized limits/budgets; the complete finite Facebook nationwide partition set plus supported partial/narrower scopes and aliases; and final compact Spanish diagnostic/coverage copy. All core semantics and safety invariants above are final.

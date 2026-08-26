@@ -4,7 +4,7 @@
 
 ### Requirement: Original and provider-specific queries retain provenance
 
-Each search session SHALL retain `original_user_query` and `generation`. Each selected provider SHALL retain `provider_query`, `provider_query_origin`, and the truthful provider-local market/geographic scope required to reproduce that search; allowed origins are `USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, and `FALLBACK`. **Toda Venezuela** may be declared only for a genuine nationwide search or the complete finite configured nationwide partition set; otherwise provenance uses accurate partial/broad or narrower scope. Diagnostics and exports MAY expose these fields safely.
+Each search session SHALL retain `original_user_query` and `generation`. `SearchIntent`/`ProviderQuery` SHALL retain `requested_geographic_scope`; `ProviderRunResult`/snapshot SHALL separately retain `effective_geographic_scope` and `coverage_status` (`COMPLETE` or `PARTIAL`). Query origins remain `USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, and `FALLBACK`. Requested Toda Venezuela may yield truthful partial/broad effective coverage without discarding useful results; it is never silently complete.
 
 #### Scenario: Provider queries preserve original intent
 - **GIVEN** the user searches `baseball glove`
@@ -15,7 +15,16 @@ Each search session SHALL retain `original_user_query` and `generation`. Each se
 #### Scenario: Provider-local scope is reproducible
 - **GIVEN** Facebook completes truthful nationwide coverage for a requested Toda Venezuela scope
 - **WHEN** its result is committed
-- **THEN** the snapshot retains the original query, Facebook provider query and origin, Toda Venezuela scope, and generation
+- **THEN** the snapshot retains the original query, Facebook provider query/origin, requested Toda Venezuela, effective Toda Venezuela, coverage `COMPLETE`, and generation
+
+#### Scenario: Requested and effective scope are distinct
+- **GIVEN** requested scope is Toda Venezuela
+- **AND** some required partitions fail while a proper subset completes with useful results
+- **WHEN** the provider result commits
+- **THEN** requested scope remains Toda Venezuela
+- **AND** effective scope records partial/broad Venezuela coverage
+- **AND** coverage status is `PARTIAL`
+- **AND** provider status is `SUCCESS`
 
 ### Requirement: Query routing is marketplace-specific
 
@@ -78,18 +87,21 @@ Venezuela generic search MAY offer **Toda Venezuela**, supported narrower city/m
 - **GIVEN** the provider supports one genuine nationwide search
 - **WHEN** that search completes within its finite budget
 - **THEN** the declared scope may be Toda Venezuela
+- **AND** effective scope is Toda Venezuela and coverage status is `COMPLETE`
 - **AND** provider acquisition/result order is preserved after integrity validation and deduplication
 
 #### Scenario: Complete partition set supports Toda Venezuela
 - **GIVEN** Facebook nationwide coverage requires a finite configured city/market partition set
 - **WHEN** every required partition completes
 - **THEN** the declared scope may be Toda Venezuela
+- **AND** effective scope is Toda Venezuela and coverage status is `COMPLETE`
 - **AND** results are deduplicated and placed in deterministic BERA aggregate order
 
 #### Scenario: Partial partition coverage is not Toda Venezuela
 - **GIVEN** only a bounded subset of Venezuela partitions is searched
 - **WHEN** enough results are obtained or the finite budget ends
 - **THEN** the scope is labelled as accurate broad/partial Venezuela coverage
+- **AND** coverage status is `PARTIAL`
 - **AND** it is not labelled Toda Venezuela
 
 #### Scenario: Truthful Venezuela evidence passes country scope

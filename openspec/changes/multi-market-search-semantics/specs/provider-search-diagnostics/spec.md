@@ -4,7 +4,7 @@
 
 ### Requirement: Session completion copy reflects provider statuses
 
-The session SHALL render `Búsqueda completada` when at least one provider succeeds and none errors; `Búsqueda completada · Sin resultados` when all selected providers are empty; `Búsqueda completada con incidencias` when at least one errors and another succeeds or is empty; and `Búsqueda con error` when all selected providers error.
+The session SHALL render `Búsqueda completada` only when at least one provider succeeds, none errors, and all coverage is `COMPLETE`; `Búsqueda completada · Sin resultados` only when all are empty with `COMPLETE` coverage; `Búsqueda completada con incidencias` when any coverage is `PARTIAL` or an error coexists with another terminal outcome; and `Búsqueda con error` when all selected providers error.
 
 #### Scenario: All providers empty
 - **GIVEN** every selected provider status is `EMPTY`
@@ -17,9 +17,23 @@ The session SHALL render `Búsqueda completada` when at least one provider succe
 - **WHEN** session copy renders
 - **THEN** it is `Búsqueda completada con incidencias`
 
+#### Scenario: Partial coverage with usable results is an incidence
+- **GIVEN** Facebook status is `SUCCESS`
+- **AND** Facebook coverage is `PARTIAL`
+- **WHEN** session copy renders
+- **THEN** it is `Búsqueda completada con incidencias`
+
+#### Scenario: Partial coverage with zero results is not nationwide empty
+- **GIVEN** requested scope is Toda Venezuela
+- **AND** provider status is `EMPTY`
+- **AND** coverage is `PARTIAL`
+- **WHEN** session copy and diagnostics render
+- **THEN** the session does not claim complete nationwide `Sin resultados`
+- **AND** sanitized incomplete-scope diagnostics are available
+
 ### Requirement: Compact provider details are available when useful
 
-The production UI SHALL offer **Ver detalles** for useful `EMPTY`, `ERROR`, rejection/filtering, and schema/mapping-loss states. Expanded details SHALL compactly present **Máximo a mostrar**, **Pedidos al proveedor**, **Recibidos**, **Mapeados**, **Rechazados**, **Usables**, and **Mostrados**. Unknown values SHALL display **No disponible**. The change SHALL NOT add a large diagnostics dashboard.
+The production UI SHALL offer **Ver detalles** for useful `EMPTY`, `ERROR`, `PARTIAL`, rejection/filtering, and schema/mapping-loss states. Details SHALL show requested/effective scope, coverage status, **Máximo a mostrar**, actual **Pedidos al proveedor**, **Recibidos**, **Mapeados**, **Rechazados**, **Usables**, and **Mostrados**. Partial copy is sanitized and exposes no sensitive partition/provider details. Unknown is **No disponible**.
 
 #### Scenario: Empty Mercado Libre details
 - **GIVEN** Mercado Libre completes `EMPTY` with diagnostic metrics

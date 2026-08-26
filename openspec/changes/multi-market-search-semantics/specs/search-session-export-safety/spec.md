@@ -22,7 +22,13 @@ CSV SHALL contain one row per real listing in each provider's frozen canonical s
 
 ### Requirement: Exported provenance and metrics are truthful
 
-CSV MAY include `original_user_query`, `provider_query`, `provider_query_origin`, provider-local market/geographic scope, `generation`, `display_requested`, `acquisition_requested`, `provider_fetched`, `provider_mapped`, `provider_rejected`, `provider_usable`, and `provider_displayed`. It SHALL include a value only when genuinely known and SHALL NOT invent zero for unavailable stages.
+CSV MAY include `original_user_query`, `provider_query`, `provider_query_origin`, `requested_geographic_scope`, `effective_geographic_scope`, `coverage_status`, `generation`, `display_requested`, `acquisition_budget`, actual `acquisition_requested`, and other provider metrics. It SHALL include only genuinely known values and SHALL NOT invent zero.
+
+#### Scenario: Export retains requested and effective scope
+- **GIVEN** requested scope is Toda Venezuela
+- **AND** effective scope is partial/broad Venezuela with coverage `PARTIAL`
+- **WHEN** canonical session results are exported
+- **THEN** requested scope, effective scope, and coverage status remain distinguishable
 
 #### Scenario: Some provider metrics are unknown
 - **GIVEN** a current-session listing whose provider fetched count is unobservable
@@ -40,6 +46,16 @@ CSV output SHALL retain spreadsheet-formula injection protection and UTF-8 BOM b
 - **THEN** the existing injection mitigation is applied
 - **AND** the file retains its UTF-8 BOM
 
+### Requirement: Export waits for all selected providers to settle
+
+Export SHALL remain disabled until every selected provider reaches terminal `SUCCESS`, `EMPTY`, or `ERROR`. Once settled, completed sessions with `PARTIAL` coverage or provider errors MAY export their canonical results.
+
+#### Scenario: One selected provider is still running
+- **GIVEN** one selected provider has committed results
+- **AND** another selected provider is not terminal
+- **WHEN** export availability is evaluated
+- **THEN** export remains disabled
+
 ### Requirement: New search clears transient canonical session state
 
 **Nueva búsqueda** SHALL clear current results, diagnostics, provider-query provenance, and exportable session data while preserving persistent tracking. It SHALL advance or replace the search generation before new responses may commit.
@@ -52,7 +68,7 @@ CSV output SHALL retain spreadsheet-formula injection protection and UTF-8 BOM b
 
 ### Requirement: Stale responses cannot repopulate a newer session
 
-Every asynchronous provider response SHALL be associated with its initiating search generation. A response from a previous generation SHALL be ignored and SHALL NOT modify results, diagnostics, provider query/geographic provenance, totals, canonical ordering, or export data for the current generation.
+Every asynchronous routing, translation, and provider continuation SHALL compare its initiating generation before committing provenance, starting downstream provider work, or modifying session/export state. A previous-generation continuation is ignored.
 
 #### Scenario: Previous-generation response arrives late
 - **GIVEN** generation A started a provider call
@@ -60,3 +76,10 @@ Every asynchronous provider response SHALL be associated with its initiating sea
 - **WHEN** A's response arrives
 - **THEN** generation B remains unchanged
 - **AND** generation B's query provenance and export membership remain unchanged
+
+#### Scenario: Stale translation cannot launch provider work
+- **GIVEN** generation A awaits translation
+- **AND** generation B replaces it
+- **WHEN** A's translation completes
+- **THEN** it cannot commit provider-query provenance
+- **AND** it cannot start a provider operation
