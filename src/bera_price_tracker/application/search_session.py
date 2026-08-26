@@ -51,7 +51,13 @@ class ProviderBudgetRule:
 
 @dataclass(frozen=True, slots=True)
 class AcquisitionBudgetPolicy:
-    """Central finite display validation and acquisition-budget calculation."""
+    """Central finite display validation and acquisition-budget calculation.
+
+    This policy is the only source of truth for supported display limits,
+    ``acquisition_budget``, and maximum internal acquisitions. A
+    :class:`BoundedAcquisitionPlan` is executable only after
+    :meth:`create_plan` or :meth:`validate_plan` proves those values.
+    """
 
     provider_rules: Mapping[str, ProviderBudgetRule]
     supported_display_limits: frozenset[int] = SUPPORTED_DISPLAY_LIMITS
@@ -92,6 +98,56 @@ class AcquisitionBudgetPolicy:
             return self.provider_rules[provider].maximum_internal_acquisitions
         except KeyError as exc:
             raise ValueError(f"unsupported provider: {provider}") from exc
+
+    def create_plan(
+        self,
+        *,
+        provider: str,
+        display_limit: int,
+        steps: tuple[InternalAcquisitionStep, ...],
+        requested_geographic_scope: str | None = None,
+        complete_effective_geographic_scope: str | None = None,
+        partial_effective_geographic_scope: str | None = None,
+        allow_early_termination: bool = True,
+    ) -> BoundedAcquisitionPlan:
+        """Derive a finite plan. Budget and acquisition caps come only from policy."""
+
+        plan = BoundedAcquisitionPlan(
+            provider=provider,
+            acquisition_budget=self.acquisition_budget(provider, display_limit),
+            maximum_internal_acquisitions=self.maximum_internal_acquisitions(provider),
+            steps=steps,
+            requested_geographic_scope=requested_geographic_scope,
+            complete_effective_geographic_scope=complete_effective_geographic_scope,
+            partial_effective_geographic_scope=partial_effective_geographic_scope,
+            allow_early_termination=allow_early_termination,
+        )
+        return self.validate_plan(plan, display_limit=display_limit)
+
+    def validate_plan(
+        self,
+        plan: BoundedAcquisitionPlan,
+        *,
+        display_limit: int,
+    ) -> BoundedAcquisitionPlan:
+        """Reject plans whose provider, display limit, or budgets disagree with policy."""
+
+        self.validate_display_limit(display_limit)
+        if plan.provider not in self.provider_rules:
+            raise ValueError(f"unsupported provider: {plan.provider}")
+        expected_budget = self.acquisition_budget(plan.provider, display_limit)
+        if plan.acquisition_budget != expected_budget:
+            raise ValueError("plan acquisition_budget does not match policy")
+        expected_maximum = self.maximum_internal_acquisitions(plan.provider)
+        if plan.maximum_internal_acquisitions != expected_maximum:
+            raise ValueError("plan maximum_internal_acquisitions does not match policy")
+        if len(plan.steps) > expected_maximum:
+            raise ValueError("plan exceeds maximum_internal_acquisitions")
+        if any(step.candidate_limit > expected_budget for step in plan.steps):
+            raise ValueError("each step candidate limit must fit the acquisition budget")
+        if display_limit > expected_budget:
+            raise ValueError("acquisition_budget must cover display_limit")
+        return plan
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,11 +203,18 @@ class InternalAcquisitionStep:
 
 @dataclass(frozen=True, slots=True)
 class AcquisitionBatch[CandidateT]:
+    """Safe output of one existing bounded provider operation.
+
+    Geographic coverage is not a batch concern. PR A derives
+    ``requested_geographic_scope``, ``effective_geographic_scope``, and
+    ``coverage_status`` from :class:`BoundedAcquisitionPlan` onto
+    :class:`ProviderRunResult`. Concrete Facebook partition aggregation is PR D.
+    """
+
     candidates: tuple[CandidateT, ...]
     fetched: int | None = None
     mapped: int | None = None
     rejected: int | None = None
-    effective_geographic_scope: str | None = None
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -191,6 +254,8 @@ class BoundedAcquisitionPlan:
             raise ValueError("steps must not be empty")
         if len({step.key for step in self.steps}) != len(self.steps):
             raise ValueError("step keys must be unique")
+        if len(self.steps) > self.maximum_internal_acquisitions:
+            raise ValueError("plan exceeds maximum_internal_acquisitions")
         if any(step.candidate_limit > self.acquisition_budget for step in self.steps):
             raise ValueError("each step candidate limit must fit the acquisition budget")
         if self.coverage_applicable and (
@@ -207,6 +272,7 @@ class BoundedAcquisitionPlan:
 @dataclass(frozen=True, slots=True)
 class ProviderRunResult[CandidateT]:
     provider: str
+    generation: int
     status: ProviderStatus
     ordered_usable_pool: tuple[CandidateT, ...]
     canonical_session_results: tuple[CandidateT, ...]
@@ -217,6 +283,14 @@ class ProviderRunResult[CandidateT]:
     failure: str | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.generation, bool) or not isinstance(self.generation, int):
+            raise TypeError("generation must be an integer")
+        if self.generation < 0:
+            raise ValueError("generation must not be negative")
+        if self.metrics.usable != len(self.ordered_usable_pool):
+            raise ValueError("metrics.usable must equal the ordered usable pool size")
+        if self.metrics.displayed != len(self.canonical_session_results):
+            raise ValueError("metrics.displayed must equal the canonical session result count")
         if self.canonical_session_results != self.ordered_usable_pool[: self.metrics.displayed]:
             raise ValueError("canonical results must be the frozen displayed prefix")
         if self.status is ProviderStatus.SUCCESS and self.metrics.usable < 1:
@@ -226,6 +300,8 @@ class ProviderRunResult[CandidateT]:
         if self.status is ProviderStatus.ERROR:
             if self.ordered_usable_pool or self.canonical_session_results:
                 raise ValueError("ERROR cannot expose provider candidates")
+            if self.metrics.usable != 0 or self.metrics.displayed != 0:
+                raise ValueError("ERROR must expose zero usable and displayed counts")
             if self.coverage_status is not None or self.effective_geographic_scope is not None:
                 raise ValueError("ERROR cannot invent geographic coverage")
         if self.requested_geographic_scope is None:
@@ -248,15 +324,14 @@ class SearchSessionSnapshot:
             (result for result in self.provider_results if result.provider == provider), None
         )
 
-    def commit(
-        self,
-        result: ProviderRunResult[Any],
-        *,
-        generation: int,
-    ) -> SearchSessionSnapshot:
-        """Return a new snapshot, ignoring stale or duplicate provider completions."""
+    def commit(self, result: ProviderRunResult[Any]) -> SearchSessionSnapshot:
+        """Return a new snapshot, ignoring stale or duplicate provider completions.
 
-        if generation != self.intent.generation:
+        Generation ownership is intrinsic to ``result``. A stale result cannot be
+        relabelled by supplying a different generation argument.
+        """
+
+        if result.generation != self.intent.generation:
             return self
         if result.provider not in self.intent.selected_providers:
             raise ValueError("result provider was not selected")
@@ -294,6 +369,7 @@ def execute_bounded_provider_search[CandidateT](
     *,
     intent: SearchIntent,
     plan: BoundedAcquisitionPlan,
+    policy: AcquisitionBudgetPolicy,
     acquire: Callable[[InternalAcquisitionStep], AcquisitionBatch[CandidateT]],
     is_usable: Callable[[CandidateT], bool] = lambda _candidate: True,
     stable_identity: Callable[[CandidateT], str | None] = lambda _candidate: None,
@@ -302,14 +378,15 @@ def execute_bounded_provider_search[CandidateT](
 
     Every step is attempted at most once. A failed step is never re-run to refill
     rejected or mapping-lost candidates. Existing low-level calls remain unchanged.
+    The plan must be derived from or validated against ``policy``; arbitrary
+    budget fields cannot bypass :class:`AcquisitionBudgetPolicy`.
     """
 
+    policy.validate_plan(plan, display_limit=intent.display_limit)
     if plan.provider not in intent.selected_providers:
         raise ValueError("plan provider was not selected")
     if plan.requested_geographic_scope != intent.requested_scope_for(plan.provider):
         raise ValueError("plan scope does not match search intent")
-    if intent.display_limit > plan.acquisition_budget:
-        raise ValueError("acquisition_budget must cover display_limit")
 
     requested = 0
     successful_steps: set[str] = set()
@@ -320,7 +397,7 @@ def execute_bounded_provider_search[CandidateT](
     mapped_values: list[int | None] = []
     rejected_values: list[int | None] = []
 
-    for step in plan.steps[: plan.maximum_internal_acquisitions]:
+    for step in plan.steps:
         if requested + step.candidate_limit > plan.acquisition_budget:
             break
         if (
@@ -391,6 +468,7 @@ def execute_bounded_provider_search[CandidateT](
     )
     return ProviderRunResult(
         provider=plan.provider,
+        generation=intent.generation,
         status=status,
         ordered_usable_pool=usable_pool,
         canonical_session_results=usable_pool[:displayed],

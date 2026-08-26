@@ -1,0 +1,94 @@
+@startuml
+title BERA - Generic Provider Search Sequence (Implementation PR A)
+
+actor User
+participant TrackerState
+participant SearchIntent
+participant AcquisitionBudgetPolicy as Policy
+participant BoundedAcquisitionPlan as Plan
+participant "execute_bounded_provider_search()" as LogicalSearch
+participant "Existing Provider Operation" as ProviderOperation
+participant "Provider Adapter / Port" as Provider
+participant ProviderRunMetrics as Metrics
+participant ProviderRunResult as Result
+participant SearchSessionSnapshot as Snapshot
+
+User -> TrackerState : Search(query, display_limit, providers)
+TrackerState -> TrackerState : increment generation
+TrackerState -> SearchIntent : create generation-bound intent
+TrackerState -> Policy : validate display_limit
+Policy --> TrackerState : valid bounded display limit
+TrackerState -> Policy : create_plan / validate_plan
+Policy -> Plan : approved finite budget + max acquisitions
+Plan --> TrackerState : policy-backed plan
+TrackerState -> LogicalSearch : execute(intent, approved plan, policy)
+
+loop bounded internal acquisitions
+  LogicalSearch -> ProviderOperation : execute(step)
+  ProviderOperation -> Provider : existing bounded search(...)
+  Provider --> ProviderOperation : provider response
+  ProviderOperation --> LogicalSearch : safe AcquisitionBatch
+  LogicalSearch -> LogicalSearch : provider-integrity validation
+  LogicalSearch -> LogicalSearch : stable-ID dedup only
+  LogicalSearch -> LogicalSearch : aggregate candidates
+  alt enough usable candidates AND safe early termination
+    LogicalSearch -> LogicalSearch : stop when ordering/scope remain truthful
+  else approved budget remains
+    LogicalSearch -> LogicalSearch : continue next planned step
+  end
+end
+
+LogicalSearch -> Metrics : build truthful aggregate metrics
+note right of Metrics
+  acquisition_budget != acquisition_requested
+  Example: budget = 30
+  two executed steps of 5
+  requested = 10
+end note
+
+LogicalSearch -> Result : create generation-bound ProviderRunResult
+note right of Result
+  Result contains:
+  generation copied from SearchIntent
+  SUCCESS / EMPTY / ERROR
+  COMPLETE / PARTIAL / unavailable
+  ordered usable pool
+  frozen canonical prefix
+end note
+LogicalSearch -> LogicalSearch : canonical_session_results = ordered_usable_pool[0:display_limit]
+LogicalSearch --> TrackerState : ProviderRunResult
+TrackerState -> Snapshot : commit(result)
+alt result.generation == intent.generation
+  Snapshot -> Snapshot : immutable provider commit
+else stale result generation
+  Snapshot -> Snapshot : ignore/reject stale result
+end
+Snapshot --> TrackerState : current frozen session state
+TrackerState --> User : session state
+
+note over TrackerState,LogicalSearch
+  TrackerState coordinates only.
+  It does not implement:
+  budget policy, provider strategy, deduplication,
+  or provider-specific geographic logic.
+end note
+
+note over LogicalSearch,ProviderOperation
+  Multiple internal calls belong to ONE logical provider search.
+  They are not orchestrator retries.
+end note
+
+note over ProviderOperation,Provider
+  Existing low-level provider semantics remain unchanged.
+  Facebook execute() -> one Actor run remains valid.
+end note
+
+note over Plan,Result
+  Geographic source of truth in PR A:
+  requested scope lives on SearchIntent / plan;
+  effective scope and coverage_status are derived
+  from the plan onto ProviderRunResult.
+  AcquisitionBatch does not carry effective scope.
+  Concrete Facebook Venezuela partitions are PR D.
+end note
+@enduml

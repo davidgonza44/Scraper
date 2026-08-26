@@ -31,9 +31,11 @@ class ProviderRunMetrics:
 
     ``acquisition_budget`` is the finite ceiling available to the strategy.
     ``acquisition_requested`` counts only candidate limits from internal
-    acquisitions that actually ran. Optional stages remain ``None`` when the
-    strategy cannot observe them truthfully. No arithmetic identity between
-    fetched, mapped, rejected, and usable is implied.
+    acquisitions that actually ran. ``displayed`` is always
+    ``min(usable, display_requested)``; weaker inequalities are not accepted.
+    Optional stages remain ``None`` when the strategy cannot observe them
+    truthfully. No arithmetic identity between fetched, mapped, rejected, and
+    usable is implied, and unknown stages must not be fabricated as zero.
     """
 
     display_requested: int
@@ -65,8 +67,8 @@ class ProviderRunMetrics:
             raise ValueError("display_requested must be positive")
         if self.acquisition_requested > self.acquisition_budget:
             raise ValueError("acquisition_requested cannot exceed acquisition_budget")
-        if self.displayed > self.display_requested or self.displayed > self.usable:
-            raise ValueError("displayed cannot exceed display_requested or usable")
+        if self.displayed != min(self.usable, self.display_requested):
+            raise ValueError("displayed must equal min(usable, display_requested)")
 
 
 def _require_count(name: str, value: object) -> None:

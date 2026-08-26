@@ -26,6 +26,15 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 7. Generic comparison constructs positional rows. Exact-product workflows continue to use their separate identity-checked context.
 8. UI summaries, diagnostics, CSV export, and session status read the current generation's canonical session snapshot. Late results from older generations are discarded.
 
+### Architecture diagrams
+
+Explanatory PlantUML for Implementation PR A lives in the repository and must be updated when this architecture changes:
+
+- `docs/architecture/multi-market-search-core.puml`
+- `docs/architecture/multi-market-search-sequence.puml`
+
+See `docs/architecture/README.md` for source-of-truth precedence. OpenSpec remains authoritative for staged implementation scope (PRs A–E). Diagrams must never justify behavior that contradicts this design or existing provider contracts, and later-phase components must not be shown as already implemented.
+
 ## Core models
 
 ### SearchIntent
@@ -41,6 +50,8 @@ The UI label is **Máximo por plataforma**. A display maximum is not a guarantee
 ### AcquisitionBudgetPolicy
 
 The policy's output is `acquisition_budget`, a centralized deterministic finite ceiling based on provider, `display_limit`, requested scope, and provider hard caps. It does not represent work already requested. The same policy module defines finite `MAX_DISPLAY_LIMIT` and maximum internal acquisitions. All are testable and not scattered across adapters/views. Alibaba's maximum 500 is never a routine budget.
+
+A `BoundedAcquisitionPlan` is executable only when derived from `AcquisitionBudgetPolicy.create_plan()` or proven by `validate_plan()`. Callers cannot supply an arbitrary `acquisition_budget` or `maximum_internal_acquisitions` to bypass this policy. `execute_bounded_provider_search()` re-validates the plan against the policy before any internal acquisition.
 
 A provider strategy MAY split the aggregate acquisition budget across multiple bounded internal acquisitions. It SHOULD terminate early once at least `display_limit` unique valid candidates exist only if doing so preserves canonical ordering and the truth of the declared geographic scope. Explicit **Toda Venezuela** cannot terminate after only early city partitions: it requires either one genuine nationwide search or completion of the entire finite configured nationwide partition set. If a finite budget cannot truthfully cover that scope, results use accurate partial/broad Venezuela copy. Exact finite values remain an implementation-evidence decision recorded here before implementation.
 
@@ -67,7 +78,7 @@ The repository's existing `ProviderAcquisitionMetrics` and provider-specific Fac
 - `mapped`: provider records successfully converted into BERA's narrow safe model.
 - `rejected`: acquired or mapped candidates rejected by provider-specific policy, only where the stage boundary makes the aggregate truthful. Provider-specific reason counters state their counting boundary.
 - `usable`: size of the ordered usable pool after provider-integrity policy, deduplication only where truthful stable identity exists, and canonical ordering; identity-less valid candidates remain included.
-- `displayed`: `min(usable, display_requested)`; always known for a completed execution.
+- `displayed`: exactly `min(usable, display_requested)`; always known for a completed execution. Weaker inequalities such as `displayed <= usable` are not sufficient; inconsistent values are rejected by the contract itself.
 
 Each adapter/instrumentation point SHALL document the measurement boundary for every emitted counter. `mapped` and `rejected` need not be disjoint: rejection can happen before or after narrow mapping, stages may overlap, and some records may be unobservable. Therefore neither `fetched = mapped + rejected` nor `mapped = usable + rejected` is required. Unobservable counters remain unknown. Safe reason counts may be included only with documented, deterministic definitions.
 
@@ -75,9 +86,13 @@ For example, `display_limit = 3`, `acquisition_requested = 10`, and an ordered u
 
 ### ProviderRunResult and status
 
+`ProviderRunResult` owns the `generation` that produced it. `execute_bounded_provider_search()` copies `SearchIntent.generation` into the result. `SearchSessionSnapshot.commit(result)` accepts the result only when `result.generation == snapshot.intent.generation`. A stale result cannot be relabelled by supplying a separate generation argument.
+
+The result contract also rejects internally inconsistent values: `metrics.usable` must equal `len(ordered_usable_pool)`, `metrics.displayed` must equal `len(canonical_session_results)`, and `canonical_session_results` must be the frozen prefix `ordered_usable_pool[:metrics.displayed]`.
+
 - `SUCCESS`: logical provider operation completed and `usable >= 1`.
 - `EMPTY`: logical provider operation completed normally and `usable == 0`.
-- `ERROR`: the logical provider operation failed with an actual exception/failure outcome.
+- `ERROR`: the logical provider operation failed with an actual exception/failure outcome. ERROR exposes empty pools and `metrics.usable == metrics.displayed == 0`.
 
 Presentation filters do not change provider status. A successfully completed logical operation whose internal acquisition(s) return no records, or records that cannot map, is `EMPTY`, not `ERROR`.
 
@@ -85,7 +100,7 @@ A selected provider that cannot start because required configuration or credenti
 
 ### Requested scope, effective coverage, and incidence
 
-`SearchIntent`/`ProviderQuery` retain `requested_geographic_scope`. `ProviderRunResult` and `SearchSessionSnapshot` retain optional `effective_geographic_scope` and optional `coverage_status`:
+`SearchIntent`/`ProviderQuery` retain `requested_geographic_scope`. `ProviderRunResult` and `SearchSessionSnapshot` retain optional `effective_geographic_scope` and optional `coverage_status`. In PR A there is one authoritative path: requested scope on the intent/plan, complete/partial effective-scope labels on `BoundedAcquisitionPlan`, and derived `effective_geographic_scope` plus `coverage_status` on `ProviderRunResult`. `AcquisitionBatch` does not carry effective geographic scope; concrete Facebook nationwide partitions, aliases, and city catalogs belong to PR D.
 
 - `COMPLETE`: every acquisition required by the documented requested-scope strategy completed, or one genuine provider search truthfully covered the requested scope.
 - `PARTIAL`: a proper subset completed and produced a truthful partial/broad effective scope, whether or not usable results were found.
@@ -204,7 +219,7 @@ Single-market generic **Búsquedas** follows the identical pipeline, configurabl
 
 ## Responsibility boundaries
 
-New deterministic acquisition policy, coverage/metric derivation, routing, frozen-session selection, and positional rows SHOULD live in small pure modules. The generic strategy SHOULD compose existing bounded single-acquisition operations—especially Facebook's existing one-execute/one-Actor-run use case—rather than silently changing their low-level contracts. `TrackerState` coordinates calls, generation checks, and serialization; it is not a new service layer.
+New deterministic acquisition policy, coverage/metric derivation, routing, frozen-session selection, and positional rows SHOULD live in small pure modules. The generic strategy SHOULD compose existing bounded single-acquisition operations—especially Facebook's existing one-execute/one-Actor-run use case—rather than silently changing their low-level contracts. `TrackerState` coordinates calls, generation checks, and serialization; it is not a new service layer. See `docs/architecture/multi-market-search-core.puml` and `docs/architecture/multi-market-search-sequence.puml`.
 
 ## Risks and trade-offs
 
