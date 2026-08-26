@@ -507,6 +507,7 @@ class TrackerState(rx.State):
     ml_translation_generation: int = 0
     ml_translation_source_language: str = ""
     ml_query_origin: str = ""
+    ml_results_from_generic_session: bool = False
     facebook_product_query: str = ""
     facebook_product_city: str = "caracas"
     facebook_product_limit: int = 5
@@ -1664,6 +1665,7 @@ class TrackerState(rx.State):
         switched_from_another_product = bool(previous_id) and product_changed
         self.ml_alibaba_context = context
         self.ml_has_alibaba_context = True
+        self.ml_results_from_generic_session = False
         if switched_from_another_product:
             self.ml_query = ""
             self.ml_query_origin = ""
@@ -1900,6 +1902,7 @@ class TrackerState(rx.State):
         async with self:
             if not services.can_start_mercadolibre_search(self.ml_is_loading):
                 return
+            self.ml_results_from_generic_session = False
             query = self.ml_query
             limit = self.ml_limit
             search_product_id = self._ml_active_search_product_id()
@@ -2124,6 +2127,8 @@ class TrackerState(rx.State):
         Comparable Facebook/ML lookups are bound to one Alibaba ``product_id``.
         A later multi-market or Nueva búsqueda session is not that lookup, so
         leftover context must not stamp session results onto the old product.
+        Clear the detached Mercado Libre query so a later product cannot reuse
+        a user query that belonged to the previous comparable.
         """
 
         self.facebook_product_translation_generation += 1
@@ -2149,6 +2154,8 @@ class TrackerState(rx.State):
         self.ml_translation_is_loading = False
         self.ml_translation_ui_status = UI_INITIAL
         self.ml_translation_source_language = ""
+        self.ml_query = ""
+        self.ml_query_origin = ""
         self._invalidate_ml_comparison()
 
     def _prepare_scoped_search(self, plan: search_scope.SearchPlan) -> None:
@@ -2192,10 +2199,12 @@ class TrackerState(rx.State):
             self.ml_query_origin = services.ML_QUERY_ORIGIN_USER
             self.ml_is_loading = True
             self.ml_ui_status = UI_LOADING
+            self.ml_results_from_generic_session = True
             self._invalidate_ml_comparison()
         else:
             self.ml_is_loading = False
             self.ml_ui_status = UI_INITIAL
+            self.ml_results_from_generic_session = False
             self._invalidate_ml_comparison()
 
     @rx.event(background=True)
@@ -2546,6 +2555,7 @@ class TrackerState(rx.State):
         self.ml_error = ""
         self.ml_is_loading = False
         self.ml_ui_status = UI_INITIAL
+        self.ml_results_from_generic_session = False
         self.diagnostic_open_platforms = []
         self._detach_alibaba_comparable_context()
 
@@ -2555,7 +2565,7 @@ class TrackerState(rx.State):
             landed = self._landed_for_ml_product_currency(
                 selected_id, self.ml_alibaba_context.get("currency")
             )
-        elif self.search_session_active:
+        elif self.ml_results_from_generic_session:
             # Generic Búsquedas results have no truthful Alibaba product
             # context. Leftover landed cost belongs to a different product.
             landed = None
