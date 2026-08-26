@@ -135,6 +135,14 @@ The implementation SHALL evolve existing metrics into one contract exposing `dis
 - **AND** diagnostics show `No disponible`
 - **AND** `fetched` is not reported as zero
 
+#### Scenario: Failed executed acquisition keeps optional aggregates unknown
+- **GIVEN** one executed internal acquisition reports `candidate_limit = 5`, `fetched = 5`, `mapped = 5`, and `rejected = 0`
+- **AND** a later executed internal acquisition with `candidate_limit = 5` raises before supplying those counts
+- **WHEN** aggregate metrics are finalized
+- **THEN** `acquisition_requested = 10`
+- **AND** aggregate `fetched`, `mapped`, and `rejected` are unknown
+- **AND** those aggregates are not reported as the successful-step counts or as zero
+
 ### Requirement: Provider status derives from execution and canonical usability
 
 The system SHALL classify a completed logical provider operation with at least one usable listing as `SUCCESS`, a normally completed logical operation with zero usable listings as `EMPTY`, and a failed logical operation as `ERROR`. Presentation filters SHALL NOT alter this status.

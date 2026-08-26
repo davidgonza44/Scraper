@@ -1,0 +1,214 @@
+@startuml
+title BERA - Multi-market Search Core (Implementation PR A)
+
+skinparam classAttributeIconSize 0
+
+package "Implemented PR A application core" {
+  class SearchIntent {
+    +original_user_query: str
+    +display_limit: int
+    +selected_providers
+    +generation: int
+    +requested_geographic_scopes
+  }
+
+  class AcquisitionBudgetPolicy {
+    +MAX_DISPLAY_LIMIT
+    +supported_display_limits
+    +acquisition_budget(provider, display_limit)
+    +maximum_internal_acquisitions(provider)
+    +validate_display_limit()
+    +validate_intent()
+    +create_plan()
+    +validate_plan()
+  }
+
+  class ProviderBudgetRule {
+    +maximum_internal_acquisitions: int
+    +maximum_acquisition_budget: int
+    +candidate_buffer_multiplier: int
+  }
+
+  class BoundedAcquisitionPlan {
+    +provider
+    +acquisition_budget
+    +maximum_internal_acquisitions
+    +steps
+    +requested_geographic_scope
+    +complete_effective_geographic_scope
+    +partial_effective_geographic_scope
+    +allow_early_termination
+  }
+
+  class InternalAcquisitionStep {
+    +key
+    +candidate_limit
+    +required_for_complete_coverage
+  }
+
+  class AcquisitionBatch {
+    +candidates
+    +fetched
+    +mapped
+    +rejected
+  }
+
+  class ProviderRunMetrics {
+    +display_requested
+    +acquisition_budget
+    +acquisition_requested
+    +fetched
+    +mapped
+    +rejected
+    +usable
+    +displayed
+  }
+
+  enum ProviderStatus {
+    SUCCESS
+    EMPTY
+    ERROR
+  }
+
+  enum CoverageStatus {
+    COMPLETE
+    PARTIAL
+  }
+
+  class ProviderRunResult {
+    +provider
+    +generation
+    +status
+    +ordered_usable_pool
+    +canonical_session_results
+    +metrics
+    +requested_geographic_scope
+    +effective_geographic_scope
+    +coverage_status
+  }
+
+  class SearchSessionSnapshot {
+    +intent
+    +provider_results
+    +settled
+    +has_incidents
+    +completion_label
+    +commit(result)
+  }
+
+  class "execute_bounded_provider_search()" as LogicalSearch
+}
+
+package "Existing Application / Provider Boundary" {
+  interface ExistingProviderOperation {
+    +execute(...)
+  }
+  interface ProviderPort {
+    +search(...)
+  }
+}
+
+package "Existing GUI path (not wired to PR A core)" {
+  class TrackerState {
+    +search()
+    +search_alibaba()
+    +serialize_for_ui()
+  }
+}
+
+AcquisitionBudgetPolicy --> ProviderBudgetRule : owns rules
+AcquisitionBudgetPolicy --> BoundedAcquisitionPlan : create_plan / validate_plan
+BoundedAcquisitionPlan --> InternalAcquisitionStep : contains *
+SearchIntent --> LogicalSearch
+BoundedAcquisitionPlan --> LogicalSearch
+AcquisitionBudgetPolicy --> LogicalSearch : required at execute
+LogicalSearch ..> ExistingProviderOperation : intended composition of bounded calls
+ExistingProviderOperation --> ProviderPort
+ExistingProviderOperation --> AcquisitionBatch
+LogicalSearch --> ProviderRunMetrics : aggregates
+LogicalSearch --> ProviderRunResult : produces
+ProviderRunResult --> ProviderRunMetrics
+ProviderRunResult --> ProviderStatus
+ProviderRunResult --> CoverageStatus
+SearchIntent --> SearchSessionSnapshot
+ProviderRunResult --> SearchSessionSnapshot : immutable commit
+
+TrackerState ..> SearchIntent : deferred wiring (not in PR A)
+TrackerState ..> LogicalSearch : deferred wiring (not in PR A)
+TrackerState ..> SearchSessionSnapshot : deferred wiring (not in PR A)
+
+note right of ProviderRunResult
+  Result owns its generation.
+  A stale result cannot be relabelled by the caller.
+  status must be a ProviderStatus member.
+  coverage_status must be None or CoverageStatus.
+end note
+
+note right of SearchSessionSnapshot
+  commit(result) validates:
+  result.generation == intent.generation
+end note
+
+note right of ProviderRunMetrics
+  Invariants:
+  displayed = min(usable, display_requested)
+  usable = len(ordered_usable_pool)
+  displayed = len(canonical_session_results)
+  Optional fetched/mapped/rejected stay unknown
+  if any executed step lacks a truthful value.
+end note
+
+note right of AcquisitionBudgetPolicy
+  Canonical runtime authority for:
+  supported display limits
+  acquisition_budget
+  maximum internal acquisitions
+  SearchIntent only checks a positive integer.
+  Executable plans must be derived from
+  or validated against this policy.
+end note
+
+note bottom of LogicalSearch
+  One logical provider search may compose multiple bounded existing operations.
+  It MUST NOT start a second logical search merely to refill rejected/mapping-lost candidates.
+  Current callers are PR A tests. Future GUI wiring is deferred.
+end note
+
+note right of AcquisitionBatch
+  PR A batch contract is candidates plus optional
+  fetched/mapped/rejected counts.
+  Effective geographic scope is NOT a batch field.
+  Coverage is derived from BoundedAcquisitionPlan
+  onto ProviderRunResult only.
+end note
+
+note right of ExistingProviderOperation
+  Preserve low-level contracts.
+  Example: Facebook execute() = one Actor run
+  Existing GUI search still calls these
+  operations directly, not via LogicalSearch.
+end note
+
+note right of TrackerState
+  Current runtime: existing GUI search path.
+  Do NOT move into TrackerState:
+  provider strategy, budget policy,
+  deduplication, or domain rules.
+  Creating SearchIntent / invoking the policy /
+  execute_bounded_provider_search() / commit
+  is deferred integration, not current wiring.
+end note
+
+package "Deferred staged work" {
+  class "PR B\nPositional comparison" as PRB
+  class "PR C\nProvider diagnostics" as PRC
+  class "PR D\nQuery routing + Venezuela scope" as PRD
+  class "PR E\nCSV/currency/lifecycle/browser gate" as PRE
+}
+
+PRB ..> SearchSessionSnapshot : later consumer
+PRC ..> ProviderRunMetrics : later instrumentation/UI
+PRD ..> SearchIntent : later routing/scope integration
+PRD ..> BoundedAcquisitionPlan : later concrete geo plans
+PRE ..> SearchSessionSnapshot : later export/lifecycle
+@enduml
