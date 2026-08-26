@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -778,7 +778,7 @@ def test_search_intent_does_not_enforce_policy_display_membership() -> None:
     intent = _intent(display_limit=11)
     assert intent.display_limit == 11
     with pytest.raises(TypeError, match="display_limit must be an integer"):
-        _intent(display_limit=True)  # type: ignore[arg-type]
+        _intent(display_limit=cast(int, True))
     with pytest.raises(ValueError, match="display_limit must be positive"):
         _intent(display_limit=0)
 
