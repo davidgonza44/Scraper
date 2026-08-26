@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -25,6 +25,54 @@ _SECRET_RE = re.compile(
     r"(api[_-]?key|access[_-]?token|\bauthorization\b|bearer\s+[a-z0-9]|set-cookie|"
     r"cookie=|\bpassword\s*[:=]|\bprivate[_-]?key\b)",
     re.IGNORECASE,
+)
+
+EXPECTED_FIXTURE_IDS = frozenset(
+    {
+        "acquisition-10-usable-8-display-3",
+        "alibaba-geographic-coverage-not-applicable",
+        "alibaba-identity-less-similar-candidates-remain-distinct",
+        "alibaba-title-bearing-optional-fields-absent",
+        "budget-30-two-executed-requests-of-5",
+        "cross-market-native-id-equality-is-not-identity",
+        "current-generation-result-can-commit",
+        "error-before-coverage-is-unavailable",
+        "exhausted-finite-acquisition-budget",
+        "facebook-mixed-free-invalid-valid-priced-pool",
+        "facebook-one-execute-one-actor-run",
+        "fewer-usable-than-display-maximum",
+        "geographic-complete-coverage",
+        "geographic-partial-empty-is-incidence",
+        "geographic-partial-with-useful-results",
+        "mercadolibre-later-valid-mlv-after-missing-venezuela",
+        "mercadolibre-valid-mlv-without-permalink",
+        "mixed-known-and-unobserved-optional-metrics-stay-unknown",
+        "positional-row-is-not-exact-product",
+        "stable-provider-identity-deduplicates",
+        "stale-generation-cannot-mutate-or-relabel",
+        "title-image-price-are-not-identity",
+        "unobservable-optional-metrics-are-null",
+    }
+)
+EXPECTED_SEARCH_SESSION_CORE_IDS = frozenset(
+    {
+        "acquisition-10-usable-8-display-3",
+        "alibaba-geographic-coverage-not-applicable",
+        "alibaba-identity-less-similar-candidates-remain-distinct",
+        "budget-30-two-executed-requests-of-5",
+        "current-generation-result-can-commit",
+        "error-before-coverage-is-unavailable",
+        "exhausted-finite-acquisition-budget",
+        "fewer-usable-than-display-maximum",
+        "geographic-complete-coverage",
+        "geographic-partial-empty-is-incidence",
+        "geographic-partial-with-useful-results",
+        "mixed-known-and-unobserved-optional-metrics-stay-unknown",
+        "stable-provider-identity-deduplicates",
+        "stale-generation-cannot-mutate-or-relabel",
+        "title-image-price-are-not-identity",
+        "unobservable-optional-metrics-are-null",
+    }
 )
 
 
@@ -59,6 +107,7 @@ CASES = _cases()
 SEARCH_SESSION_CASES = [
     item for item in CASES if item[2].get("runtime_check") == "search_session_core"
 ]
+RUNTIME_CASES = [item for item in CASES if item[2].get("runtime_check")]
 
 
 @pytest.fixture(scope="module")
@@ -80,10 +129,28 @@ def test_schema_documents_parse() -> None:
         Draft202012Validator.check_schema(schema)
 
 
-def test_fixture_ids_are_unique() -> None:
-    ids = [case["id"] for _stem, _path, case in CASES]
-    assert ids
-    assert len(ids) == len(set(ids))
+def test_golden_fixture_inventory_is_exact() -> None:
+    ids = {case["id"] for _stem, _path, case in CASES}
+    assert ids == EXPECTED_FIXTURE_IDS
+    assert len(EXPECTED_FIXTURE_IDS) == 23
+
+
+def test_search_session_core_inventory_is_exact() -> None:
+    ids = {case["id"] for _stem, _path, case in SEARCH_SESSION_CASES}
+    assert ids == EXPECTED_SEARCH_SESSION_CORE_IDS
+    assert len(EXPECTED_SEARCH_SESSION_CORE_IDS) == 16
+
+
+def _assert_source_ref_stays_in_repo(ref: str) -> Path:
+    assert isinstance(ref, str) and ref.strip()
+    assert not ref.startswith("http")
+    relative = Path(ref)
+    assert not relative.is_absolute()
+    assert ".." not in relative.parts
+    target = (ROOT / relative).resolve()
+    assert target.is_relative_to(ROOT.resolve()), f"source_ref escaped repository: {ref}"
+    assert target.is_file(), f"missing source_ref {ref}"
+    return target
 
 
 @pytest.mark.parametrize(("stem", "path", "case"), CASES, ids=[item[0] for item in CASES])
@@ -99,10 +166,10 @@ def test_fixture_validates_and_is_safe(
     secret = _SECRET_RE.search(text)
     assert secret is None, f"possible secret in {path}: {secret.group(0) if secret else ''}"
     assert case["must_not"]
+    openspec_refs = [ref for ref in case["source_refs"] if ref.startswith("openspec/")]
+    assert openspec_refs, f"{case['id']} must keep at least one OpenSpec source_ref"
     for ref in case["source_refs"]:
-        assert isinstance(ref, str) and not ref.startswith("http")
-        target = ROOT / ref
-        assert target.is_file(), f"missing source_ref {ref}"
+        _assert_source_ref_stays_in_repo(ref)
     _validate_nested_contracts(case)
     if isinstance(case["given"].get("intent"), dict):
         _assert_search_intent_application_invariants(case["given"]["intent"])
@@ -152,14 +219,11 @@ def test_later_stage_fixtures_are_not_marked_implemented() -> None:
     ]
     assert later
     for case in later:
-        assert case.get("runtime_check") in {None, "null"} or case["runtime_check"] is None
+        assert case.get("runtime_check") is None
         assert case["expected"].get("implemented") is not True
 
 
-def test_alibaba_title_bearing_optional_fields_remain_usable() -> None:
-    case = _load_json(
-        FIXTURE_DIR / "validity" / "alibaba-title-bearing-optional-fields-absent.json"
-    )
+def _check_alibaba_mapper(case: Mapping[str, Any]) -> None:
     from bera_price_tracker.infrastructure.providers.alibaba import map_alibaba_item
 
     product = map_alibaba_item(case["given"]["raw"])
@@ -169,10 +233,7 @@ def test_alibaba_title_bearing_optional_fields_remain_usable() -> None:
         assert getattr(product, field_name) is None
 
 
-def test_facebook_mixed_pool_priced_only_policy() -> None:
-    case = _load_json(
-        FIXTURE_DIR / "validity" / "facebook-mixed-free-invalid-valid-priced-pool.json"
-    )
+def _check_facebook_priced_only(case: Mapping[str, Any]) -> None:
     from bera_price_tracker.application.facebook_products import (
         FacebookPriceDecision,
         classify_explicit_facebook_price,
@@ -193,65 +254,97 @@ def test_facebook_mixed_pool_priced_only_policy() -> None:
     assert rejected == case["expected"]["rejected"]
 
 
-def test_mercadolibre_permalink_absence_does_not_reject() -> None:
-    case = _load_json(FIXTURE_DIR / "validity" / "mercadolibre-valid-mlv-without-permalink.json")
+def _check_mercadolibre_mapper(case: Mapping[str, Any]) -> None:
     from bera_price_tracker.infrastructure.providers.mercadolibre_apify import (
         map_mercadolibre_item,
     )
 
-    listing = map_mercadolibre_item(case["given"]["raw"])
+    given = case["given"]
+    if "raw_items" in given:
+        mapped = [map_mercadolibre_item(item) for item in given["raw_items"]]
+        assert mapped[0] is None
+        assert mapped[1] is not None
+        assert mapped[1].external_id == "MLV900000002"
+        return
+    listing = map_mercadolibre_item(given["raw"])
     assert listing is not None
     assert listing.external_id == case["expected"]["external_id"]
     assert listing.permalink is None
 
 
-def test_mercadolibre_later_valid_record_can_remain_usable() -> None:
-    case = _load_json(
-        FIXTURE_DIR / "validity" / "mercadolibre-later-valid-mlv-after-missing-venezuela.json"
-    )
-    from bera_price_tracker.infrastructure.providers.mercadolibre_apify import (
-        map_mercadolibre_item,
-    )
-
-    mapped = [map_mercadolibre_item(item) for item in case["given"]["raw_items"]]
-    assert mapped[0] is None
-    assert mapped[1] is not None
-    assert mapped[1].external_id == "MLV900000002"
+def _check_search_session_core(case: Mapping[str, Any]) -> None:
+    _assert_search_session_case(search_session, case)
 
 
-def test_facebook_low_level_execute_remains_one_actor_run() -> None:
+def _check_facebook_one_execute(case: Mapping[str, Any]) -> None:
     from bera_price_tracker.application.facebook_products import (
+        FacebookProductSearchMetrics,
+        FacebookProductSearchResult,
         SearchFacebookMarketplaceProducts,
     )
 
     assert "one execute maps to one Actor run" in (SearchFacebookMarketplaceProducts.__doc__ or "")
+    assert case["expected"]["facebook_execute_equals_one_actor_run"] is True
+
+    class CountingFacebookProvider:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        def search(self, query: str, city: str, limit: int) -> FacebookProductSearchResult:
+            self.calls.append((query, city, limit))
+            return FacebookProductSearchResult(
+                listings=(),
+                metrics=FacebookProductSearchMetrics(requested=limit, fetched=0, usable=0),
+            )
+
+    provider = CountingFacebookProvider()
+    SearchFacebookMarketplaceProducts(provider).execute("baseball glove", "caracas", 5)
+    assert provider.calls == [("baseball glove", "caracas", 5)]
+    SearchFacebookMarketplaceProducts(provider).execute("second query", "maracaibo", 3)
+    assert len(provider.calls) == 2
 
 
-def test_search_session_core_is_a_required_application_module() -> None:
-    assert search_session.SearchIntent is not None
-    assert SEARCH_SESSION_CASES
-    ids = {case["id"] for _stem, _path, case in SEARCH_SESSION_CASES}
-    assert "mixed-known-and-unobserved-optional-metrics-stay-unknown" in ids
-    stage_a_core = [
-        case["id"]
-        for _stem, _path, case in CASES
-        if case["implementation_stage"] == "A"
-        and case.get("runtime_check") == "search_session_core"
-    ]
-    assert len(stage_a_core) == len(SEARCH_SESSION_CASES)
+RUNTIME_HANDLERS: dict[str, Callable[[Mapping[str, Any]], None]] = {
+    "alibaba_mapper": _check_alibaba_mapper,
+    "facebook_priced_only": _check_facebook_priced_only,
+    "mercadolibre_mapper": _check_mercadolibre_mapper,
+    "search_session_core": _check_search_session_core,
+    "facebook_one_execute": _check_facebook_one_execute,
+}
+
+
+def _run_runtime_check(case: Mapping[str, Any]) -> None:
+    check = case.get("runtime_check")
+    if check is None:
+        raise ValueError("runtime_check is null")
+    handler = RUNTIME_HANDLERS.get(str(check))
+    if handler is None:
+        raise ValueError(f"unknown runtime_check: {check}")
+    handler(case)
+
+
+def test_every_non_null_runtime_check_has_exactly_one_handler() -> None:
+    schema = _load_json(SCHEMA_DIR / "golden-search-case.schema.json")
+    allowed = {
+        value for value in schema["properties"]["runtime_check"]["enum"] if value is not None
+    }
+    assert set(RUNTIME_HANDLERS) == allowed
+    used = {str(case["runtime_check"]) for _stem, _path, case in RUNTIME_CASES}
+    assert used == allowed
+
+
+def test_unknown_runtime_check_fails() -> None:
+    with pytest.raises(ValueError, match="unknown runtime_check"):
+        _run_runtime_check({"runtime_check": "not-a-handler", "id": "synthetic", "given": {}})
 
 
 @pytest.mark.parametrize(
     ("stem", "path", "case"),
-    SEARCH_SESSION_CASES,
-    ids=[item[0] for item in SEARCH_SESSION_CASES],
+    RUNTIME_CASES,
+    ids=[item[0] for item in RUNTIME_CASES],
 )
-def test_search_session_core_fixtures_when_implemented(
-    stem: str,
-    path: Path,
-    case: dict[str, Any],
-) -> None:
-    _assert_search_session_case(search_session, case)
+def test_runtime_check_dispatch(stem: str, path: Path, case: dict[str, Any]) -> None:
+    _run_runtime_check(case)
 
 
 def test_mixed_unknown_metrics_fixture_executes_search_session_core() -> None:
@@ -259,7 +352,7 @@ def test_mixed_unknown_metrics_fixture_executes_search_session_core() -> None:
         FIXTURE_DIR / "metrics" / "mixed-known-and-unobserved-optional-metrics-stay-unknown.json"
     )
     assert case["runtime_check"] == "search_session_core"
-    _assert_search_session_case(search_session, case)
+    _run_runtime_check(case)
     result_metrics = case["expected"]["metrics"]
     assert result_metrics["acquisition_requested"] == 10
     assert result_metrics["fetched"] is None
@@ -282,6 +375,10 @@ def test_search_intent_schema_rejects_whitespace_only_query() -> None:
     payload = _intent_fixture_payload(original_user_query="   ")
     with pytest.raises(ValidationError):
         _validator("search-intent.schema.json").validate(payload)
+    with pytest.raises(ValidationError):
+        _validator("search-intent.schema.json").validate(
+            _intent_fixture_payload(original_user_query=" \n\t ")
+        )
     with pytest.raises(ValueError, match="must not be blank"):
         search_session.SearchIntent(
             original_user_query="   ",
@@ -289,6 +386,13 @@ def test_search_intent_schema_rejects_whitespace_only_query() -> None:
             selected_providers=("alibaba",),
             generation=7,
         )
+
+
+def test_search_intent_schema_accepts_non_blank_multiline_query() -> None:
+    payload = _intent_fixture_payload(original_user_query="baseball\n  glove")
+    _validator("search-intent.schema.json").validate(payload)
+    intent = _intent(search_session, payload)
+    assert intent.original_user_query == "baseball glove"
 
 
 def test_search_intent_schema_is_not_direct_dataclass_serialization() -> None:
@@ -299,6 +403,26 @@ def test_search_intent_schema_is_not_direct_dataclass_serialization() -> None:
     intent = _intent(search_session, payload)
     assert intent.requested_geographic_scopes == (("alibaba", None),)
     assert not isinstance(intent.selected_providers, list)
+
+
+def test_structural_search_intent_schema_is_provider_neutral() -> None:
+    payload = _intent_fixture_payload(selected_providers=["custom-provider"])
+    _validator("search-intent.schema.json").validate(payload)
+    intent = _intent(search_session, payload)
+    assert intent.selected_providers == ("custom-provider",)
+    golden = {
+        "id": "synthetic-custom-provider",
+        "description": "GoldenSearchCase keeps BERA marketplace vocabulary.",
+        "provider": "custom-provider",
+        "implementation_stage": "A",
+        "runtime_check": None,
+        "given": {},
+        "expected": {},
+        "must_not": ["treat custom-provider as a current marketplace fixture"],
+        "source_refs": ["openspec/changes/multi-market-search-semantics/design.md"],
+    }
+    with pytest.raises(ValidationError):
+        _validator("golden-search-case.schema.json").validate(golden)
 
 
 def test_search_intent_rejects_scope_for_unselected_provider() -> None:
@@ -340,6 +464,264 @@ def test_search_intent_display_limit_membership_is_owned_by_policy() -> None:
     )
     with pytest.raises(ValueError, match="not supported"):
         policy.validate_intent(intent)
+
+
+def _plan_projection(plan: search_session.BoundedAcquisitionPlan) -> dict[str, Any]:
+    return {
+        "provider": plan.provider,
+        "acquisition_budget": plan.acquisition_budget,
+        "maximum_internal_acquisitions": plan.maximum_internal_acquisitions,
+        "steps": [
+            {
+                "key": step.key,
+                "candidate_limit": step.candidate_limit,
+                "required_for_complete_coverage": step.required_for_complete_coverage,
+            }
+            for step in plan.steps
+        ],
+        "requested_geographic_scope": plan.requested_geographic_scope,
+        "complete_effective_geographic_scope": plan.complete_effective_geographic_scope,
+        "partial_effective_geographic_scope": plan.partial_effective_geographic_scope,
+        "allow_early_termination": plan.allow_early_termination,
+    }
+
+
+def _candidate_projection(candidate: Any) -> dict[str, Any]:
+    return {
+        "title": str(getattr(candidate, "title", candidate)),
+        "identity": getattr(candidate, "identity", None),
+        "image": getattr(candidate, "image", ""),
+        "price": getattr(candidate, "price", ""),
+        "usable": bool(getattr(candidate, "usable", True)),
+    }
+
+
+def _metrics_projection(metrics: Any) -> dict[str, Any]:
+    return {
+        "display_requested": metrics.display_requested,
+        "acquisition_budget": metrics.acquisition_budget,
+        "acquisition_requested": metrics.acquisition_requested,
+        "fetched": metrics.fetched,
+        "mapped": metrics.mapped,
+        "rejected": metrics.rejected,
+        "usable": metrics.usable,
+        "displayed": metrics.displayed,
+    }
+
+
+def _result_projection(result: search_session.ProviderRunResult[Any]) -> dict[str, Any]:
+    coverage = None if result.coverage_status is None else result.coverage_status.value
+    return {
+        "provider": result.provider,
+        "generation": result.generation,
+        "status": result.status.value,
+        "ordered_usable_pool": [_candidate_projection(item) for item in result.ordered_usable_pool],
+        "canonical_session_results": [
+            _candidate_projection(item) for item in result.canonical_session_results
+        ],
+        "metrics": _metrics_projection(result.metrics),
+        "requested_geographic_scope": result.requested_geographic_scope,
+        "effective_geographic_scope": result.effective_geographic_scope,
+        "coverage_status": coverage,
+        "failure": result.failure,
+    }
+
+
+def test_bounded_acquisition_plan_schema_accepts_real_pr_a_plans() -> None:
+    alibaba = _policy(search_session, {"alibaba": _rule()})
+    non_geo = alibaba.create_plan(
+        provider="alibaba",
+        display_limit=3,
+        steps=_steps(search_session, [{"key": "step-1", "candidate_limit": 5}]),
+    )
+    facebook = _policy(search_session, {"facebook": _rule(max_acquisitions=2, multiplier=4)})
+    geo = facebook.create_plan(
+        provider="facebook",
+        display_limit=3,
+        steps=_steps(
+            search_session,
+            [
+                {"key": "step-1", "candidate_limit": 5},
+                {"key": "step-2", "candidate_limit": 5},
+            ],
+        ),
+        requested_geographic_scope="Toda Venezuela",
+        complete_effective_geographic_scope="Toda Venezuela",
+        partial_effective_geographic_scope="partial:Toda Venezuela",
+    )
+    custom = search_session.AcquisitionBudgetPolicy(
+        provider_rules={
+            "custom-provider": search_session.ProviderBudgetRule(
+                maximum_internal_acquisitions=1,
+                maximum_acquisition_budget=30,
+                candidate_buffer_multiplier=3,
+            )
+        }
+    )
+    custom_plan = custom.create_plan(
+        provider="custom-provider",
+        display_limit=3,
+        steps=_steps(search_session, [{"key": "step-1", "candidate_limit": 5}]),
+    )
+    validator = _validator("bounded-acquisition-plan.schema.json")
+    validator.validate(_plan_projection(non_geo))
+    validator.validate(_plan_projection(geo))
+    validator.validate(_plan_projection(custom_plan))
+    assert non_geo.requested_geographic_scope is None
+    assert geo.requested_geographic_scope == "Toda Venezuela"
+
+
+def test_bounded_acquisition_plan_application_invariants() -> None:
+    with pytest.raises(ValueError, match="step key must not be blank"):
+        search_session.InternalAcquisitionStep(key="  ", candidate_limit=5)
+    with pytest.raises(ValueError, match="step keys must be unique"):
+        search_session.BoundedAcquisitionPlan(
+            provider="alibaba",
+            acquisition_budget=10,
+            maximum_internal_acquisitions=2,
+            steps=_steps(
+                search_session,
+                [
+                    {"key": "step-1", "candidate_limit": 5},
+                    {"key": "step-1", "candidate_limit": 3},
+                ],
+            ),
+        )
+    with pytest.raises(ValueError, match="plan exceeds maximum_internal_acquisitions"):
+        search_session.BoundedAcquisitionPlan(
+            provider="alibaba",
+            acquisition_budget=30,
+            maximum_internal_acquisitions=1,
+            steps=_steps(
+                search_session,
+                [
+                    {"key": "step-1", "candidate_limit": 5},
+                    {"key": "step-2", "candidate_limit": 5},
+                ],
+            ),
+        )
+    with pytest.raises(ValueError, match="each step candidate limit must fit"):
+        search_session.BoundedAcquisitionPlan(
+            provider="alibaba",
+            acquisition_budget=4,
+            maximum_internal_acquisitions=1,
+            steps=_steps(search_session, [{"key": "step-1", "candidate_limit": 5}]),
+        )
+    with pytest.raises(ValueError, match="geographic plans require complete and partial"):
+        search_session.BoundedAcquisitionPlan(
+            provider="facebook",
+            acquisition_budget=12,
+            maximum_internal_acquisitions=2,
+            steps=_steps(search_session, [{"key": "step-1", "candidate_limit": 5}]),
+            requested_geographic_scope="Toda Venezuela",
+        )
+    policy = _policy(search_session, {"alibaba": _rule()})
+    intent = _intent(search_session, _intent_fixture_payload())
+    mismatched = search_session.BoundedAcquisitionPlan(
+        provider="alibaba",
+        acquisition_budget=100,
+        maximum_internal_acquisitions=3,
+        steps=_steps(search_session, [{"key": "step-1", "candidate_limit": 5}]),
+    )
+    with pytest.raises(ValueError, match="acquisition_budget does not match policy"):
+        search_session.execute_bounded_provider_search(
+            intent=intent,
+            plan=mismatched,
+            policy=policy,
+            acquire=lambda _step: _batch(search_session, {"candidates": []}),
+        )
+
+
+def _execute_named_result(kind: str) -> search_session.ProviderRunResult[Any]:
+    if kind in {"SUCCESS", "EMPTY"}:
+        policy = _policy(search_session, {"alibaba": _rule()})
+        intent = _intent(search_session, _intent_fixture_payload())
+        plan = policy.create_plan(
+            provider="alibaba",
+            display_limit=3,
+            steps=_steps(search_session, [{"key": "step-1", "candidate_limit": 5}]),
+        )
+        candidates = [{"title": "one"}] if kind == "SUCCESS" else []
+        return search_session.execute_bounded_provider_search(
+            intent=intent,
+            plan=plan,
+            policy=policy,
+            acquire=lambda _step: _batch(search_session, {"candidates": candidates}),
+        )
+    policy = _policy(search_session, {"facebook": _rule(max_acquisitions=2, multiplier=4)})
+    intent = _intent(
+        search_session,
+        _intent_fixture_payload(
+            selected_providers=["facebook"],
+            requested_geographic_scopes=[{"provider": "facebook", "scope": "Toda Venezuela"}],
+        ),
+    )
+    plan = policy.create_plan(
+        provider="facebook",
+        display_limit=3,
+        steps=_steps(
+            search_session,
+            [
+                {"key": "step-1", "candidate_limit": 5},
+                {"key": "step-2", "candidate_limit": 5},
+            ],
+        ),
+        requested_geographic_scope="Toda Venezuela",
+        complete_effective_geographic_scope="Toda Venezuela",
+        partial_effective_geographic_scope="partial:Toda Venezuela",
+    )
+    batches = {
+        "ERROR": {
+            "step-1": RuntimeError("not configured"),
+            "step-2": RuntimeError("not configured"),
+        },
+        "COMPLETE": {
+            "step-1": _batch(search_session, {"candidates": [{"title": "one", "identity": "1"}]}),
+            "step-2": _batch(search_session, {"candidates": [{"title": "two", "identity": "2"}]}),
+        },
+        "PARTIAL": {
+            "step-1": _batch(search_session, {"candidates": [{"title": "one", "identity": "1"}]}),
+            "step-2": RuntimeError("partition unavailable"),
+        },
+    }[kind]
+
+    def acquire(step: Any) -> Any:
+        value = batches[step.key]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    return search_session.execute_bounded_provider_search(
+        intent=intent,
+        plan=plan,
+        policy=policy,
+        acquire=acquire,
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "status", "coverage"),
+    [
+        ("SUCCESS", "SUCCESS", None),
+        ("EMPTY", "EMPTY", None),
+        ("ERROR", "ERROR", None),
+        ("COMPLETE", "SUCCESS", "COMPLETE"),
+        ("PARTIAL", "SUCCESS", "PARTIAL"),
+    ],
+)
+def test_provider_run_result_schema_accepts_real_pr_a_results(
+    kind: str,
+    status: str,
+    coverage: str | None,
+) -> None:
+    result = _execute_named_result(kind)
+    payload = _result_projection(result)
+    _validator("provider-run-result.schema.json").validate(payload)
+    assert payload["status"] == status
+    assert payload["coverage_status"] == coverage
+    if kind == "ERROR":
+        assert payload["failure"]
+        assert payload["ordered_usable_pool"] == []
 
 
 def _assert_search_session_case(module: Any, case: Mapping[str, Any]) -> None:
@@ -421,7 +803,20 @@ def _assert_result_metrics(metrics: Any, expected: Mapping[str, Any]) -> None:
         assert getattr(metrics, name) == value
 
 
-def _policy(module: Any, rules: Mapping[str, Any]) -> Any:
+def _rule(
+    *,
+    max_acquisitions: int = 3,
+    max_budget: int = 30,
+    multiplier: int = 3,
+) -> dict[str, int]:
+    return {
+        "maximum_internal_acquisitions": max_acquisitions,
+        "maximum_acquisition_budget": max_budget,
+        "candidate_buffer_multiplier": multiplier,
+    }
+
+
+def _policy(module: Any, rules: Mapping[str, Mapping[str, Any]]) -> Any:
     provider_rules = {
         name: module.ProviderBudgetRule(
             maximum_internal_acquisitions=int(rule["maximum_internal_acquisitions"]),
