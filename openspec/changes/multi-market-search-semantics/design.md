@@ -18,8 +18,8 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 ## Architecture and data flow
 
 1. A new search generation creates `SearchIntent(original_user_query, display_limit, selected_providers, generation)`; `display_limit` is a supported positive value no greater than centralized finite `MAX_DISPLAY_LIMIT`, and the supported set explicitly includes 10.
-2. Query routing produces one `ProviderQuery` per selected provider with query provenance and `requested_geographic_scope`. `ProviderRunResult` separately records truthful `effective_geographic_scope` and `coverage_status` (`COMPLETE` or `PARTIAL`).
-3. A centralized acquisition policy computes `acquisition_limit(provider, display_limit, geographic_scope)` and caps/bounds the aggregate provider strategy.
+2. Query routing produces one `ProviderQuery` per selected provider with query provenance and `requested_geographic_scope`. `ProviderRunResult` separately records truthful optional `effective_geographic_scope` and `coverage_status` (`COMPLETE`, `PARTIAL`, or unavailable).
+3. A centralized acquisition-budget policy computes and returns `acquisition_budget(provider, display_limit, requested_geographic_scope)`, the finite ceiling for the aggregate strategy. `acquisition_requested` is measured later from executed internal acquisitions.
 4. The orchestrator starts one logical search operation for each selected provider. The provider strategy may perform multiple bounded internal acquisitions to cover scope, partitions, or pagination, but the orchestrator does not start a replacement logical operation when mapping or policy rejects candidates.
 5. Each adapter returns or is wrapped into a `ProviderRunResult` containing the deterministically ordered usable pool, with deduplication only where truthful stable identity exists, plus consolidated metrics, coverage, provenance, and execution outcome.
 6. The pipeline is explicitly: acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. The acquisition buffer exists only to improve the chance of filling the display maximum; extra usable buffer candidates are not canonical session results.
@@ -38,9 +38,9 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 
 The UI label is **Máximo por plataforma**. A display maximum is not a guarantee; the application returns fewer results when fewer usable candidates exist and never fabricates or duplicates candidates.
 
-### AcquisitionLimitPolicy
+### AcquisitionBudgetPolicy
 
-The policy is a centralized deterministic function of provider, `display_limit`, geographic scope, and provider hard caps. A central policy module defines a finite `MAX_DISPLAY_LIMIT >= 10`, the finite maximum internal acquisitions per provider/logical search, and the finite aggregate acquisition budget per provider. All limits are testable and SHALL NOT be scattered across adapters/views. It SHALL request at least the display limit when supported and MAY add a bounded rejection buffer. Provider hard limits may mean fewer results are possible; Alibaba's maximum 500 is never a routine pool.
+The policy's output is `acquisition_budget`, a centralized deterministic finite ceiling based on provider, `display_limit`, requested scope, and provider hard caps. It does not represent work already requested. The same policy module defines finite `MAX_DISPLAY_LIMIT` and maximum internal acquisitions. All are testable and not scattered across adapters/views. Alibaba's maximum 500 is never a routine budget.
 
 A provider strategy MAY split the aggregate acquisition budget across multiple bounded internal acquisitions. It SHOULD terminate early once at least `display_limit` unique valid candidates exist only if doing so preserves canonical ordering and the truth of the declared geographic scope. Explicit **Toda Venezuela** cannot terminate after only early city partitions: it requires either one genuine nationwide search or completion of the entire finite configured nationwide partition set. If a finite budget cannot truthfully cover that scope, results use accurate partial/broad Venezuela copy. Exact finite values remain an implementation-evidence decision recorded here before implementation.
 
@@ -85,12 +85,13 @@ A selected provider that cannot start because required configuration or credenti
 
 ### Requested scope, effective coverage, and incidence
 
-`SearchIntent`/`ProviderQuery` retain `requested_geographic_scope`. `ProviderRunResult` and `SearchSessionSnapshot` retain `effective_geographic_scope` and `coverage_status`:
+`SearchIntent`/`ProviderQuery` retain `requested_geographic_scope`. `ProviderRunResult` and `SearchSessionSnapshot` retain optional `effective_geographic_scope` and optional `coverage_status`:
 
 - `COMPLETE`: every acquisition required by the documented requested-scope strategy completed, or one genuine provider search truthfully covered the requested scope.
 - `PARTIAL`: a proper subset completed and produced a truthful partial/broad effective scope, whether or not usable results were found.
+- unavailable/not established: no truthful coverage exists, such as `ERROR` before any successful acquisition or missing configuration. Effective scope is unavailable and diagnostics render **No disponible**.
 
-Example: requested `Toda Venezuela`, effective `Cobertura amplia/parcial de Venezuela`, coverage `PARTIAL`. Useful canonical results are retained. Partial `SUCCESS` or `EMPTY` outcomes both create a session incidence and MUST NOT claim nationwide `Sin resultados`. If the logical operation fails without a truthful result, status remains `ERROR`.
+Example: requested `Toda Venezuela`, effective `Cobertura amplia/parcial de Venezuela`, coverage `PARTIAL`. Useful canonical results are retained. Partial `SUCCESS` or `EMPTY` outcomes create an incidence. If configuration is missing or failure occurs before truthful coverage, status is `ERROR`, effective scope and coverage are unavailable, and normal error copy wins; unavailable coverage never creates or suppresses an incidence by itself.
 
 ### Logical search operation and internal acquisition budget
 
@@ -137,6 +138,8 @@ Session labels derive from provider statuses and coverage outcomes:
 | Any selected provider coverage `PARTIAL` | `Búsqueda completada con incidencias` |
 | At least one `ERROR` and at least one other `SUCCESS` or `EMPTY` | `Búsqueda completada con incidencias` |
 | All selected providers `ERROR` | `Búsqueda con error` |
+
+Unavailable coverage on an `ERROR` provider does not alter these error rules. `SUCCESS` and `EMPTY` require established `COMPLETE` or `PARTIAL` coverage when geographic scope applies.
 
 The comparison table shows concise disclosure such as **Comparables de la misma búsqueda · identidad exacta no confirmada**. Implementation may refine wording but may not suggest exact matching.
 

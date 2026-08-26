@@ -4,7 +4,22 @@
 
 ### Requirement: Original and provider-specific queries retain provenance
 
-Each search session SHALL retain `original_user_query` and `generation`. `SearchIntent`/`ProviderQuery` SHALL retain `requested_geographic_scope`; `ProviderRunResult`/snapshot SHALL separately retain `effective_geographic_scope` and `coverage_status` (`COMPLETE` or `PARTIAL`). Query origins remain `USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, and `FALLBACK`. Requested Toda Venezuela may yield truthful partial/broad effective coverage without discarding useful results; it is never silently complete.
+Each session SHALL retain `requested_geographic_scope`; provider results separately retain optional `effective_geographic_scope` and optional `coverage_status`. Established coverage is `COMPLETE` or `PARTIAL`. When an `ERROR` occurs before truthful coverage exists, effective scope and coverage are unavailable and render **No disponible**; they MUST NOT be forced to either enum value or override error semantics.
+
+#### Scenario: Configuration error has no established coverage
+- **GIVEN** requested scope is Toda Venezuela
+- **AND** provider configuration is missing so no acquisition starts
+- **WHEN** the provider result is recorded
+- **THEN** status is `ERROR`
+- **AND** effective scope is unavailable
+- **AND** coverage status is unavailable
+- **AND** diagnostics render `No disponible` without exposing configuration
+
+#### Scenario: Failure before first successful acquisition has no partial coverage
+- **GIVEN** a provider operation fails before any successful acquisition establishes scope
+- **WHEN** its result is recorded
+- **THEN** status is `ERROR`
+- **AND** coverage is unavailable, not `PARTIAL`
 
 #### Scenario: Provider queries preserve original intent
 - **GIVEN** the user searches `baseball glove`

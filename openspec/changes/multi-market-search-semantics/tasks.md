@@ -4,12 +4,12 @@
 
 ## Implementation PR A — Search intent, snapshot, acquisition, metrics, and status
 
-- [ ] A.1 Introduce provider-neutral `SearchIntent`, `ProviderRunResult`, and snapshot contracts with requested scope, effective scope, `COMPLETE`/`PARTIAL` coverage, generation, and bounded display limit; do not define Facebook's concrete partition catalog here.
-- [ ] A.2 Centralize/test finite display/internal-acquisition/aggregate budgets and provider-neutral early-termination hooks. Keep `acquisition_budget` separate from actual `acquisition_requested` work.
+- [ ] A.1 Introduce provider-neutral contracts with `requested_geographic_scope`, optional `effective_geographic_scope`, optional `coverage_status`, provider status, generation, and bounded `display_limit`.
+- [ ] A.2 Implement `AcquisitionBudgetPolicy` returning finite `acquisition_budget`; separately measure actual `acquisition_requested`. Keep these as the only acquisition-volume concepts.
 - [ ] A.3 Define the pure pipeline: acquired → mapped/policy-evaluated → ordered usable pool → frozen canonical session prefix → presentation projections. Verify `usable` counts the pool while `displayed` and canonical membership count only its `display_limit` prefix.
 - [ ] A.4 Evolve/consolidate existing `ProviderAcquisitionMetrics` and provider-specific acquisition metrics into one `ProviderRunMetrics` contract with aggregate internal-acquisition requested/fetched values, documented deduplication boundaries, and optional unknown-safe mapped/rejected values; do not maintain parallel sources of truth or impose arithmetic identities.
 - [ ] A.5 Define one logical generic operation that composes existing bounded single-acquisition provider operations; preserve Facebook's existing one-execute/one-Actor-run low-level contract and unrelated workflow semantics.
-- [ ] A.6 Derive `SUCCESS`, `EMPTY`, `ERROR`, `COMPLETE`, and `PARTIAL`; make partial coverage a session incidence, including partial `EMPTY`, without discarding useful results.
+- [ ] A.6 Derive provider status independently from optional coverage. Test partial incidence, complete empty copy, and `ERROR` with unavailable coverage/effective scope.
 - [ ] A.7 Keep deterministic rules in small pure application/GUI modules where practical; use `TrackerState` for orchestration, generation checks, and serialization rather than as a new domain/service layer.
 - [ ] A.8 Add provider-neutral fake multi-acquisition tests for COMPLETE/PARTIAL coverage, partial success/empty incidence copy, exhausted budgets, actual requested work, safe/identity-less deduplication, and acquisition 10 / usable 8 / display 3.
 
@@ -38,13 +38,13 @@
 - [ ] D.2 Route Alibaba to the original query or an independently derived safe international query; never reuse the Venezuela-localized query silently.
 - [ ] D.3 Reuse existing query-generation/translation infrastructure with no language-detection AI or second subsystem, at most one shared Venezuela-localized generation, the deterministic outcome table in `design.md`, and no translation loop.
 - [ ] D.4 Add offline translator fakes for no-translation-needed, unavailable, timeout/failure, empty/invalid, technical-token validation failure, output-identical-to-original, and successful shared Venezuela translation; prove DeepL call count is zero.
-- [ ] D.5 Own the concrete Facebook Venezuela strategy: finite nationwide partition catalog, per-call cap composition, aliases, requested/effective scope, coverage status, sanitized diagnostics, foreign rejection, and unchanged Mercado Libre MLV evidence.
+- [ ] D.5 Own the concrete Facebook Venezuela strategy: finite partition catalog, per-call composition, aliases, `requested_geographic_scope`, `effective_geographic_scope`, `coverage_status`, sanitized diagnostics, foreign rejection, and unchanged MLV evidence.
 - [ ] D.6 Add Facebook-specific tests for genuine nationwide acquisition, all partitions `COMPLETE`, failed subset with useful `PARTIAL` results, partial zero results, scope provenance, missing location, foreign evidence, and narrower scopes.
 
 ## Implementation PR E — Currency, export, lifecycle, and browser compatibility gate
 
 - [ ] E.1 Remove Alibaba unknown-currency-as-USD fallbacks, retain visible published prices when allowed, and explain unconfirmed currency/unavailable USD statistics. Regression-test no implicit FX and `$` not proving USD.
-- [ ] E.2 Export exactly one row per frozen canonical result with requested/effective scope, coverage status, budget, and actual requested work; keep export disabled until all selected providers are terminal.
+- [ ] E.2 Export exactly one row per frozen result with requested/effective scope fields, optional coverage, `acquisition_budget`, and actual `acquisition_requested`; keep export disabled until all providers are terminal.
 - [ ] E.3 Preserve and regression-test CSV formula-injection protection and UTF-8 BOM.
 - [ ] E.4 Ensure **Nueva búsqueda** clears transient state; reject stale routing, translation, and provider continuations before they mutate provenance, launch downstream work, or change export membership.
 - [ ] E.5 At 1440x900 with network-blocked offline fixtures, verify: all providers one result; uneven 3/2/1; display 10 with unrelated-looking candidates retained positionally; Mercado Libre EMPTY with details; unknown Alibaba currency; all EMPTY; partial error; **Nueva búsqueda**; CSV; marketplace-specific ratings/images; and non-identity disclosure.

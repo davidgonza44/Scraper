@@ -33,9 +33,9 @@ The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated c
 - **AND** canonical session results contain the first 3 candidates
 - **AND** that provider contributes exactly 3 CSV rows
 
-### Requirement: Acquisition limits are explicit, centralized, and bounded
+### Requirement: Acquisition budgets and actual requested work are distinct
 
-The system SHALL separate finite aggregate `acquisition_budget` from `acquisition_requested`. Budget is the ceiling available to a strategy; `acquisition_requested` is the sum of candidate limits of internal acquisitions actually executed and excludes unused budget. Central policy defines finite display, internal-acquisition, and aggregate budgets. Strategies stop early only when ordering and coverage remain truthful; incomplete nationwide coverage becomes `PARTIAL`. On exhaustion they return fewer results. Alibaba 500 is not a normal pool.
+The system SHALL use only `display_limit`, `acquisition_budget`, and `acquisition_requested` for these semantics. `acquisition_budget` is the centralized finite strategy ceiling returned by `AcquisitionBudgetPolicy`; `acquisition_requested` sums candidate limits of internal acquisitions actually executed and excludes unused budget. No third acquisition-volume value SHALL exist. Strategies stop early only when ordering and coverage remain truthful; on exhaustion they return fewer results.
 
 #### Scenario: Invalid first candidate within one pool
 - **GIVEN** `display_limit = 1`

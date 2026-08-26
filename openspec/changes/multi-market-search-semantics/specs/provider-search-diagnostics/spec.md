@@ -8,6 +8,7 @@ The session SHALL render `Búsqueda completada` only when at least one provider 
 
 #### Scenario: All providers empty
 - **GIVEN** every selected provider status is `EMPTY`
+- **AND** every applicable coverage status is `COMPLETE`
 - **WHEN** session copy renders
 - **THEN** it is `Búsqueda completada · Sin resultados`
 
@@ -33,7 +34,7 @@ The session SHALL render `Búsqueda completada` only when at least one provider 
 
 ### Requirement: Compact provider details are available when useful
 
-The production UI SHALL offer **Ver detalles** for useful `EMPTY`, `ERROR`, `PARTIAL`, rejection/filtering, and schema/mapping-loss states. Details SHALL show requested/effective scope, coverage status, **Máximo a mostrar**, actual **Pedidos al proveedor**, **Recibidos**, **Mapeados**, **Rechazados**, **Usables**, and **Mostrados**. Partial copy is sanitized and exposes no sensitive partition/provider details. Unknown is **No disponible**.
+The production UI SHALL offer **Ver detalles** for useful `EMPTY`, `ERROR`, `PARTIAL`, rejection/filtering, and schema/mapping-loss states. Details SHALL show requested/effective scope, coverage status, **Máximo a mostrar**, actual **Pedidos al proveedor**, **Recibidos**, **Mapeados**, **Rechazados**, **Usables**, and **Mostrados**. Unestablished effective scope/coverage renders **No disponible** and does not override `ERROR`. Partial copy is sanitized; unknown metrics remain **No disponible**.
 
 #### Scenario: Empty Mercado Libre details
 - **GIVEN** Mercado Libre completes `EMPTY` with diagnostic metrics
@@ -89,6 +90,8 @@ A selected provider unable to execute because required configuration or credenti
 - **GIVEN** a selected provider cannot start for missing required configuration
 - **WHEN** the user expands `Ver detalles`
 - **THEN** sanitized configuration-error copy is shown
+- **AND** effective geographic scope and coverage status show `No disponible`
+- **AND** provider status remains `ERROR`
 - **AND** no sensitive configuration material is shown
 
 ### Requirement: Unknown Alibaba currency is explained without USD inference

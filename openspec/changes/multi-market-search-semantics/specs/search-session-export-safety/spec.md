@@ -30,6 +30,12 @@ CSV MAY include `original_user_query`, `provider_query`, `provider_query_origin`
 - **WHEN** canonical session results are exported
 - **THEN** requested scope, effective scope, and coverage status remain distinguishable
 
+#### Scenario: Unestablished error coverage exports as unavailable
+- **GIVEN** a provider is `ERROR` before any truthful coverage exists
+- **WHEN** the settled session is exported
+- **THEN** `effective_geographic_scope` and `coverage_status` are unavailable/blank according to the CSV contract
+- **AND** neither is fabricated as `COMPLETE` or `PARTIAL`
+
 #### Scenario: Some provider metrics are unknown
 - **GIVEN** a current-session listing whose provider fetched count is unobservable
 - **WHEN** it is exported

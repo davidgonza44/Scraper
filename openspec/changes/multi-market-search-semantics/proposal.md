@@ -9,12 +9,12 @@ This change defines one coherent, bounded, observable search-session contract fo
 ## What Changes
 
 - Define `display_limit` as a positive supported maximum bounded by one centralized finite `MAX_DISPLAY_LIMIT` (which supports at least 10), labelled **Máximo por plataforma**. Values such as 10 mean the first up to 10 valid results in the provider's documented canonical order; they are ceilings, not guarantees or raw acquisition counts.
-- Separate `display_limit` from a centralized, deterministic, provider-capped `acquisition_limit`.
+- Separate `display_limit` from centralized finite `acquisition_budget` and actual `acquisition_requested`; these are the only acquisition-volume domain concepts.
 - In generic **Búsquedas**, permit one logical marketplace search operation per selected provider per search generation. A provider may use multiple bounded internal acquisitions to implement that operation or cover a broad scope; this is not a retry. The orchestrator cannot start a second logical operation merely to refill rejected candidates.
 - Introduce truthful provider pipeline metrics, rejection reasons, `SUCCESS`/`EMPTY`/`ERROR` semantics, compact **Ver detalles** diagnostics, and aggregate schema-drift observability.
 - Build generic comparison rows purely by provider result position using a dedicated `SearchPositionComparisonRow`; never cross-filter, discard, reorder, or match one provider's valid results based on similarity to another provider. Provider-integrity/safety validation alone determines validity. Positional alignment cannot establish identity, equivalence, compatibility, or provenance authorization.
 - Freeze the displayed prefix of the ordered usable pool as canonical session results; derive comparison, summary cards, total results, exports, and session labels from that prefix rather than the extra acquisition buffer or presentation projections.
-- Route provider-specific queries while retaining query provenance plus separate requested geographic scope, truthful effective scope, and coverage status (`COMPLETE`/`PARTIAL`). Partial fulfillment remains useful but becomes a session incidence and is never silently complete.
+- Route provider-specific queries while retaining query provenance plus separate requested geographic scope, truthful effective scope, and coverage status (`COMPLETE`, `PARTIAL`, or unavailable when coverage was not established). Partial fulfillment remains useful but becomes an incidence; unavailable coverage never overrides `ERROR`.
 - Define configurable provider geographic scope. **Toda Venezuela** is used only for a genuine nationwide search or the complete finite configured nationwide partition set; bounded subsets use accurate partial/broad-scope copy. Supported narrower city/market scopes include Caracas.
 - Preserve fail-closed currency behavior and add truthful UX for visible Alibaba prices whose source currency is unknown.
 - Preserve marketplace-specific ordering, images, ratings, CSV security, stale-response protection, and exact-product workflows.
@@ -23,7 +23,7 @@ This change defines one coherent, bounded, observable search-session contract fo
 
 ### New capabilities
 
-- `bounded-provider-search`: configurable display/acquisition limits, one logical operation per provider/generation, bounded internal-acquisition strategy, frozen canonical session results, consolidated metrics, status, and single-market parity.
+- `bounded-provider-search`: configurable display limits and acquisition budgets, one logical operation per provider/generation, bounded internal-acquisition strategy, frozen canonical session results, consolidated metrics, status, and single-market parity.
 - `positional-market-comparison`: position-based generic rows, canonical summaries and totals, disclosure, and strict separation from exact-product identity.
 - `provider-search-diagnostics`: compact safe diagnostics, provider rejection counters, schema-drift signals, session status copy, and unknown-currency explanations.
 - `marketplace-query-routing`: original/provider query provenance, shared Venezuela query generation, fallback behavior, and configurable deterministic Venezuela scope.
@@ -41,7 +41,7 @@ This change defines one coherent, bounded, observable search-session contract fo
 - **Generic Reflex UI:** rename the limit control, render truthful provider-owned listing fields in positional cells, use canonical counts/statuses, add compact diagnostics, and explain unknown Alibaba currency. Missing optional fields render blank/`—` and never trigger fabrication.
 - **Export:** retain one row per real canonical session result with requested/effective scope, coverage status, query, generation, and truthful metrics; enable export only after all selected providers settle.
 - **Tests:** add offline unit/integration fixtures and 1440x900 Playwright coverage; no live provider or translation calls.
-- **Cost:** acquisition policy scales deterministically from the configured display maximum and may use bounded provider-internal steps, so larger limits/scopes can increase records, underlying calls, and processing. `MAX_DISPLAY_LIMIT`, per-provider maximum internal acquisitions, and aggregate acquisition budgets are finite, centralized, testable, and prohibited from using Alibaba 500 as a routine pool.
+- **Cost:** `AcquisitionBudgetPolicy` computes finite `acquisition_budget`; executed internal calls accumulate separate `acquisition_requested`. Larger limits/scopes can increase actual work, but all ceilings remain centralized/testable and Alibaba 500 is not a routine budget.
 
 ## Compatibility
 
