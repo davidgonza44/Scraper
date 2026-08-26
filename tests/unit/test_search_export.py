@@ -228,9 +228,9 @@ def test_view_filters_do_not_remove_current_session_export_rows(
     state = TrackerState()
     state.apply_complete_search_fixture()
     state.alibaba_results = [
-        AlibabaResultRow(title="A", price_raw="1", representative="1"),
-        AlibabaResultRow(title="B", price_raw="2", representative="2"),
-        AlibabaResultRow(title="C", price_raw="3", representative="3"),
+        AlibabaResultRow(title="A", representative="1"),
+        AlibabaResultRow(title="B", representative="2"),
+        AlibabaResultRow(title="C", representative="3"),
     ]
     state.alibaba_price_min = "2"
     state.alibaba_price_max = "2"
