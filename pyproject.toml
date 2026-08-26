@@ -88,5 +88,9 @@ module = ["apify_client", "apify_client.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = ["reflex", "reflex.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = ["jsonschema", "jsonschema.*", "referencing", "referencing.*"]
 ignore_missing_imports = true
