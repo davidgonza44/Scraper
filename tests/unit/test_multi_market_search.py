@@ -145,6 +145,7 @@ def test_single_market_ml_usable_listing_stays_in_generic_search_ui(
     listing = map_mercadolibre_item(PILOT_ITEMS[0])
     assert listing is not None
     assert listing.external_id == "MLV982107672"
+    usable_listing: MercadoLibreListing = listing
 
     class _FakeMlProvider:
         def __init__(self) -> None:
@@ -153,7 +154,7 @@ def test_single_market_ml_usable_listing_stays_in_generic_search_ui(
 
         def search(self, query: str, limit: int) -> list[MercadoLibreListing]:
             self.calls += 1
-            selected = [listing]
+            selected = [usable_listing]
             self.last_metrics = ProviderAcquisitionMetrics(
                 requested=limit,
                 fetched=len(selected),
