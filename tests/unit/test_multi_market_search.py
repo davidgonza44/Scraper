@@ -26,6 +26,7 @@ from bera_price_tracker.gui.search_scope import (
 )
 from bera_price_tracker.gui.state import (
     UI_ERROR,
+    UI_INITIAL,
     UI_SUCCESS,
     AlibabaResultRow,
     FacebookProductResultRow,
@@ -327,6 +328,106 @@ def test_late_standalone_alibaba_search_does_not_repopulate_cleared_session(
     assert state.alibaba_results == []
     assert all(row.title != "stale mouse" for row in state.alibaba_results)
     assert state.alibaba_ui_status != UI_SUCCESS
+
+
+def test_late_standalone_facebook_search_does_not_repopulate_cleared_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    state = TrackerState()
+
+    def run_search(*_args: object, **_kwargs: object) -> dict[str, object]:
+        state.start_new_search()
+        return {
+            "results": [{"title": "stale facebook", "external_id": "fb-old"}],
+            "statistics": [],
+            "summary": {},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_facebook_product_search", run_search)
+    state.facebook_product_query = "mouse"
+    asyncio.run(cast(Any, TrackerState.search_facebook_products).fn(state))
+    assert state.facebook_product_results == []
+    assert all(row.title != "stale facebook" for row in state.facebook_product_results)
+    assert state.facebook_product_ui_status != UI_SUCCESS
+    assert state.facebook_product_association_product_id == ""
+    assert state.facebook_product_provenance == {}
+    assert state.facebook_product_is_loading is False
+    assert state.facebook_product_error == ""
+
+
+def test_late_standalone_facebook_error_does_not_repopulate_cleared_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    state = TrackerState()
+
+    def run_search(*_args: object, **_kwargs: object) -> dict[str, object]:
+        state.start_new_search()
+        raise RuntimeError("stale facebook")
+
+    monkeypatch.setattr(services, "run_facebook_product_search", run_search)
+    state.facebook_product_query = "mouse"
+    asyncio.run(cast(Any, TrackerState.search_facebook_products).fn(state))
+    assert state.facebook_product_results == []
+    assert state.facebook_product_ui_status == UI_INITIAL
+    assert state.facebook_product_error == ""
+    assert state.facebook_product_association_product_id == ""
+    assert state.facebook_product_provenance == {}
+    assert state.facebook_product_is_loading is False
+
+
+def test_late_standalone_ml_search_does_not_repopulate_cleared_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    state = TrackerState()
+
+    def run_search(*_args: object, **_kwargs: object) -> dict[str, object]:
+        state.start_new_search()
+        return {
+            "results": [{"title": "stale ml", "external_id": "MLV-OLD", "price_raw": "9.00"}],
+            "summary": {"comparables": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_mercadolibre_search", run_search)
+    state.ml_query = "mouse"
+    asyncio.run(cast(Any, TrackerState.search_mercadolibre).fn(state))
+    assert state.ml_results == []
+    assert all(row.title != "stale ml" for row in state.ml_results)
+    assert state.ml_ui_status != UI_SUCCESS
+    assert state.ml_association_product_id == ""
+    assert state.ml_is_loading is False
+    assert state.ml_error == ""
+    assert state.ml_has_comparison is False
+    assert state.ml_comparison == {}
+
+
+def test_late_standalone_ml_error_does_not_repopulate_cleared_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    state = TrackerState()
+
+    def run_search(*_args: object, **_kwargs: object) -> dict[str, object]:
+        state.start_new_search()
+        raise RuntimeError("stale ml")
+
+    monkeypatch.setattr(services, "run_mercadolibre_search", run_search)
+    state.ml_query = "mouse"
+    asyncio.run(cast(Any, TrackerState.search_mercadolibre).fn(state))
+    assert state.ml_results == []
+    assert state.ml_ui_status == UI_INITIAL
+    assert state.ml_error == ""
+    assert state.ml_association_product_id == ""
+    assert state.ml_is_loading is False
+    assert state.ml_has_comparison is False
 
 
 def test_unsupported_plan_limit_never_reaches_runners() -> None:

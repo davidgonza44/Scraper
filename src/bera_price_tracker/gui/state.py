@@ -1524,6 +1524,7 @@ class TrackerState(rx.State):
             self.facebook_product_error = ""
             self.facebook_product_ui_status = UI_LOADING
             self.facebook_product_provenance = {}
+            generation = self.search_generation
         try:
             payload = await asyncio.to_thread(
                 services.run_facebook_product_search,
@@ -1538,6 +1539,7 @@ class TrackerState(rx.State):
                     query=query,
                     city=city,
                     error_message=services.sanitize_facebook_product_error(exc),
+                    request_generation=generation,
                 )
             return
         rows = [
@@ -1596,6 +1598,7 @@ class TrackerState(rx.State):
                 statistics=statistics,
                 summary=dict(payload.get("summary") or {}),
                 ui_status=str(payload.get("ui_status") or UI_EMPTY),
+                request_generation=generation,
             )
 
     def set_ml_query(self, value: str) -> None:
@@ -1921,6 +1924,7 @@ class TrackerState(rx.State):
             self.ml_warning = mercadolibre_credit_warning(limit) or ""
             self.ml_ui_status = UI_LOADING
             self._invalidate_ml_comparison()
+            generation = self.search_generation
 
         try:
             payload = await asyncio.to_thread(
@@ -1935,6 +1939,7 @@ class TrackerState(rx.State):
                     search_product_id=search_product_id,
                     query=query,
                     error_message=message,
+                    request_generation=generation,
                 )
             return
 
@@ -1972,6 +1977,7 @@ class TrackerState(rx.State):
                 rows=rows,
                 summary=dict(payload.get("summary") or {}),
                 ui_status=str(payload.get("ui_status") or UI_EMPTY),
+                request_generation=generation,
             )
 
     def _payload_maps(self, payload: dict[str, object], key: str) -> list[dict[str, Any]]:
