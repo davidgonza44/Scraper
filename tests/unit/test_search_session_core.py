@@ -68,8 +68,9 @@ def _rule(
 
 def _policy(
     providers: dict[str, ProviderBudgetRule] | None = None,
+    **overrides: Any,
 ) -> AcquisitionBudgetPolicy:
-    return AcquisitionBudgetPolicy(provider_rules=providers or {"alibaba": _rule()})
+    return AcquisitionBudgetPolicy(provider_rules=providers or {"alibaba": _rule()}, **overrides)
 
 
 def _steps(limits: tuple[int, ...]) -> tuple[InternalAcquisitionStep, ...]:
@@ -255,6 +256,40 @@ def test_provider_run_result_rejects_non_prefix_canonical_membership() -> None:
         )
 
 
+def test_provider_run_result_rejects_string_status_and_coverage_values() -> None:
+    pool = (FakeCandidate("one"),)
+    with pytest.raises(TypeError, match="status must be a ProviderStatus"):
+        ProviderRunResult(
+            provider="alibaba",
+            generation=1,
+            status="ERROR",  # type: ignore[arg-type]
+            ordered_usable_pool=(),
+            canonical_session_results=(),
+            metrics=_metrics(usable=0, displayed=0, acquisition_requested=3),
+        )
+    with pytest.raises(TypeError, match="status must be a ProviderStatus"):
+        ProviderRunResult(
+            provider="alibaba",
+            generation=1,
+            status="SUCCESS",  # type: ignore[arg-type]
+            ordered_usable_pool=pool,
+            canonical_session_results=pool,
+            metrics=_metrics(usable=1, displayed=1, display_requested=1),
+        )
+    with pytest.raises(TypeError, match="coverage_status must be a CoverageStatus or None"):
+        ProviderRunResult(
+            provider="alibaba",
+            generation=1,
+            status=ProviderStatus.SUCCESS,
+            ordered_usable_pool=pool,
+            canonical_session_results=pool,
+            metrics=_metrics(usable=1, displayed=1, display_requested=1),
+            requested_geographic_scope="Toda Venezuela",
+            effective_geographic_scope="Toda Venezuela",
+            coverage_status="PARTIAL",  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.parametrize(
     ("status", "pool"),
     [
@@ -331,6 +366,10 @@ def test_partial_coverage_keeps_useful_results_and_is_incident() -> None:
     assert result.canonical_session_results[0].title == "one"
     assert snapshot.has_incidents is True
     assert snapshot.completion_label == "Búsqueda completada con incidencias"
+    assert result.metrics.acquisition_requested == 10
+    assert result.metrics.fetched is None
+    assert result.metrics.mapped is None
+    assert result.metrics.rejected is None
 
 
 def test_partial_empty_does_not_claim_complete_nationwide_empty() -> None:
@@ -735,6 +774,77 @@ def test_central_budget_policy_is_finite_and_supports_ten() -> None:
         policy.validate_display_limit(11)
 
 
+def test_search_intent_does_not_enforce_policy_display_membership() -> None:
+    intent = _intent(display_limit=11)
+    assert intent.display_limit == 11
+    with pytest.raises(TypeError, match="display_limit must be an integer"):
+        _intent(display_limit=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="display_limit must be positive"):
+        _intent(display_limit=0)
+
+
+def test_effective_policy_is_the_only_display_limit_runtime_authority() -> None:
+    intent = _intent(display_limit=3)
+    custom = _policy({"alibaba": _rule()}, supported_display_limits=frozenset({10}))
+    calls: list[str] = []
+
+    def acquire(step: InternalAcquisitionStep) -> AcquisitionBatch[FakeCandidate]:
+        calls.append(step.key)
+        return _batch()
+
+    assert intent.display_limit == 3
+    with pytest.raises(ValueError, match="not supported"):
+        custom.validate_intent(intent)
+    with pytest.raises(ValueError, match="not supported"):
+        custom.create_plan(provider="alibaba", display_limit=3, steps=_steps((5,)))
+
+    default_policy = _policy()
+    plan = default_policy.create_plan(provider="alibaba", display_limit=3, steps=_steps((5,)))
+    with pytest.raises(ValueError, match="not supported"):
+        execute_bounded_provider_search(
+            intent=intent,
+            plan=plan,
+            policy=custom,
+            acquire=acquire,
+        )
+    assert calls == []
+
+
+def test_unsupported_display_limit_is_rejected_before_acquisition() -> None:
+    intent = _intent(display_limit=11)
+    policy = _policy()
+    calls: list[str] = []
+    plan = BoundedAcquisitionPlan(
+        provider="alibaba",
+        acquisition_budget=30,
+        maximum_internal_acquisitions=3,
+        steps=_steps((5,)),
+    )
+
+    def acquire(step: InternalAcquisitionStep) -> AcquisitionBatch[FakeCandidate]:
+        calls.append(step.key)
+        return _batch()
+
+    with pytest.raises(ValueError, match="not supported"):
+        execute_bounded_provider_search(
+            intent=intent,
+            plan=plan,
+            policy=policy,
+            acquire=acquire,
+        )
+    assert calls == []
+    with pytest.raises(ValueError, match="not supported"):
+        policy.create_plan(provider="alibaba", display_limit=11, steps=_steps((5,)))
+
+
+def test_default_policy_supports_one_three_five_ten() -> None:
+    policy = _policy()
+    assert MAX_DISPLAY_LIMIT >= 10
+    for display_limit in (1, 3, 5, 10):
+        assert policy.validate_display_limit(display_limit) == display_limit
+        assert _intent(display_limit=display_limit).display_limit == display_limit
+
+
 def test_unknown_optional_metrics_are_not_fabricated_as_zero() -> None:
     policy = _policy({"alibaba": _rule(max_acquisitions=1)})
     result = _run(
@@ -754,3 +864,34 @@ def test_unknown_optional_metrics_are_not_fabricated_as_zero() -> None:
     assert result.metrics.mapped is None
     assert result.metrics.rejected is None
     assert result.status is ProviderStatus.SUCCESS
+
+
+def test_failed_executed_step_keeps_optional_aggregates_unknown() -> None:
+    candidates = tuple(FakeCandidate(f"ok-{index}") for index in range(5))
+    known = AcquisitionBatch(
+        candidates=candidates,
+        fetched=5,
+        mapped=5,
+        rejected=0,
+    )
+    policy = _policy({"alibaba": _rule(max_acquisitions=2, max_budget=30, multiplier=3)})
+    intent = _intent(display_limit=10)
+    calls: list[str] = []
+    result = _run(
+        intent=intent,
+        plan=_plan(policy=policy, display_limit=10, limits=(5, 5)),
+        policy=policy,
+        batches={"step-1": known, "step-2": RuntimeError("failed before metrics")},
+        calls=calls,
+    )
+    assert calls == ["step-1", "step-2"]
+    assert result.metrics.acquisition_requested == 10
+    assert result.metrics.fetched is None
+    assert result.metrics.mapped is None
+    assert result.metrics.rejected is None
+    assert result.metrics.fetched != 5
+    assert result.metrics.mapped != 0
+    assert result.metrics.rejected != 0
+    assert result.status is ProviderStatus.SUCCESS
+    assert result.metrics.usable == 5
+    assert result.metrics.displayed == 5

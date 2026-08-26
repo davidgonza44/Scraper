@@ -99,6 +99,12 @@ class AcquisitionBudgetPolicy:
         except KeyError as exc:
             raise ValueError(f"unsupported provider: {provider}") from exc
 
+    def validate_intent(self, intent: SearchIntent) -> SearchIntent:
+        """Approve ``intent.display_limit`` against this policy before acquisition."""
+
+        self.validate_display_limit(intent.display_limit)
+        return intent
+
     def create_plan(
         self,
         *,
@@ -166,8 +172,10 @@ class SearchIntent:
             raise TypeError("generation must be an integer")
         if self.generation < 0:
             raise ValueError("generation must not be negative")
-        if self.display_limit not in SUPPORTED_DISPLAY_LIMITS:
-            raise ValueError("display_limit is not supported")
+        if isinstance(self.display_limit, bool) or not isinstance(self.display_limit, int):
+            raise TypeError("display_limit must be an integer")
+        if self.display_limit < 1:
+            raise ValueError("display_limit must be positive")
         if not self.selected_providers or len(set(self.selected_providers)) != len(
             self.selected_providers
         ):
@@ -283,6 +291,10 @@ class ProviderRunResult[CandidateT]:
     failure: str | None = None
 
     def __post_init__(self) -> None:
+        if type(self.status) is not ProviderStatus:
+            raise TypeError("status must be a ProviderStatus")
+        if self.coverage_status is not None and type(self.coverage_status) is not CoverageStatus:
+            raise TypeError("coverage_status must be a CoverageStatus or None")
         if isinstance(self.generation, bool) or not isinstance(self.generation, int):
             raise TypeError("generation must be an integer")
         if self.generation < 0:
@@ -379,9 +391,12 @@ def execute_bounded_provider_search[CandidateT](
     Every step is attempted at most once. A failed step is never re-run to refill
     rejected or mapping-lost candidates. Existing low-level calls remain unchanged.
     The plan must be derived from or validated against ``policy``; arbitrary
-    budget fields cannot bypass :class:`AcquisitionBudgetPolicy`.
+    budget fields cannot bypass :class:`AcquisitionBudgetPolicy`. Supported
+    display limits are approved only by that policy, never by a second
+    module-level check on :class:`SearchIntent`.
     """
 
+    policy.validate_intent(intent)
     policy.validate_plan(plan, display_limit=intent.display_limit)
     if plan.provider not in intent.selected_providers:
         raise ValueError("plan provider was not selected")
@@ -411,6 +426,9 @@ def execute_bounded_provider_search[CandidateT](
             batch = acquire(step)
         except Exception:  # noqa: BLE001 - converted to a provider outcome below
             failed_steps.add(step.key)
+            fetched_values.append(None)
+            mapped_values.append(None)
+            rejected_values.append(None)
             continue
         successful_steps.add(step.key)
         fetched_values.append(batch.fetched)

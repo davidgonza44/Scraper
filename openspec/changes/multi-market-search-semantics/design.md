@@ -17,7 +17,7 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 
 ## Architecture and data flow
 
-1. A new search generation creates `SearchIntent(original_user_query, display_limit, selected_providers, generation)`; `display_limit` is a supported positive value no greater than centralized finite `MAX_DISPLAY_LIMIT`, and the supported set explicitly includes 10.
+1. A new search generation creates `SearchIntent(original_user_query, display_limit, selected_providers, generation)`. `SearchIntent` only requires a positive integer `display_limit`; the effective `AcquisitionBudgetPolicy` is the sole runtime authority for supported membership (default `1 / 3 / 5 / 10`, `MAX_DISPLAY_LIMIT >= 10`) and rejects unsupported values before acquisition. Implementation PR A delivers this application core; `TrackerState` is not yet wired to it and still uses the existing GUI search path.
 2. Query routing produces one `ProviderQuery` per selected provider with query provenance and `requested_geographic_scope`. `ProviderRunResult` separately records truthful optional `effective_geographic_scope` and `coverage_status` (`COMPLETE`, `PARTIAL`, or unavailable).
 3. A centralized acquisition-budget policy computes and returns `acquisition_budget(provider, display_limit, requested_geographic_scope)`, the finite ceiling for the aggregate strategy. `acquisition_requested` is measured later from executed internal acquisitions.
 4. The orchestrator starts one logical search operation for each selected provider. The provider strategy may perform multiple bounded internal acquisitions to cover scope, partitions, or pagination, but the orchestrator does not start a replacement logical operation when mapping or policy rejects candidates.
@@ -33,14 +33,14 @@ Explanatory PlantUML for Implementation PR A lives in the repository and must be
 - `docs/architecture/multi-market-search-core.puml`
 - `docs/architecture/multi-market-search-sequence.puml`
 
-See `docs/architecture/README.md` for source-of-truth precedence. OpenSpec remains authoritative for staged implementation scope (PRs A–E). Diagrams must never justify behavior that contradicts this design or existing provider contracts, and later-phase components must not be shown as already implemented.
+See `docs/architecture/README.md` for source-of-truth precedence. OpenSpec remains authoritative for staged implementation scope (PRs A–E). Diagrams must never justify behavior that contradicts this design or existing provider contracts. They must distinguish the PR A core that is implemented now, existing `TrackerState`/provider boundaries, and deferred integration edges that are not wired yet. Later-phase components (PRs B–E) and unwired GUI orchestration must not be shown as current architecture.
 
 ## Core models
 
 ### SearchIntent
 
 - `original_user_query`: the exact normalized user intent retained for display/provenance.
-- `display_limit`: supported positive maximum of usable listings displayed per selected provider, constrained by centralized finite `MAX_DISPLAY_LIMIT`; 10 is supported.
+- `display_limit`: positive maximum of usable listings displayed per selected provider. Runtime membership in the supported set is owned only by `AcquisitionBudgetPolicy` (default `1 / 3 / 5 / 10`, `MAX_DISPLAY_LIMIT >= 10`). `SearchIntent` does not independently enumerate supported values.
 - `selected_providers`: explicit provider set.
 - `generation`: stale-response guard identity.
 - `requested_geographic_scope` per provider, sufficient to reproduce user intent without introducing a generic geospatial subsystem.
@@ -50,6 +50,8 @@ The UI label is **Máximo por plataforma**. A display maximum is not a guarantee
 ### AcquisitionBudgetPolicy
 
 The policy's output is `acquisition_budget`, a centralized deterministic finite ceiling based on provider, `display_limit`, requested scope, and provider hard caps. It does not represent work already requested. The same policy module defines finite `MAX_DISPLAY_LIMIT` and maximum internal acquisitions. All are testable and not scattered across adapters/views. Alibaba's maximum 500 is never a routine budget.
+
+The same policy is the only runtime authority for supported display limits: `validate_display_limit()` / `validate_intent()` reject unsupported values before acquisition begins. Module-level `SUPPORTED_DISPLAY_LIMITS` is the default set used by the policy, not a second validator on `SearchIntent`. A custom policy and a structurally valid `SearchIntent` may therefore disagree; execution follows the effective policy.
 
 A `BoundedAcquisitionPlan` is executable only when derived from `AcquisitionBudgetPolicy.create_plan()` or proven by `validate_plan()`. Callers cannot supply an arbitrary `acquisition_budget` or `maximum_internal_acquisitions` to bypass this policy. `execute_bounded_provider_search()` re-validates the plan against the policy before any internal acquisition.
 
@@ -82,13 +84,15 @@ The repository's existing `ProviderAcquisitionMetrics` and provider-specific Fac
 
 Each adapter/instrumentation point SHALL document the measurement boundary for every emitted counter. `mapped` and `rejected` need not be disjoint: rejection can happen before or after narrow mapping, stages may overlap, and some records may be unobservable. Therefore neither `fetched = mapped + rejected` nor `mapped = usable + rejected` is required. Unobservable counters remain unknown. Safe reason counts may be included only with documented, deterministic definitions.
 
+If an executed internal acquisition does not provide a truthful observable value for an optional aggregate stage, the final aggregate for that stage remains unknown unless the low-level contract explicitly proves the missing contribution is zero. A thrown executed step is not a proven zero: mix a known `fetched=5`/`mapped=5`/`rejected=0` step with a later executed step that raises, and the aggregates are unknown. `acquisition_requested` still includes the failed attempted step because that request actually executed.
+
 For example, `display_limit = 3`, `acquisition_requested = 10`, and an ordered usable pool of 8 yields `usable = 8`, `displayed = 3`, exactly 3 canonical session results, and exactly 3 provider rows in CSV.
 
 ### ProviderRunResult and status
 
 `ProviderRunResult` owns the `generation` that produced it. `execute_bounded_provider_search()` copies `SearchIntent.generation` into the result. `SearchSessionSnapshot.commit(result)` accepts the result only when `result.generation == snapshot.intent.generation`. A stale result cannot be relabelled by supplying a separate generation argument.
 
-The result contract also rejects internally inconsistent values: `metrics.usable` must equal `len(ordered_usable_pool)`, `metrics.displayed` must equal `len(canonical_session_results)`, and `canonical_session_results` must be the frozen prefix `ordered_usable_pool[:metrics.displayed]`.
+The result contract also rejects internally inconsistent values: `metrics.usable` must equal `len(ordered_usable_pool)`, `metrics.displayed` must equal `len(canonical_session_results)`, and `canonical_session_results` must be the frozen prefix `ordered_usable_pool[:metrics.displayed]`. `status` must be a `ProviderStatus` member and `coverage_status` must be `None` or a `CoverageStatus` member. String lookalikes such as `"SUCCESS"`, `"ERROR"`, or `"PARTIAL"` are rejected at construction; Python type hints are not runtime enforcement.
 
 - `SUCCESS`: logical provider operation completed and `usable >= 1`.
 - `EMPTY`: logical provider operation completed normally and `usable == 0`.
@@ -219,7 +223,7 @@ Single-market generic **Búsquedas** follows the identical pipeline, configurabl
 
 ## Responsibility boundaries
 
-New deterministic acquisition policy, coverage/metric derivation, routing, frozen-session selection, and positional rows SHOULD live in small pure modules. The generic strategy SHOULD compose existing bounded single-acquisition operations—especially Facebook's existing one-execute/one-Actor-run use case—rather than silently changing their low-level contracts. `TrackerState` coordinates calls, generation checks, and serialization; it is not a new service layer. See `docs/architecture/multi-market-search-core.puml` and `docs/architecture/multi-market-search-sequence.puml`.
+New deterministic acquisition policy, coverage/metric derivation, routing, frozen-session selection, and positional rows SHOULD live in small pure modules. The generic strategy SHOULD compose existing bounded single-acquisition operations—especially Facebook's existing one-execute/one-Actor-run use case—rather than silently changing their low-level contracts. `TrackerState` coordinates calls, generation checks, and serialization; it is not a new service layer. Implementation PR A keeps those rules in `search_session.py` and does not move provider strategy into `TrackerState`. Wiring `TrackerState` to `SearchIntent`, `AcquisitionBudgetPolicy`, `execute_bounded_provider_search()`, and `SearchSessionSnapshot` is a deferred integration edge, not current runtime behavior. See `docs/architecture/multi-market-search-core.puml` and `docs/architecture/multi-market-search-sequence.puml`.
 
 ## Risks and trade-offs
 
