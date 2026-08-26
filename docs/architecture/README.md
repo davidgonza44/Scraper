@@ -4,8 +4,8 @@
 
 - `multi-market-search-core.puml`
   Static relationships for the generic multi-market search session core.
-  It distinguishes three layers: the PR A application core that is
-  implemented now, existing `TrackerState` / provider-operation
+  It distinguishes the implemented PR A application core, implemented PR B
+  positional comparison, existing `TrackerState` / provider-operation
   boundaries, and deferred integration edges that are not wired yet.
 - `multi-market-search-sequence.puml`
   Runtime sequence for one logical provider search composed from bounded
@@ -15,14 +15,19 @@
 
 ## Implemented now versus deferred wiring
 
-Implementation PR A delivers `src/bera_price_tracker/application/search_session.py`
-and its offline tests. The current GUI still uses the existing
+Implementation PR A delivers the search-session contracts in
+`src/bera_price_tracker/application/search_session.py`. Implementation PR B
+adds `SearchPositionComparisonRow`, exact-product isolation, and generic
+Búsquedas positional GUI rows. The current GUI still uses the existing
 `TrackerState` search path. `TrackerState` does not yet create
 `SearchIntent`, invoke `AcquisitionBudgetPolicy`, call
 `execute_bounded_provider_search()`, or commit `SearchSessionSnapshot`.
+It serializes positional rows from canonical GUI result lists.
 
 Dashed diagram edges labeled deferred are intended integration, not
-current runtime behavior. PRs B–E remain unimplemented.
+current runtime behavior. Implementation PR B positional comparison is
+implemented in the application core and generic Búsquedas GUI. PRs C–E
+remain unimplemented.
 
 ## Source of truth
 
@@ -36,7 +41,7 @@ The diagrams sit at architecture docs. They are explanatory and must be
 updated when architecture changes.
 
 The active OpenSpec change `multi-market-search-semantics` is planned as
-staged implementation PRs A through E. Only Implementation PR A is currently
-implemented on main. PRs B–E remain unimplemented. A diagram must never be
+staged implementation PRs A through E. Implementation PRs A and B are currently
+implemented on main. PRs C–E remain unimplemented. A diagram must never be
 used to justify behavior that contradicts OpenSpec or existing provider
 contracts, and must not document unimplemented wiring as current architecture.

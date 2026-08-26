@@ -31,8 +31,8 @@ Read in this order:
    `tests/fixtures/ai-contracts/**`
 6. relevant tests/code
 
-The change is planned as staged implementation PRs A–E. Only Implementation
-PR A is currently implemented on main. PRs B–E remain unimplemented. Do not
+The change is planned as staged implementation PRs A–E. Implementation PRs A
+and B are currently implemented on main. PRs C–E remain unimplemented. Do not
 implement later-stage work early, and do not mark later-stage tasks complete.
 
 ## Permanent search rules

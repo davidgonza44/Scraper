@@ -5,6 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from bera_price_tracker.application.search_session import (
+    build_search_position_comparison_rows,
+    exact_product_context,
+)
 from bera_price_tracker.gui.images import safe_public_image_url
 from bera_price_tracker.gui.search_session import opportunity_gauge, product_rating_display
 
@@ -14,6 +18,9 @@ ANALYSIS_UNAVAILABLE = "Análisis no disponible"
 MATCH_HIGH = "Alta coincidencia"
 MATCH_MEDIUM = "Coincidencia media"
 MATCH_COMPARABLE = "Comparable"
+POSITIONAL_DISCLOSURE = "Comparables de la misma búsqueda · identidad exacta no confirmada"
+POSITIONAL_KIND = "positional"
+ASSOCIATION_KIND = "association"
 
 
 def match_label(relevance_value: object, *, has_listing: bool) -> str:
@@ -318,6 +325,11 @@ def _empty_row() -> dict[str, object]:
         "product_image_url": "",
         "product_subtitle": "Producto comparable en distintas plataformas",
         "product_id": "",
+        "rank": 0,
+        "identity_confirmed": False,
+        "disclosure": "",
+        "resultado_label": "",
+        "comparison_kind": ASSOCIATION_KIND,
     }
     row.update(_alibaba_cell(None))
     row.update(_facebook_cell(None))
@@ -347,14 +359,12 @@ def shared_alibaba_association(
 ) -> str:
     """Return the Alibaba id only when FB, ML, and context all name the same product."""
 
-    facebook_id = _text(facebook_association_id)
-    ml_id = _text(ml_association_id)
-    selected_id = _text(context_id)
-    if not facebook_id or not ml_id or not selected_id:
-        return ""
-    if facebook_id == ml_id == selected_id:
-        return selected_id
-    return ""
+    context = exact_product_context(
+        facebook_association_id=facebook_association_id,
+        ml_association_id=ml_association_id,
+        context_id=context_id,
+    )
+    return context.product_id if context is not None else ""
 
 
 def _results_heading(query: object, status: object) -> str:
@@ -566,4 +576,61 @@ def build_comparison_rows(
         rows.append(_standalone_facebook_row(facebook_best, fallback_title))
     if ml_best is not None and not ml_placed:
         rows.append(_standalone_ml_row(ml_best, fallback_title))
+    return rows
+
+
+def resultado_label(rank: int) -> str:
+    return f"Resultado #{rank}"
+
+
+def canonical_provider_rows(
+    rows: Sequence[Any],
+    status: str,
+    display_limit: int | None,
+) -> tuple[Any, ...]:
+    if status != UI_SUCCESS:
+        return ()
+    ordered = tuple(rows)
+    if display_limit is None:
+        return ordered
+    if isinstance(display_limit, bool) or not isinstance(display_limit, int) or display_limit < 1:
+        raise ValueError("display_limit must be a positive integer")
+    return ordered[:display_limit]
+
+
+def build_positional_comparison_rows(
+    *,
+    alibaba_rows: Sequence[Any] = (),
+    facebook_rows: Sequence[Any] = (),
+    ml_rows: Sequence[Any] = (),
+    alibaba_status: str = "",
+    facebook_status: str = "",
+    ml_status: str = "",
+    display_limit: int | None = None,
+) -> list[dict[str, object]]:
+    """Generic Búsquedas rows. Position only; never association or presentation filters."""
+
+    positions = build_search_position_comparison_rows(
+        alibaba_candidates=canonical_provider_rows(alibaba_rows, alibaba_status, display_limit),
+        facebook_candidates=canonical_provider_rows(facebook_rows, facebook_status, display_limit),
+        mercadolibre_candidates=canonical_provider_rows(ml_rows, ml_status, display_limit),
+    )
+    rows: list[dict[str, object]] = []
+    for position in positions:
+        label = resultado_label(position.rank)
+        row = _empty_row()
+        row["rank"] = position.rank
+        row["identity_confirmed"] = False
+        row["disclosure"] = POSITIONAL_DISCLOSURE
+        row["resultado_label"] = label
+        row["comparison_kind"] = POSITIONAL_KIND
+        row["product_title"] = label
+        row["product_subtitle"] = POSITIONAL_DISCLOSURE
+        row["product_id"] = ""
+        row["product_image_url"] = ""
+        row.update(_alibaba_cell(position.alibaba_candidate))
+        row.update(_facebook_cell(position.facebook_candidate))
+        row.update(_ml_cell(position.mercadolibre_candidate))
+        row.update(build_analysis(alibaba_row=position.alibaba_candidate))
+        rows.append(row)
     return rows

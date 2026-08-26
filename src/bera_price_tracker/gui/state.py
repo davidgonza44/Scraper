@@ -434,6 +434,11 @@ class ComparisonRow(GuiModel):
     analysis_available: bool = False
     analysis_heading: str = "Análisis no disponible"
     analysis_detail: str = ""
+    rank: int = 0
+    identity_confirmed: bool = False
+    disclosure: str = ""
+    resultado_label: str = ""
+    comparison_kind: str = "association"
 
 
 class TrackerState(rx.State):
@@ -3089,9 +3094,13 @@ class TrackerState(rx.State):
     @rx.var
     def search_total_results(self) -> str:
         return str(
-            len(self.alibaba_visible_rows)
-            + len(self.facebook_product_results)
-            + len(self.ml_visible_rows)
+            len(self._canonical_search_rows(self.alibaba_results, self.alibaba_ui_status))
+            + len(
+                self._canonical_search_rows(
+                    self.facebook_product_results, self.facebook_product_ui_status
+                )
+            )
+            + len(self._canonical_search_rows(self.ml_results, self.ml_ui_status))
         )
 
     @rx.var
@@ -3191,6 +3200,11 @@ class TrackerState(rx.State):
             parts.append(f"Alibaba · {self.alibaba_summary['resultados']} resultados")
         return " · ".join(parts)
 
+    def _canonical_search_rows(self, rows: list[Any], status: str) -> list[Any]:
+        """Frozen generic-search prefix. Ignores specialized sort/filter projections."""
+
+        return list(comparison.canonical_provider_rows(rows, status, self.search_limit))
+
     def _ml_diagnostic_summary(self) -> dict[str, str]:
         summary = dict(self.ml_live_summary)
         for key in ("requested", "fetched", "usable", "rejected"):
@@ -3213,6 +3227,52 @@ class TrackerState(rx.State):
             ml_ui_status=self.ml_ui_status,
             ml_summary=self._ml_diagnostic_summary(),
             ml_rows=self.ml_visible_rows,
+        )
+        attached = search_diagnostics.attach_diagnostics(
+            raw,
+            [
+                search_diagnostics.alibaba_diagnostic(
+                    ui_status=self.alibaba_ui_status,
+                    summary=self.alibaba_summary,
+                    requested_limit=self.search_limit,
+                    usable_rows=len(self.alibaba_results),
+                    error=self.alibaba_error,
+                ),
+                search_diagnostics.facebook_diagnostic(
+                    ui_status=self.facebook_product_ui_status,
+                    summary=self.facebook_product_summary,
+                    requested_limit=self.search_limit,
+                    usable_rows=len(self.facebook_product_results),
+                    error=self.facebook_product_error,
+                ),
+                search_diagnostics.mercadolibre_diagnostic(
+                    ui_status=self.ml_ui_status,
+                    summary=self._ml_diagnostic_summary(),
+                    requested_limit=self.search_limit,
+                    usable_rows=len(self.ml_results),
+                    error=self.ml_error,
+                ),
+            ],
+            open_platforms=self.diagnostic_open_platforms,
+        )
+        return [MarketplaceSummaryCard.model_validate(item) for item in attached]
+
+    @rx.var
+    def generic_marketplace_summaries(self) -> list[MarketplaceSummaryCard]:
+        raw = marketplace_summary.build_marketplace_summaries(
+            alibaba_ui_status=self.alibaba_ui_status,
+            alibaba_summary=self.alibaba_summary,
+            alibaba_rows=self._canonical_search_rows(self.alibaba_results, self.alibaba_ui_status),
+            facebook_ui_status=self.facebook_product_ui_status,
+            facebook_summary=self.facebook_product_summary,
+            facebook_statistics=self.facebook_product_statistics,
+            facebook_rows=self._canonical_search_rows(
+                self.facebook_product_results, self.facebook_product_ui_status
+            ),
+            facebook_error=self.facebook_product_error,
+            ml_ui_status=self.ml_ui_status,
+            ml_summary=self._ml_diagnostic_summary(),
+            ml_rows=self._canonical_search_rows(self.ml_results, self.ml_ui_status),
         )
         attached = search_diagnostics.attach_diagnostics(
             raw,
@@ -3270,6 +3330,23 @@ class TrackerState(rx.State):
     @rx.var
     def has_comparison_rows(self) -> bool:
         return len(self.comparison_rows) > 0
+
+    @rx.var
+    def positional_comparison_rows(self) -> list[ComparisonRow]:
+        raw = comparison.build_positional_comparison_rows(
+            alibaba_rows=self.alibaba_results,
+            facebook_rows=self.facebook_product_results,
+            ml_rows=self.ml_results,
+            alibaba_status=self.alibaba_ui_status,
+            facebook_status=self.facebook_product_ui_status,
+            ml_status=self.ml_ui_status,
+            display_limit=self.search_limit,
+        )
+        return [ComparisonRow.model_validate(item) for item in raw]
+
+    @rx.var
+    def has_positional_comparison_rows(self) -> bool:
+        return len(self.positional_comparison_rows) > 0
 
     def current_export_listing_count(self) -> int:
         count = 0

@@ -1,9 +1,9 @@
 {
   "id": "positional-row-is-not-exact-product",
-  "description": "Resultado #1 aligns Alibaba #1, Facebook #1, and Mercado Libre #1 by position only. This is staged OpenSpec PR B semantics and is not implemented yet.",
+  "description": "Resultado #1 aligns Alibaba #1, Facebook #1, and Mercado Libre #1 by position only. Same rank does not confirm product identity.",
   "provider": ["alibaba", "facebook", "mercadolibre"],
   "implementation_stage": "B",
-  "runtime_check": null,
+  "runtime_check": "positional_comparison",
   "given": {
     "resultado": 1,
     "alibaba": { "title": "Alibaba #1", "native_id": "A-1" },
@@ -13,7 +13,7 @@
   "expected": {
     "comparison_kind": "positional",
     "identity_confirmed": false,
-    "implemented": false
+    "implemented": true
   },
   "must_not": [
     "infer the same product or SKU",
@@ -21,8 +21,7 @@
     "authorize landed-cost provenance",
     "authorize negotiation identity",
     "authorize tracking identity",
-    "authorize price-history association",
-    "treat this fixture as proof that PR B is implemented"
+    "authorize price-history association"
   ],
   "source_refs": [
     "openspec/changes/multi-market-search-semantics/specs/positional-market-comparison/spec.md",

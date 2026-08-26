@@ -434,16 +434,13 @@ def execute_bounded_provider_search[CandidateT](
         fetched_values.append(batch.fetched)
         mapped_values.append(batch.mapped)
         rejected_values.append(batch.rejected)
-        for candidate in batch.candidates:
-            if not is_usable(candidate):
-                continue
-            identity = stable_identity(candidate)
-            normalized_identity = identity.strip() if isinstance(identity, str) else ""
-            if normalized_identity:
-                if normalized_identity in seen_identities:
-                    continue
-                seen_identities.add(normalized_identity)
-            candidates.append(candidate)
+        extend_ordered_usable_pool(
+            candidates,
+            seen_identities,
+            batch.candidates,
+            is_usable=is_usable,
+            stable_identity=stable_identity,
+        )
 
     required_steps = {step.key for step in plan.steps if step.required_for_complete_coverage}
     usable_pool = tuple(candidates)
@@ -489,7 +486,7 @@ def execute_bounded_provider_search[CandidateT](
         generation=intent.generation,
         status=status,
         ordered_usable_pool=usable_pool,
-        canonical_session_results=usable_pool[:displayed],
+        canonical_session_results=freeze_canonical_prefix(usable_pool, intent.display_limit),
         metrics=metrics,
         requested_geographic_scope=plan.requested_geographic_scope,
         effective_geographic_scope=effective_scope,
@@ -504,6 +501,204 @@ def _sum_if_known(values: Sequence[int | None]) -> int | None:
     return sum(value for value in values if value is not None)
 
 
+def _nonempty_id(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def extend_ordered_usable_pool[CandidateT](
+    pool: list[CandidateT],
+    seen_identities: set[str],
+    incoming: Sequence[CandidateT],
+    *,
+    is_usable: Callable[[CandidateT], bool],
+    stable_identity: Callable[[CandidateT], str | None],
+) -> None:
+    """Append usable incoming candidates using deterministic BERA aggregate order.
+
+    A genuine single acquisition is one incoming sequence: provider order is
+    preserved after integrity filtering. Multiple acquisitions without a truthful
+    native global order are concatenated in caller order. Deduplication uses only
+    a truthful non-blank stable identity. Identity-less valid candidates remain
+    distinct even when title, image, price, or rank look similar.
+    """
+
+    for candidate in incoming:
+        if not is_usable(candidate):
+            continue
+        identity = stable_identity(candidate)
+        normalized_identity = identity.strip() if isinstance(identity, str) else ""
+        if normalized_identity:
+            if normalized_identity in seen_identities:
+                continue
+            seen_identities.add(normalized_identity)
+        pool.append(candidate)
+
+
+def ordered_usable_pool_from_batches[CandidateT](
+    batches: Sequence[Sequence[CandidateT]],
+    *,
+    is_usable: Callable[[CandidateT], bool] = lambda _candidate: True,
+    stable_identity: Callable[[CandidateT], str | None] = lambda _candidate: None,
+) -> tuple[CandidateT, ...]:
+    """Freeze deterministic BERA aggregate provider ordering from acquisition batches."""
+
+    pool: list[CandidateT] = []
+    seen_identities: set[str] = set()
+    for batch in batches:
+        extend_ordered_usable_pool(
+            pool,
+            seen_identities,
+            batch,
+            is_usable=is_usable,
+            stable_identity=stable_identity,
+        )
+    return tuple(pool)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchPositionComparisonRow[CandidateT]:
+    """Generic search row aligned by one-based provider result position.
+
+    Same rank never implies the same product. ``identity_confirmed`` is invariant
+    false and is not user-settable. Exact-product workflows use
+    :class:`ExactProductContext` instead of this type.
+    """
+
+    rank: int
+    alibaba_candidate: CandidateT | None = None
+    facebook_candidate: CandidateT | None = None
+    mercadolibre_candidate: CandidateT | None = None
+    identity_confirmed: bool = False
+
+    def __post_init__(self) -> None:
+        if isinstance(self.rank, bool) or not isinstance(self.rank, int):
+            raise TypeError("rank must be a one-based integer")
+        if self.rank < 1:
+            raise ValueError("rank must be a one-based integer")
+        if self.identity_confirmed is not False:
+            raise ValueError("identity_confirmed is invariant false")
+        if (
+            self.alibaba_candidate is None
+            and self.facebook_candidate is None
+            and self.mercadolibre_candidate is None
+        ):
+            raise ValueError("positional row requires at least one candidate")
+
+
+@dataclass(frozen=True, slots=True)
+class ExactProductContext:
+    """Exact-product association. Never derived from position or native listing IDs."""
+
+    product_id: str
+
+    def __post_init__(self) -> None:
+        product_id = _nonempty_id(self.product_id)
+        if not product_id:
+            raise ValueError("exact product context requires a non-empty product id")
+        object.__setattr__(self, "product_id", product_id)
+
+
+def exact_product_context(
+    *,
+    facebook_association_id: object = "",
+    ml_association_id: object = "",
+    context_id: object = "",
+) -> ExactProductContext | None:
+    """Return exact context only when non-empty association/context IDs agree.
+
+    Native marketplace listing IDs occupy independent namespaces and must not be
+    supplied here as a substitute for explicit association IDs.
+    """
+
+    facebook_id = _nonempty_id(facebook_association_id)
+    ml_id = _nonempty_id(ml_association_id)
+    selected_id = _nonempty_id(context_id)
+    if not facebook_id or not ml_id or not selected_id:
+        return None
+    if facebook_id == ml_id == selected_id:
+        return ExactProductContext(product_id=selected_id)
+    return None
+
+
+def native_listing_ids_establish_cross_market_identity(
+    left_native_id: object,
+    right_native_id: object,
+) -> bool:
+    """Native listing-ID string equality never establishes cross-market identity."""
+
+    del left_native_id, right_native_id
+    return False
+
+
+def positional_row_authorizes_exact_workflows(
+    row: SearchPositionComparisonRow[Any],
+) -> bool:
+    """Position, rank, and positional alignment never authorize exact workflows."""
+
+    del row
+    return False
+
+
+def freeze_canonical_prefix[CandidateT](
+    ordered_usable_pool: Sequence[CandidateT],
+    display_limit: int,
+) -> tuple[CandidateT, ...]:
+    if isinstance(display_limit, bool) or not isinstance(display_limit, int):
+        raise TypeError("display_limit must be an integer")
+    if display_limit < 1:
+        raise ValueError("display_limit must be positive")
+    return tuple(ordered_usable_pool)[:display_limit]
+
+
+def displayed_listing_total(snapshot: SearchSessionSnapshot) -> int:
+    """Sum of canonical displayed listings, not positional row count."""
+
+    return sum(result.metrics.displayed for result in snapshot.provider_results)
+
+
+def build_search_position_comparison_rows[CandidateT](
+    *,
+    alibaba_candidates: Sequence[CandidateT] = (),
+    facebook_candidates: Sequence[CandidateT] = (),
+    mercadolibre_candidates: Sequence[CandidateT] = (),
+) -> tuple[SearchPositionComparisonRow[CandidateT], ...]:
+    """Zip frozen canonical prefixes by one-based position. Never match identity."""
+
+    alibaba = tuple(alibaba_candidates)
+    facebook = tuple(facebook_candidates)
+    mercadolibre = tuple(mercadolibre_candidates)
+    row_count = max(len(alibaba), len(facebook), len(mercadolibre), 0)
+    if row_count == 0:
+        return ()
+    return tuple(
+        SearchPositionComparisonRow(
+            rank=index + 1,
+            alibaba_candidate=alibaba[index] if index < len(alibaba) else None,
+            facebook_candidate=facebook[index] if index < len(facebook) else None,
+            mercadolibre_candidate=mercadolibre[index] if index < len(mercadolibre) else None,
+        )
+        for index in range(row_count)
+    )
+
+
+def positional_rows_from_snapshot(
+    snapshot: SearchSessionSnapshot,
+) -> tuple[SearchPositionComparisonRow[Any], ...]:
+    def canonical(provider: str) -> tuple[Any, ...]:
+        result = snapshot.result_for(provider)
+        if result is None:
+            return ()
+        return result.canonical_session_results
+
+    return build_search_position_comparison_rows(
+        alibaba_candidates=canonical("alibaba"),
+        facebook_candidates=canonical("facebook"),
+        mercadolibre_candidates=canonical("mercadolibre"),
+    )
+
+
 __all__ = [
     "MAX_DISPLAY_LIMIT",
     "SUPPORTED_DISPLAY_LIMITS",
@@ -511,11 +706,22 @@ __all__ = [
     "AcquisitionBudgetPolicy",
     "BoundedAcquisitionPlan",
     "CoverageStatus",
+    "ExactProductContext",
     "InternalAcquisitionStep",
     "ProviderBudgetRule",
     "ProviderRunResult",
     "ProviderStatus",
     "SearchIntent",
+    "SearchPositionComparisonRow",
     "SearchSessionSnapshot",
+    "build_search_position_comparison_rows",
+    "displayed_listing_total",
+    "exact_product_context",
     "execute_bounded_provider_search",
+    "extend_ordered_usable_pool",
+    "freeze_canonical_prefix",
+    "native_listing_ids_establish_cross_market_identity",
+    "ordered_usable_pool_from_batches",
+    "positional_row_authorizes_exact_workflows",
+    "positional_rows_from_snapshot",
 ]

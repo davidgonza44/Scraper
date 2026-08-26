@@ -8,8 +8,8 @@ context: |
   Before generic search changes, read context.md for orientation only, then
   AGENTS.md, OpenSpec, repository contracts, architecture docs, and
   docs/ai-contracts/. The change multi-market-search-semantics is planned as
-  staged PRs A-E. Only Implementation PR A is currently implemented on main.
-  PRs B-E remain unimplemented. Source of truth: OpenSpec > repository
+  staged PRs A-E. Implementation PRs A and B are currently implemented on
+  main. PRs C-E remain unimplemented. Source of truth: OpenSpec > repository
   implementation/contracts > architecture docs > AI schemas/golden fixtures >
   context.md / implementation convenience.
 

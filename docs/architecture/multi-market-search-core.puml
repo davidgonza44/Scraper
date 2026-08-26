@@ -1,5 +1,5 @@
 @startuml
-title BERA - Multi-market Search Core (Implementation PR A)
+title BERA - Multi-market Search Core (Implementation PRs A and B)
 
 skinparam classAttributeIconSize 0
 
@@ -99,6 +99,23 @@ package "Implemented PR A application core" {
   class "execute_bounded_provider_search()" as LogicalSearch
 }
 
+package "Implemented PR B positional comparison" {
+  class SearchPositionComparisonRow {
+    +rank: int
+    +alibaba_candidate
+    +facebook_candidate
+    +mercadolibre_candidate
+    +identity_confirmed = false
+  }
+
+  class ExactProductContext {
+    +product_id: str
+  }
+
+  class "build_search_position_comparison_rows()" as PositionalRows
+  class "ordered_usable_pool_from_batches()" as AggregateOrder
+}
+
 package "Existing Application / Provider Boundary" {
   interface ExistingProviderOperation {
     +execute(...)
@@ -132,6 +149,11 @@ ProviderRunResult --> ProviderStatus
 ProviderRunResult --> CoverageStatus
 SearchIntent --> SearchSessionSnapshot
 ProviderRunResult --> SearchSessionSnapshot : immutable commit
+SearchSessionSnapshot --> PositionalRows : canonical prefixes
+PositionalRows --> SearchPositionComparisonRow
+LogicalSearch --> AggregateOrder : freeze provider order
+SearchPositionComparisonRow ..> ExactProductContext : structurally separate
+ExactProductContext ..> SearchPositionComparisonRow : never derived from rank/native IDs
 
 TrackerState ..> SearchIntent : deferred wiring (not in PR A)
 TrackerState ..> LogicalSearch : deferred wiring (not in PR A)
@@ -197,16 +219,23 @@ note right of TrackerState
   Creating SearchIntent / invoking the policy /
   execute_bounded_provider_search() / commit
   is deferred integration, not current wiring.
+  Generic Búsquedas serializes PR B positional
+  rows from canonical GUI result lists.
+end note
+
+note right of SearchPositionComparisonRow
+  identity_confirmed is invariant false.
+  Same Resultado #N does not imply same product.
+  ExactProductContext requires agreeing
+  non-empty association/context IDs.
 end note
 
 package "Deferred staged work" {
-  class "PR B\nPositional comparison" as PRB
   class "PR C\nProvider diagnostics" as PRC
   class "PR D\nQuery routing + Venezuela scope" as PRD
   class "PR E\nCSV/currency/lifecycle/browser gate" as PRE
 }
 
-PRB ..> SearchSessionSnapshot : later consumer
 PRC ..> ProviderRunMetrics : later instrumentation/UI
 PRD ..> SearchIntent : later routing/scope integration
 PRD ..> BoundedAcquisitionPlan : later concrete geo plans
