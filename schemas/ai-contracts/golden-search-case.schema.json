@@ -52,6 +52,7 @@
         "alibaba_mapper",
         "facebook_priced_only",
         "mercadolibre_mapper",
+        "mercadolibre_search_boundary",
         "search_session_core",
         "facebook_one_execute",
         null

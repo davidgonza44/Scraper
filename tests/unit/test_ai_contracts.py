@@ -259,17 +259,76 @@ def _check_mercadolibre_mapper(case: Mapping[str, Any]) -> None:
         map_mercadolibre_item,
     )
 
-    given = case["given"]
-    if "raw_items" in given:
-        mapped = [map_mercadolibre_item(item) for item in given["raw_items"]]
-        assert mapped[0] is None
-        assert mapped[1] is not None
-        assert mapped[1].external_id == "MLV900000002"
-        return
-    listing = map_mercadolibre_item(given["raw"])
+    listing = map_mercadolibre_item(case["given"]["raw"])
     assert listing is not None
     assert listing.external_id == case["expected"]["external_id"]
     assert listing.permalink is None
+
+
+def _check_mercadolibre_search_boundary(case: Mapping[str, Any]) -> None:
+    from bera_price_tracker.application.services import SearchMercadoLibreProducts
+    from bera_price_tracker.infrastructure.providers.mercadolibre_apify import (
+        ApifyMercadoLibreClient,
+        map_mercadolibre_item,
+    )
+
+    raw_items = list(case["given"]["raw_items"])
+    expected_mapped = list(case["expected"]["mapped"])
+    expected_ids = [external_id for external_id in expected_mapped if external_id is not None]
+    expected_searches = int(case["expected"]["logical_searches"])
+
+    class FakeDataset:
+        def list_items(self, *, limit: int) -> FakeDataset:
+            page = FakeDataset()
+            page.items = raw_items[:limit]
+            return page
+
+        items: list[object] = []
+
+    class FakeActor:
+        def __init__(self, client: CountingFakeApifyClient) -> None:
+            self.client = client
+
+        def call(self, *, run_input: dict[str, object]) -> dict[str, object]:
+            self.client.actor_calls.append(run_input)
+            return {"status": "SUCCEEDED", "defaultDatasetId": "fixture-dataset"}
+
+    class CountingFakeApifyClient:
+        def __init__(self) -> None:
+            self.actor_calls: list[dict[str, object]] = []
+
+        def actor(self, actor_id: str) -> FakeActor:
+            assert actor_id
+            return FakeActor(self)
+
+        def dataset(self, dataset_id: str) -> FakeDataset:
+            assert dataset_id == "fixture-dataset"
+            return FakeDataset()
+
+    actual_mapped = [
+        None if mapped is None else mapped.external_id
+        for mapped in (map_mercadolibre_item(item) for item in raw_items)
+    ]
+    assert actual_mapped == expected_mapped
+    assert expected_mapped[0] is None
+    assert expected_ids
+    assert expected_ids[-1] == expected_mapped[-1]
+
+    fake_client = CountingFakeApifyClient()
+    provider = ApifyMercadoLibreClient(
+        _api_token="offline-fixture-token",
+        client_factory=lambda _token: fake_client,
+    )
+    returned = SearchMercadoLibreProducts(provider).execute("fixture query", len(raw_items))
+    returned_ids = [listing.external_id for listing in returned]
+
+    # These boundary assertions catch both early termination after a rejected row
+    # and an attempted replacement search for that row.
+    assert returned_ids == expected_ids
+    assert actual_mapped[0] not in returned_ids
+    assert actual_mapped[-1] in returned_ids
+    assert len(fake_client.actor_calls) == expected_searches
+    assert expected_searches == 1
 
 
 def _check_search_session_core(case: Mapping[str, Any]) -> None:
@@ -308,6 +367,7 @@ RUNTIME_HANDLERS: dict[str, Callable[[Mapping[str, Any]], None]] = {
     "alibaba_mapper": _check_alibaba_mapper,
     "facebook_priced_only": _check_facebook_priced_only,
     "mercadolibre_mapper": _check_mercadolibre_mapper,
+    "mercadolibre_search_boundary": _check_mercadolibre_search_boundary,
     "search_session_core": _check_search_session_core,
     "facebook_one_execute": _check_facebook_one_execute,
 }

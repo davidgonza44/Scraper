@@ -3,7 +3,7 @@
   "description": "An earlier record without Venezuela evidence is rejected; a later valid MLV record may remain usable in the same logical search.",
   "provider": "mercadolibre",
   "implementation_stage": "A",
-  "runtime_check": "mercadolibre_mapper",
+  "runtime_check": "mercadolibre_search_boundary",
   "given": {
     "raw_items": [
       {
