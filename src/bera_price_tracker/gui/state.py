@@ -2914,6 +2914,7 @@ class TrackerState(rx.State):
 
     @rx.var
     def ml_visible_rows(self) -> list[MercadoLibreResultRow]:
+        """Specialized Mercado Libre table projection. Generic Búsquedas ignores this."""
         minimum, maximum, error = analysis.validate_price_filters(
             self.ml_price_min, self.ml_price_max
         )
@@ -3041,7 +3042,7 @@ class TrackerState(rx.State):
                     detail = f"{count} resultados válidos"
                 label = search_scope.PLATFORM_LABELS[PLATFORM_FACEBOOK]
             else:
-                count = str(self.ml_summary.get("comparables") or len(self.ml_results))
+                count = str(self.ml_summary.get("usable") or len(self.ml_results))
                 detail = search_scope.progress_label(self.ml_ui_status, count)
                 label = search_scope.PLATFORM_LABELS[PLATFORM_ML]
             rows.append(SearchProgressRow(platform=provider, label=label, detail=detail))
@@ -3088,10 +3089,10 @@ class TrackerState(rx.State):
 
     @rx.var
     def search_total_results(self) -> str:
+        # Generic Búsquedas totals use stored canonical rows, not specialized
+        # presentation filters such as ml_visible_rows / alibaba_visible_rows.
         return str(
-            len(self.alibaba_visible_rows)
-            + len(self.facebook_product_results)
-            + len(self.ml_visible_rows)
+            len(self.alibaba_results) + len(self.facebook_product_results) + len(self.ml_results)
         )
 
     @rx.var
@@ -3204,7 +3205,7 @@ class TrackerState(rx.State):
         raw = marketplace_summary.build_marketplace_summaries(
             alibaba_ui_status=self.alibaba_ui_status,
             alibaba_summary=self.alibaba_summary,
-            alibaba_rows=self.alibaba_visible_rows,
+            alibaba_rows=self.alibaba_results,
             facebook_ui_status=self.facebook_product_ui_status,
             facebook_summary=self.facebook_product_summary,
             facebook_statistics=self.facebook_product_statistics,
@@ -3212,7 +3213,7 @@ class TrackerState(rx.State):
             facebook_error=self.facebook_product_error,
             ml_ui_status=self.ml_ui_status,
             ml_summary=self._ml_diagnostic_summary(),
-            ml_rows=self.ml_visible_rows,
+            ml_rows=self.ml_results,
         )
         attached = search_diagnostics.attach_diagnostics(
             raw,
@@ -3251,9 +3252,9 @@ class TrackerState(rx.State):
             or self.ml_query.strip()
         )
         raw = comparison.build_comparison_rows(
-            alibaba_rows=self.alibaba_visible_rows,
+            alibaba_rows=self.alibaba_results,
             facebook_rows=self.facebook_product_results,
-            ml_rows=self.ml_visible_rows,
+            ml_rows=self.ml_results,
             alibaba_status=self.alibaba_ui_status,
             facebook_status=self.facebook_product_ui_status,
             ml_status=self.ml_ui_status,

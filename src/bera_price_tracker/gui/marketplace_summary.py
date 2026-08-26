@@ -237,11 +237,18 @@ def mercadolibre_summary_card(
         return card
     card["status"] = "ready" if ui_status == UI_SUCCESS and rows else "empty-results"
     card["status_label"] = "Comparables" if rows else "Sin resultados"
+    usable = _metric(summary, "usable")
     count = _metric(summary, "comparable_count")
     if count == EMPTY_METRIC:
         count = _metric(summary, "comparables")
-    if count == EMPTY_METRIC or (count == "0" and rows):
+    # Generic Búsquedas counts canonical rows, not the specialized ≥60 comparable
+    # benchmark. comparable_count may be 0 while usable/displayed is 1.
+    if rows:
         card["result_count"] = str(len(rows))
+    elif usable != EMPTY_METRIC:
+        card["result_count"] = usable
+    elif count == EMPTY_METRIC:
+        card["result_count"] = "0"
     else:
         card["result_count"] = count
     card["minimum"] = _metric(summary, "minimo")

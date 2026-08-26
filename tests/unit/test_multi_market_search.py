@@ -25,6 +25,7 @@ from bera_price_tracker.gui.search_scope import (
     validate_search_limit,
 )
 from bera_price_tracker.gui.state import (
+    UI_EMPTY,
     UI_ERROR,
     UI_INITIAL,
     UI_SUCCESS,
@@ -117,6 +118,114 @@ def test_single_ml_does_not_call_others() -> None:
     assert log.count("ml-run") == 1
     assert log.count("alibaba-run") == 0
     assert log.count("facebook-run") == 0
+
+
+def test_single_market_ml_usable_listing_stays_in_generic_search_ui(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid MLV listing with usable=1 must remain a generic search result.
+
+    Specialized Mercado Libre cards still default to relevance ≥ 60. Generic
+    Búsquedas cards, totals, and comparison must use the stored canonical row.
+    """
+
+    from bera_price_tracker.application.mercadolibre_benchmark import (
+        DEFAULT_BENCHMARK_RELEVANCE,
+    )
+    from bera_price_tracker.application.ports import MercadoLibreSearchProvider
+    from bera_price_tracker.application.provider_acquisition import ProviderAcquisitionMetrics
+    from bera_price_tracker.application.services import SearchMercadoLibreProducts
+    from bera_price_tracker.domain.mercadolibre import MercadoLibreListing
+    from bera_price_tracker.gui import services
+    from bera_price_tracker.infrastructure.providers.mercadolibre_apify import (
+        map_mercadolibre_item,
+    )
+    from tests.fixtures.mercadolibre_mlv import PILOT_ITEMS, PILOT_QUERY
+
+    listing = map_mercadolibre_item(PILOT_ITEMS[0])
+    assert listing is not None
+    assert listing.external_id == "MLV982107672"
+
+    class _FakeMlProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.last_metrics: ProviderAcquisitionMetrics | None = None
+
+        def search(self, query: str, limit: int) -> list[MercadoLibreListing]:
+            self.calls += 1
+            selected = [listing]
+            self.last_metrics = ProviderAcquisitionMetrics(
+                requested=limit,
+                fetched=len(selected),
+                usable=len(selected),
+            )
+            return selected
+
+    provider = _FakeMlProvider()
+    service = SearchMercadoLibreProducts(cast(MercadoLibreSearchProvider, provider))
+    original_run = services.run_mercadolibre_search
+
+    def run_ml(query: str, limit: int) -> dict[str, object]:
+        return original_run(query, limit, search_service=service)
+
+    def forbidden(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise AssertionError("single-market Mercado Libre must not call other providers")
+
+    monkeypatch.setattr(services, "run_mercadolibre_search", run_ml)
+    monkeypatch.setattr(services, "run_alibaba_search", forbidden)
+    monkeypatch.setattr(services, "run_facebook_product_search", forbidden)
+
+    state = TrackerState()
+    state.search_mode = MODE_SINGLE
+    state.search_platform = PLATFORM_ML
+    state.search_query = PILOT_QUERY
+    state.search_limit = 1
+    asyncio.run(cast(Any, TrackerState.run_scoped_search).fn(state))
+
+    assert provider.calls == 1
+    assert state.ml_results_from_generic_session is True
+    assert state.ml_ui_status == UI_SUCCESS
+    assert state.ml_ui_status != UI_EMPTY
+    assert state.search_session_phase == "COMPLETE"
+    assert len(state.ml_results) == 1
+    assert state.ml_results[0].external_id == listing.external_id
+    assert state.ml_summary.get("requested") == "1"
+    assert state.ml_summary.get("fetched") == "1"
+    assert state.ml_summary.get("usable") == "1"
+    assert state.ml_min_relevance == DEFAULT_BENCHMARK_RELEVANCE
+    assert int(state.ml_results[0].relevance_value) < DEFAULT_BENCHMARK_RELEVANCE
+    assert state.ml_visible_rows == []
+
+    ml_card = next(card for card in state.marketplace_summaries if card.platform_id == PLATFORM_ML)
+    assert ml_card.result_count == "1"
+    assert ml_card.status not in {"empty", "empty-results"}
+    diagnostic = {line.label: line.value for line in ml_card.diagnostic_lines}
+    assert diagnostic["Solicitados"] == "1"
+    assert diagnostic["Recibidos"] == "1"
+    assert diagnostic["Válidos"] == "1"
+    assert state.search_total_results == "1"
+
+    ml_comparison = [row for row in state.comparison_rows if row.ml_has_listing]
+    assert len(ml_comparison) == 1
+    assert ml_comparison[0].ml_title == listing.title
+    assert ml_comparison[0].ml_has_listing is True
+
+
+def test_ml_summary_card_counts_canonical_row_not_zero_comparables() -> None:
+    from bera_price_tracker.gui import marketplace_summary
+
+    card = marketplace_summary.mercadolibre_summary_card(
+        ui_status=UI_SUCCESS,
+        summary={"comparable_count": "0", "usable": "1", "requested": "1", "fetched": "1"},
+        rows=[
+            MercadoLibreResultRow(
+                external_id="MLV982107672",
+                title="Mouse Gamer Logitech G102 Lightsync Rgb 8000dpi Pc Laptop",
+            )
+        ],
+    )
+    assert card["result_count"] == "1"
+    assert card["status"] == "ready"
 
 
 def test_facebook_free_listing_is_rejected_without_retry() -> None:
