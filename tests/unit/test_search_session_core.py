@@ -288,8 +288,9 @@ def test_consistent_provider_run_values_remain_valid(
 
 def test_complete_geographic_coverage_requires_all_planned_steps() -> None:
     scope = "Toda Venezuela"
-    policy = _policy({"facebook": _rule(max_acquisitions=2)})
+    policy = _policy({"facebook": _rule(max_acquisitions=2, max_budget=30, multiplier=4)})
     intent = _intent(provider="facebook", scope=scope)
+    calls: list[str] = []
     result = _run(
         intent=intent,
         plan=_plan(policy=policy, provider="facebook", display_limit=3, scope=scope),
@@ -298,7 +299,10 @@ def test_complete_geographic_coverage_requires_all_planned_steps() -> None:
             "step-1": _batch(FakeCandidate("one", "1")),
             "step-2": _batch(FakeCandidate("two", "2")),
         },
+        calls=calls,
     )
+    assert calls == ["step-1", "step-2"]
+    assert result.metrics.acquisition_requested == 10
     assert result.status is ProviderStatus.SUCCESS
     assert result.coverage_status is CoverageStatus.COMPLETE
     assert result.effective_geographic_scope == scope
@@ -307,8 +311,9 @@ def test_complete_geographic_coverage_requires_all_planned_steps() -> None:
 
 def test_partial_coverage_keeps_useful_results_and_is_incident() -> None:
     scope = "Toda Venezuela"
-    policy = _policy({"facebook": _rule(max_acquisitions=2)})
+    policy = _policy({"facebook": _rule(max_acquisitions=2, max_budget=30, multiplier=4)})
     intent = _intent(provider="facebook", scope=scope)
+    calls: list[str] = []
     result = _run(
         intent=intent,
         plan=_plan(policy=policy, provider="facebook", display_limit=3, scope=scope),
@@ -317,7 +322,9 @@ def test_partial_coverage_keeps_useful_results_and_is_incident() -> None:
             "step-1": _batch(FakeCandidate("one", "1")),
             "step-2": RuntimeError("partition unavailable"),
         },
+        calls=calls,
     )
+    assert calls == ["step-1", "step-2"]
     snapshot = SearchSessionSnapshot(intent=intent).commit(result)
     assert result.status is ProviderStatus.SUCCESS
     assert result.coverage_status is CoverageStatus.PARTIAL
@@ -328,14 +335,17 @@ def test_partial_coverage_keeps_useful_results_and_is_incident() -> None:
 
 def test_partial_empty_does_not_claim_complete_nationwide_empty() -> None:
     scope = "Toda Venezuela"
-    policy = _policy({"facebook": _rule(max_acquisitions=2)})
+    policy = _policy({"facebook": _rule(max_acquisitions=2, max_budget=30, multiplier=4)})
     intent = _intent(provider="facebook", scope=scope)
+    calls: list[str] = []
     result = _run(
         intent=intent,
         plan=_plan(policy=policy, provider="facebook", display_limit=3, scope=scope),
         policy=policy,
         batches={"step-1": _batch(), "step-2": RuntimeError("failed")},
+        calls=calls,
     )
+    assert calls == ["step-1", "step-2"]
     snapshot = SearchSessionSnapshot(intent=intent).commit(result)
     assert result.status is ProviderStatus.EMPTY
     assert result.coverage_status is CoverageStatus.PARTIAL
@@ -406,13 +416,16 @@ def test_identity_less_similar_candidates_are_not_deduplicated() -> None:
 def test_truthful_stable_identity_is_deduplicated() -> None:
     first = FakeCandidate("first representation", identity="item-1")
     duplicate = FakeCandidate("duplicate representation", identity="item-1")
-    policy = _policy({"alibaba": _rule(max_acquisitions=2)})
+    policy = _policy({"alibaba": _rule(max_acquisitions=2, max_budget=30, multiplier=4)})
+    calls: list[str] = []
     result = _run(
         intent=_intent(),
         plan=_plan(policy=policy, display_limit=3, limits=(5, 5)),
         policy=policy,
         batches={"step-1": _batch(first), "step-2": _batch(duplicate)},
+        calls=calls,
     )
+    assert calls == ["step-1", "step-2"]
     assert result.ordered_usable_pool == (first,)
 
 
@@ -432,7 +445,7 @@ def test_title_image_price_similarity_never_becomes_identity() -> None:
 
 def test_budget_exhaustion_returns_fewer_without_unbounded_calls() -> None:
     calls: list[str] = []
-    policy = _policy({"alibaba": _rule(max_acquisitions=2, max_budget=5, multiplier=1)})
+    policy = _policy({"alibaba": _rule(max_acquisitions=2, max_budget=5, multiplier=2)})
     result = _run(
         intent=_intent(display_limit=3),
         plan=_plan(policy=policy, display_limit=3, limits=(5, 5)),
