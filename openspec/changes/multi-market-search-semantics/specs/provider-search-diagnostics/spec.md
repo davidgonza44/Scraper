@@ -67,6 +67,16 @@ Diagnostics and observability SHALL contain only safe aggregate counters and san
 - **WHEN** a mapping-loss diagnostic is rendered or exported
 - **THEN** it contains aggregate counts and sanitized text only
 
+### Requirement: Configuration errors are sanitized
+
+A selected provider unable to execute because required configuration or credentials are missing SHALL expose an `ERROR` diagnostic such as provider not configured. The diagnostic SHALL NOT expose credentials, tokens, raw configuration, sensitive values, or stack traces.
+
+#### Scenario: Provider configuration is missing
+- **GIVEN** a selected provider cannot start for missing required configuration
+- **WHEN** the user expands `Ver detalles`
+- **THEN** sanitized configuration-error copy is shown
+- **AND** no sensitive configuration material is shown
+
 ### Requirement: Unknown Alibaba currency is explained without USD inference
 
 An Alibaba listing with a published price and unconfirmed source currency MAY remain visible, but USD aggregates SHALL remain unavailable. The UI SHALL explain that the published price is available while source currency is unconfirmed and USD statistics are unavailable for that reason. No fallback SHALL label the unknown currency as USD.

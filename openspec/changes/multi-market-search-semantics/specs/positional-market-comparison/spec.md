@@ -4,7 +4,7 @@
 
 ### Requirement: Generic comparison aligns canonical candidates by position
 
-Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position in each provider's canonical BERA ordering. Row count SHALL equal the maximum displayed candidate count among selected providers. Missing cells SHALL remain empty; candidates SHALL NOT be duplicated to fill cells.
+Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position in each provider's canonical BERA ordering. The ordering and canonical session prefix SHALL freeze when `ProviderRunResult` is committed to the current-generation session snapshot. Row count SHALL equal the maximum displayed candidate count among selected providers. Missing cells SHALL remain empty; candidates SHALL NOT be duplicated to fill cells.
 
 #### Scenario: Uneven three-two-one results
 - **GIVEN** Alibaba displays A1, A2, A3
@@ -15,6 +15,12 @@ Generic multi-market search SHALL build `SearchPositionComparisonRow` values by 
 - **AND** row 1 contains A1, F1, M1
 - **AND** row 2 contains A2, F2, and an empty Mercado Libre cell
 - **AND** row 3 contains A3 and empty Facebook and Mercado Libre cells
+
+#### Scenario: Presentation sort cannot change Resultado number one
+- **GIVEN** candidate A is frozen as canonical `Resultado #1`
+- **WHEN** a specialized view applies price sorting, relevance filtering, or a ranking preset that places another candidate first in its projection
+- **THEN** A remains generic comparison `Resultado #1`
+- **AND** session totals, export membership, provider status, and the canonical snapshot remain unchanged
 
 ### Requirement: Positional comparison has a distinct non-identity model
 
@@ -43,7 +49,7 @@ The system SHALL NOT use position, title, fuzzy title, relevance, image similari
 
 ### Requirement: Summary counts use canonical current-session results
 
-Generic summary cards SHALL derive counts from canonical current-search provider results/displayed session results, not `alibaba_visible_rows`, `ml_visible_rows`, or any presentation filter. **Total de resultados** SHALL equal the sum of provider displayed listing counts and SHALL NOT equal positional row count unless coincidentally equal.
+Generic summary cards SHALL derive counts from the frozen canonical session result prefixes, not the remainder of ordered usable acquisition pools, `alibaba_visible_rows`, `ml_visible_rows`, or any presentation projection. **Total de resultados** SHALL equal the sum of provider displayed/canonical session result counts and SHALL NOT equal positional row count unless coincidentally equal.
 
 #### Scenario: Hidden Mercado Libre presentation row remains counted
 - **GIVEN** Mercado Libre has one canonical usable/displayed current-session listing

@@ -4,7 +4,7 @@
 
 ### Requirement: Original and provider-specific queries retain provenance
 
-Each search session SHALL retain `original_user_query`. Each selected provider SHALL retain `provider_query` and `query_origin`, whose allowed values are `USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, and `FALLBACK`. Diagnostics and exports MAY expose these fields; the primary UI SHALL continue to emphasize the user's entered query.
+Each search session SHALL retain `original_user_query` and `generation`. Each selected provider SHALL retain `provider_query`, `provider_query_origin`, and the provider-local market/geographic scope required to reproduce that search; allowed origins are `USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, and `FALLBACK`. Facebook Venezuela SHALL retain its relevant market/city scope, currently Caracas. This provenance SHALL answer what the user searched, what each provider received, what scope it used, and which generation produced the result without creating a generic geospatial subsystem. Diagnostics and exports MAY expose these fields safely; the primary UI SHALL emphasize the user's entered query.
 
 #### Scenario: Provider queries preserve original intent
 - **GIVEN** the user searches `baseball glove`
@@ -12,9 +12,14 @@ Each search session SHALL retain `original_user_query`. Each selected provider S
 - **THEN** the session retains `baseball glove` as the original query
 - **AND** every selected provider records its actual query and origin
 
+#### Scenario: Provider-local scope is reproducible
+- **GIVEN** Facebook Venezuela runs for the current Caracas market scope
+- **WHEN** its result is committed
+- **THEN** the snapshot retains the original query, Facebook provider query and origin, Caracas/Venezuela scope, and generation
+
 ### Requirement: Query routing is marketplace-specific
 
-Alibaba SHALL receive the original/international query. Facebook Venezuela and Mercado Libre Venezuela SHALL receive a safely available Spanish marketplace query when appropriate. A Venezuela-specific query SHALL NOT leak into Alibaba solely because Venezuela providers use it.
+Alibaba SHALL receive either the original query or an independently derived safe international query using existing query-generation infrastructure. Facebook Venezuela and Mercado Libre Venezuela SHALL receive a safely available Spanish marketplace query when appropriate. A Venezuela-localized query SHALL NOT leak into or silently translate Alibaba solely because Venezuela providers use it. Alibaba's actual query and origin SHALL be retained.
 
 #### Scenario: Shared Spanish Venezuela query
 - **GIVEN** original query `baseball glove`
@@ -25,7 +30,7 @@ Alibaba SHALL receive the original/international query. Facebook Venezuela and M
 
 ### Requirement: Existing translation infrastructure is reused once with fallback
 
-The system SHALL reuse existing BERA translation/query-generation infrastructure and SHALL NOT create a parallel translation architecture. Deterministic/original routing SHALL be attempted first. If translation is necessary and configured, at most one shared Venezuela marketplace query generation SHALL occur per search and MAY be reused by Facebook and Mercado Libre. Translation SHALL NOT loop. Unavailable or failed translation SHALL fall back to the original query with truthful origin.
+The system SHALL reuse existing BERA translation/query-generation infrastructure and SHALL NOT add language-detection AI or a parallel translation architecture. Deterministic/original routing SHALL be attempted first. If translation is necessary and configured, at most one shared Venezuela marketplace query generation SHALL occur per search and MAY be reused by Facebook and Mercado Libre. Translation SHALL NOT loop. Routing SHALL follow the decision table in `design.md`: no derivation needed or output identical to original uses original/`USER_ORIGINAL`; a differing valid deterministic result uses `DETERMINISTIC_GENERATED`; a valid translation uses `TRANSLATED`; translator unavailable/timeout/failure, empty/invalid output, or failed technical-token preservation/validation uses original/`FALLBACK`.
 
 #### Scenario: Translator unavailable
 - **GIVEN** a Venezuela query would benefit from translation
@@ -34,6 +39,30 @@ The system SHALL reuse existing BERA translation/query-generation infrastructure
 - **THEN** Facebook and Mercado Libre receive the original query as fallback
 - **AND** origin is `FALLBACK`
 - **AND** provider search can proceed without a translation retry loop
+
+#### Scenario: Translator times out or fails
+- **GIVEN** Venezuela localization is requested
+- **AND** the configured translator times out or returns failure
+- **WHEN** routing completes
+- **THEN** the original query is used with `FALLBACK`
+- **AND** no translation loop occurs
+
+#### Scenario: Translation changes a protected technical token
+- **GIVEN** the original query contains a technical token such as `21V` or `G102`
+- **AND** translated output removes or alters that token
+- **WHEN** existing technical-token validation rejects the output
+- **THEN** the original query is used with `FALLBACK`
+
+#### Scenario: Generated output equals original
+- **GIVEN** valid generated output normalizes identically to the original query
+- **WHEN** routing records provenance
+- **THEN** the original query is used with `USER_ORIGINAL`
+
+#### Scenario: Valid Venezuela translation succeeds
+- **GIVEN** translated output is non-empty, valid, and preserves required technical tokens
+- **WHEN** routing completes
+- **THEN** Facebook and Mercado Libre may reuse it with `TRANSLATED`
+- **AND** at most one shared Venezuela-localized generation occurred
 
 ### Requirement: Facebook Caracas scope uses an explicit deterministic policy
 

@@ -13,6 +13,20 @@ The system SHALL interpret UI values 1, 3, and 5 as `display_limit`, the maximum
 - **THEN** `displayed = 2`
 - **AND** no listing is fabricated or duplicated
 
+### Requirement: Canonical session results are the frozen displayed prefix
+
+The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. The acquisition buffer SHALL exist only to improve the chance of filling the display maximum. `usable` SHALL count the ordered usable pool; `displayed` SHALL count the canonical session result prefix. Comparison, summaries, totals, and export SHALL consume only that frozen prefix.
+
+#### Scenario: Over-acquisition produces only three session results
+- **GIVEN** `display_limit = 3`
+- **AND** `acquisition_requested = 10`
+- **AND** the ordered usable pool contains 8 candidates
+- **WHEN** the provider result is committed
+- **THEN** `usable = 8`
+- **AND** `displayed = 3`
+- **AND** canonical session results contain the first 3 candidates
+- **AND** that provider contributes exactly 3 CSV rows
+
 ### Requirement: Acquisition limits are explicit, centralized, and bounded
 
 The system SHALL represent `acquisition_limit` separately from `display_limit`. A centralized deterministic policy SHALL initially map Alibaba and Mercado Libre display limits 1/3/5 to acquisition limits 5/10/15, and Facebook display limits 1/3/5 to acquisition limit 5. Every value SHALL remain capped by the provider hard maximum. Alibaba's maximum 500 SHALL NOT be used as a normal acquisition pool. Any evidence-based adjustment SHALL be documented in the design before implementation and SHALL remain centralized and bounded.
@@ -31,9 +45,9 @@ The system SHALL represent `acquisition_limit` separately from `display_limit`. 
 - **THEN** `acquisition_requested = 5`
 - **AND** diagnostics/design communicate that the current hard cap provides no additional rejection buffer
 
-### Requirement: Each selected provider executes at most once with no automatic retry
+### Requirement: Generic search executes one acquisition per selected provider and generation
 
-In multi-market mode, Alibaba, Facebook, and Mercado Libre SHALL each execute at most once when selected. In single-market mode, the selected provider SHALL execute at most once. The system SHALL perform zero automatic marketplace retries, including when candidates fail mapping or policy validation.
+In generic **Búsquedas**, Alibaba, Facebook, and Mercado Libre SHALL each have at most one marketplace acquisition execution per selected provider per search generation. A marketplace acquisition execution means one logical externally initiated Actor run, API marketplace search request, or equivalent provider search operation that obtains that provider's bounded pool. In single-market generic search, the selected provider has the same limit. The system SHALL NOT launch a second acquisition execution to refill mapping/policy losses. This rule SHALL NOT redefine CLI collect, tracking, refresh, history, exact-product, specialized workflow, or internal provider-transport behavior outside generic **Búsquedas**.
 
 #### Scenario: Only two usable candidates exist
 - **GIVEN** `display_limit = 3`
@@ -50,9 +64,14 @@ In multi-market mode, Alibaba, Facebook, and Mercado Libre SHALL each execute at
 - **AND** displays at most three usable listings
 - **AND** performs no retry
 
+#### Scenario: Mapping and rejection loss does not trigger refill execution
+- **GIVEN** a provider's one bounded acquisition returns candidates that are lost during mapping or policy rejection
+- **WHEN** fewer than `display_limit` usable candidates remain
+- **THEN** no second Actor/API marketplace search acquisition is launched for that provider and generation
+
 ### Requirement: Provider metrics are precise and unknown-safe
 
-Each provider run SHALL expose `display_requested`, `acquisition_requested`, `fetched`, `mapped`, `rejected`, `usable`, and `displayed` according to the definitions in `design.md`. An unobservable metric SHALL be represented as unknown and rendered **No disponible**, never as zero solely because it cannot be observed. Provider-specific rejection counters SHALL be emitted only where truthfully measurable.
+The implementation SHALL evolve/consolidate existing `ProviderAcquisitionMetrics` and provider-specific metrics into one run contract exposing `display_requested`, `acquisition_requested`, optional `fetched`, optional `mapped`, optional `rejected`, `usable`, and `displayed` according to `design.md`, rather than maintain competing sources of truth. Every emitted counter SHALL document its measurement boundary. No arithmetic identity between fetched, mapped, rejected, and usable is required. An unobservable metric SHALL be unknown and render **No disponible**, never zero solely because it cannot be observed. Provider-specific rejection counters SHALL remain optional truthful detail.
 
 #### Scenario: Unobservable fetched count
 - **GIVEN** an adapter cannot observe raw records received
@@ -77,6 +96,13 @@ The system SHALL classify a completed provider execution with at least one usabl
 - **AND** a relevance presentation filter hides that listing in another view
 - **WHEN** provider status is read
 - **THEN** it remains `SUCCESS`
+
+#### Scenario: Selected provider is not configured
+- **GIVEN** a selected provider lacks required configuration or credentials and cannot execute
+- **WHEN** its outcome is derived
+- **THEN** status is `ERROR`
+- **AND** status is not `EMPTY`
+- **AND** diagnostics expose no credentials, raw configuration, tokens, sensitive values, or stack trace
 
 ### Requirement: Provider-specific validation remains fail-closed
 

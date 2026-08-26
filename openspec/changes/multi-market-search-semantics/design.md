@@ -8,7 +8,7 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 
 ## Goals
 
-- Return up to the user's per-marketplace display maximum from a bounded candidate pool acquired in one provider execution.
+- Return up to the user's per-marketplace display maximum from a bounded pool obtained by one generic-search marketplace acquisition execution per selected provider and generation.
 - Make provider outcomes and pipeline loss truthful and observable without retaining sensitive raw data.
 - Compare generic results positionally without asserting identity.
 - Keep summary, total, export, and status semantics tied to immutable current-session canonical results.
@@ -17,12 +17,12 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 
 ## Architecture and data flow
 
-1. A new search generation creates `SearchIntent(original_user_query, display_limit, selected_providers)`; `display_limit` accepts only 1, 3, or 5.
-2. Query routing produces one `ProviderQuery` per selected provider with `provider_query` and `query_origin` (`USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, or `FALLBACK`).
+1. A new search generation creates `SearchIntent(original_user_query, display_limit, selected_providers, generation)`; `display_limit` accepts only 1, 3, or 5.
+2. Query routing produces one `ProviderQuery` per selected provider with `provider_query`, `provider_query_origin` (`USER_ORIGINAL`, `DETERMINISTIC_GENERATED`, `TRANSLATED`, or `FALLBACK`), and the provider-local market/geographic scope needed to reproduce the request (for example Facebook Venezuela / Caracas).
 3. A centralized acquisition policy computes `acquisition_limit(provider, display_limit)` and caps it at the provider hard maximum.
 4. The orchestrator starts each selected provider once. It does not invoke a replacement run when mapping or policy rejects candidates.
-5. Each adapter returns or is wrapped into a `ProviderRunResult` containing canonical ordered usable candidates, metrics, safe rejection counters, query provenance, and an execution outcome.
-6. `displayed_candidates` is the ordered prefix of canonical usable candidates of length `display_limit`. Presentation filters may hide views elsewhere but do not mutate this session result.
+5. Each adapter returns or is wrapped into a `ProviderRunResult` containing the ordered usable pool, consolidated metrics, safe rejection counters, query/market/generation provenance, and an execution outcome.
+6. The pipeline is explicitly: acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. The acquisition buffer exists only to improve the chance of filling the display maximum; extra usable buffer candidates are not canonical session results.
 7. Generic comparison constructs positional rows. Exact-product workflows continue to use their separate identity-checked context.
 8. UI summaries, diagnostics, CSV export, and session status read the current generation's canonical session snapshot. Late results from older generations are discarded.
 
@@ -34,6 +34,7 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 - `display_limit`: maximum usable listings displayed per selected provider; one of 1, 3, or 5.
 - `selected_providers`: explicit provider set.
 - `generation`: stale-response guard identity.
+- provider-local market/geographic scopes sufficient to reproduce each provider request, without introducing a generic geospatial subsystem.
 
 The UI label is **Máximo por plataforma**. A display maximum is not a guarantee; the application returns fewer results when fewer usable candidates exist and never fabricates or duplicates candidates.
 
@@ -49,19 +50,21 @@ Initial deterministic table:
 
 The table lives in one policy module/configuration and is covered by contract tests. It is not duplicated in adapters or views. Larger pools increase fetched-record/processing cost, but never provider execution count. Any evidence-based adjustment to 5/10/15 must first update this design with rationale, cost effect, and tests.
 
-### ProviderRunMetrics
+### Consolidated ProviderRunMetrics
 
-Every field is an optional non-negative integer except where the application itself always knows it. An unknown value renders **No disponible**, never synthetic zero.
+The repository's existing `ProviderAcquisitionMetrics` and provider-specific Facebook metrics SHALL be evolved/consolidated into this run contract rather than retained as competing sources of truth. Provider-specific reason counters remain optional detail alongside it. Every field is an optional non-negative integer except where the application itself always knows it. An unknown value renders **No disponible**, never synthetic zero.
 
 - `display_requested`: user-visible maximum requested for that provider; always known.
 - `acquisition_requested`: bounded candidate count sent to/requested from the provider; known when invocation occurs.
 - `fetched`: raw provider records actually received, only if the adapter boundary can observe this truthfully.
 - `mapped`: provider records successfully converted into BERA's narrow safe model.
 - `rejected`: acquired or mapped candidates rejected by provider-specific policy, only where the stage boundary makes the aggregate truthful. Provider-specific reason counters state their counting boundary.
-- `usable`: canonical valid listings after provider-specific mapping and policy; always known for a completed execution.
+- `usable`: size of the ordered usable pool after provider-specific mapping, policy, deduplication, and canonical provider ordering; always known for a completed execution.
 - `displayed`: `min(usable, display_requested)`; always known for a completed execution.
 
-Counters must not be forced to an arithmetic identity when provider stages overlap or are unobservable. Safe reason counts may be included only with documented, deterministic definitions.
+Each adapter/instrumentation point SHALL document the measurement boundary for every emitted counter. `mapped` and `rejected` need not be disjoint: rejection can happen before or after narrow mapping, stages may overlap, and some records may be unobservable. Therefore neither `fetched = mapped + rejected` nor `mapped = usable + rejected` is required. Unobservable counters remain unknown. Safe reason counts may be included only with documented, deterministic definitions.
+
+For example, `display_limit = 3`, `acquisition_requested = 10`, and an ordered usable pool of 8 yields `usable = 8`, `displayed = 3`, exactly 3 canonical session results, and exactly 3 provider rows in CSV.
 
 ### ProviderRunResult and status
 
@@ -70,6 +73,14 @@ Counters must not be forced to an arithmetic identity when provider stages overl
 - `ERROR`: the provider execution failed with an actual exception/failure outcome.
 
 Presentation filters do not change provider status. A successful actor run returning no records, or records that cannot map, is `EMPTY`, not `ERROR`.
+
+A selected provider that cannot start because required configuration or credentials are missing is `ERROR`, never `EMPTY`. Diagnostics may say that the provider is not configured, but never expose credential names/values, raw configuration, tokens, or stack traces.
+
+### Marketplace acquisition execution budget
+
+For generic **Búsquedas**, a marketplace acquisition execution is one externally initiated Actor run, API marketplace search request, or equivalent provider search operation that obtains the bounded candidate pool for one selected provider and generation. There is at most one such execution per selected provider per search generation. Mapping, validation, ordering, and slicing the returned pool are not additional executions. The system MUST NOT automatically start a second Actor/API search merely to replace rejected or mapping-lost candidates.
+
+This budget is scoped to generic **Búsquedas**. It does not change existing CLI collect, tracking, supplier refresh, history, exact-product, or other specialized workflow semantics, nor does it prohibit provider-library transport handling that is internal to one logical acquisition execution.
 
 ### SearchPositionComparisonRow
 
@@ -91,7 +102,9 @@ Positional alignment MUST NOT authorize landed/import cost, profitability ceilin
 
 ## Canonical session and presentation
 
-`SearchSessionSnapshot` owns provider run results, their displayed prefixes, query provenance, generation, and export rows. Generic provider cards use canonical `usable`/`displayed` data, not `alibaba_visible_rows`, `ml_visible_rows`, relevance filters, or other presentation projections.
+`SearchSessionSnapshot` owns provider run results, the frozen canonical session result prefix for each provider, provider query and geographic scope provenance, generation, and export rows. The provider's canonical ordering is frozen when its `ProviderRunResult` is committed to the current-generation snapshot. Generic provider cards use `usable` metrics and canonical session result/displayed counts, not `alibaba_visible_rows`, `ml_visible_rows`, relevance filters, or other presentation projections.
+
+Subsequent presentation sorting, price filtering, relevance filtering, ranking-preset changes, or other UI projections MUST NOT change positional `Resultado #N`, totals, export membership, provider status, or the snapshot. Specialized marketplace views may independently sort/filter only their projections.
 
 **Total de resultados** is the sum of displayed marketplace listings, not the number of positional rows. For displayed counts Alibaba 1, Facebook 1, Mercado Libre 0, total is 2.
 
@@ -120,11 +133,23 @@ Schema-drift observability consists only of aggregate counters and sanitized cop
 
 ## Query routing
 
-Alibaba receives the original/international query. Facebook Venezuela and Mercado Libre Venezuela receive a safely available Spanish marketplace query when appropriate. For `baseball glove`, a valid result is Alibaba `baseball glove`, Facebook/ML `guante de béisbol`.
+Alibaba receives either `original_user_query` or an independently derived safe international query from existing infrastructure. It never inherits the Venezuela-localized query merely because Facebook/ML use it. Facebook Venezuela and Mercado Libre Venezuela receive a safely available Spanish marketplace query when appropriate. For `baseball glove`, one valid result is Alibaba `baseball glove`, Facebook/ML `guante de béisbol`. Every actual provider query and origin is retained.
 
-Routing reuses existing BERA query-generation/translation infrastructure. It first chooses deterministic/original output. When translation is necessary and a configured translator exists, it performs at most one shared Venezuela-query generation that Facebook and Mercado Libre may reuse. Alibaba never inherits that translation merely because Venezuela providers need it. There is no translation loop. Failure/unavailability falls back to the original query with origin `FALLBACK`. Tests use fakes and make zero DeepL calls.
+Routing reuses existing BERA query-generation/translation infrastructure and adds neither language-detection AI nor a second translator. The deterministic decision contract is:
 
-Diagnostics/export may expose `original_search_query`, `provider_query`, and `provider_query_origin`; the main UI continues to emphasize what the user entered.
+| Outcome | Provider query and origin |
+|---|---|
+| No localization/derivation needed | original query, `USER_ORIGINAL` |
+| Valid deterministic generated query differing from original | generated query, `DETERMINISTIC_GENERATED` |
+| Translator unavailable, timeout, or failure | original query, `FALLBACK` |
+| Translation empty/invalid | original query, `FALLBACK` |
+| Translation fails technical-token preservation/validation | original query, `FALLBACK` |
+| Generated/translated output normalizes identically to original | original query, `USER_ORIGINAL` |
+| Valid translated Venezuela query | translated query, `TRANSLATED` |
+
+At most one shared Venezuela-localized generation may be reused by Facebook and Mercado Libre. There is no translation loop. Alibaba derivation is independent and cannot silently consume that localized output. Tests use fakes and make zero DeepL calls.
+
+The snapshot always retains `original_user_query`, each `provider_query`, `provider_query_origin`, provider-local market/geographic scope, and `generation`; diagnostics/export may expose them safely. The main UI continues to emphasize what the user entered.
 
 ## Facebook Caracas-area policy
 
@@ -142,13 +167,17 @@ An Alibaba listing with an unconfirmed source currency may remain visible, but U
 
 ## Export, ratings, images, and session lifecycle
 
-CSV emits one row per real canonical current-session marketplace listing, never one merged identity row per positional comparison. Presentation filters do not remove canonical session listings. Truthfully known fields may include original/provider query provenance and the seven provider metrics; unavailable fields remain unavailable rather than zero. Existing spreadsheet-formula injection protection and UTF-8 BOM remain mandatory.
+CSV emits one row per real canonical session result in the frozen displayed prefix, never one row for an extra usable acquisition-buffer candidate and never one merged identity row per positional comparison. Presentation filters do not remove or add canonical session results. Truthfully known fields may include original/provider query, market scope, generation, and the seven provider metrics; unavailable fields remain unavailable rather than zero. Existing spreadsheet-formula injection protection and UTF-8 BOM remain mandatory.
 
 Alibaba uses its own image and genuine `reviewScore`; Facebook uses its own primary scraped photo and no fabricated rating; Mercado Libre uses its own thumbnail and genuine `ratingAverage`. Relevance, opportunity, `supplierServiceScore`, and seller reputation tiers never become product stars.
 
 **Nueva búsqueda** increments/changes generation and clears results, diagnostics, provider-query provenance, and exportable session data while retaining persistent tracking. A result tagged with an older generation cannot repopulate the new snapshot.
 
-Single-market mode follows the identical pipeline, limits, metrics, query provenance, and no-retry rule for its one selected provider.
+Single-market generic **Búsquedas** follows the identical pipeline, limits, metrics, query provenance, and no-refill-execution rule for its one selected provider.
+
+## Responsibility boundaries
+
+New deterministic acquisition policy, metric derivation, query provenance/routing decisions, frozen-session selection, and positional-row construction SHOULD be implemented in small pure application/GUI modules where practical. `TrackerState` coordinates calls, generation checks, and serialization; it SHOULD NOT absorb all policy/domain logic or become a new service layer. This boundary requires no new framework, microservice, or generic geospatial architecture.
 
 ## Risks and trade-offs
 
