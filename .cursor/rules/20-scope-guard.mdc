@@ -1,0 +1,31 @@
+---
+description: "Prevent scope creep and staged OpenSpec violations"
+alwaysApply: true
+---
+
+# Scope Guard
+
+Before coding, identify the exact requested OpenSpec stage or issue scope.
+
+Implement only that scope.
+
+Do not implement unchecked tasks from later staged PRs unless the user explicitly requests them.
+
+Do not modify OpenSpec requirements merely to make implementation easier.
+
+Do not reinterpret failing tests by weakening the specification.
+
+Do not modify:
+- AGENTS.md
+- active OpenSpec requirements
+- architecture contracts
+- golden fixtures
+
+merely to make tests pass.
+
+If satisfying the task appears to require changing a higher-precedence contract:
+STOP and report the conflict.
+
+Minimal compatible changes are preferred over broad refactors.
+
+Do not perform unrelated cleanup while fixing a focused issue.

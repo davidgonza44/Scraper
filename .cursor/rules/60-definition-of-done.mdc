@@ -1,0 +1,32 @@
+---
+description: "Prevent premature completion claims"
+alwaysApply: true
+---
+
+# Definition of Done
+
+Do not report a task as complete until all applicable checks are satisfied.
+
+Required sequence:
+
+1. Requested behavior implemented.
+2. Regression tests added for newly fixed defects.
+3. Targeted tests pass.
+4. Existing nearby regressions pass.
+5. Ruff format passes.
+6. Ruff check passes.
+7. mypy passes.
+8. AI contract tests pass when applicable.
+9. Full pytest passes.
+10. GitHub Quality Gate passes when a PR exists.
+11. No unresolved known P1/P2 review finding applies to the current HEAD.
+12. No prohibited live external calls occurred.
+13. Requested scope boundaries remain intact.
+
+Always report the exact commit SHA that was validated.
+
+Never use results from an older commit as evidence for the current HEAD.
+
+Never say "all checks pass" while GitHub Actions is still running.
+
+Never merge unless explicitly instructed by the user.

@@ -1,0 +1,32 @@
+---
+description: "Keep ordinary tests deterministic and prevent accidental live API usage"
+globs: "tests/**/*.py,.github/workflows/**/*"
+alwaysApply: false
+---
+
+# Offline Test Safety
+
+Normal unit, contract, integration, and Quality Gate tests must make zero live calls to:
+
+- Apify
+- Alibaba
+- Facebook Marketplace
+- Mercado Libre
+- DeepL
+- Azure
+- MiniMax
+- other external provider APIs
+
+Never use runtime secrets in ordinary pytest.
+
+Live testing must be explicitly separated and opt-in.
+
+Never convert an offline regression into a live test.
+
+Never add retries to live smoke tests unless explicitly authorized.
+
+Live smoke tests must have explicit bounded budgets.
+
+Mocks/fakes must model the external boundary, not bypass the application behavior under test.
+
+Prefer sanitized real-world fixtures for provider payload contracts.
