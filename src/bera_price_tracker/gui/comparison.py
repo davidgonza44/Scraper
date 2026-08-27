@@ -229,6 +229,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
             "ml_price": "",
             "ml_condition": "",
             "ml_seller": "",
+            "ml_shipping": "",
+            "ml_official_store": "",
             "ml_relevance": "",
             "ml_match_label": "",
             "ml_url": "",
@@ -241,6 +243,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
     relevance_value = _int_attr(row, "relevance_value")
     condition = _attr(row, "condition")
     seller = _attr(row, "seller_name")
+    shipping = _attr(row, "shipping")
+    official_store = _attr(row, "official_store")
     rating = product_rating_display(
         _attr(row, "rating_average"), review_count=_attr(row, "review_count")
     )
@@ -258,6 +262,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
         "ml_price": _attr(row, "price"),
         "ml_condition": "" if condition == "—" else condition,
         "ml_seller": "" if seller == "—" else seller,
+        "ml_shipping": "" if shipping == "—" else shipping,
+        "ml_official_store": "" if official_store == "—" else official_store,
         "ml_relevance": _attr(row, "relevance"),
         "ml_match_label": match_label(relevance_value, has_listing=True),
         "ml_url": _attr(row, "permalink"),

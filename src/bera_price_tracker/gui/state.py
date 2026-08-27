@@ -429,6 +429,8 @@ class ComparisonRow(GuiModel):
     ml_price: str = ""
     ml_condition: str = ""
     ml_seller: str = ""
+    ml_shipping: str = ""
+    ml_official_store: str = ""
     ml_relevance: str = ""
     ml_match_label: str = ""
     ml_url: str = ""

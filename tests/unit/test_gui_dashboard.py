@@ -492,6 +492,51 @@ def test_marketplace_cell_renders_provider_title_visibly_not_only_as_alt() -> No
     assert "Untitled" not in blank_blob
 
 
+def test_marketplace_cell_renders_ml_shipping_and_official_store() -> None:
+    from bera_price_tracker.gui.components import comparison as comparison_ui
+
+    source = inspect.getsource(comparison_ui)
+    assert 'line_three=row["ml_shipping"]' in source
+    assert source.count('line_three=row["ml_shipping"]') == 2
+    assert 'line_four=row["ml_official_store"]' in source
+    assert source.count('line_four=row["ml_official_store"]') == 2
+    cell_source = inspect.getsource(comparison_ui.marketplace_cell)
+    assert "rx.text(line_three" in cell_source
+    assert "rx.text(line_four" in cell_source
+    cell = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="ML listing",
+        price="$9.00",
+        price_color="#111111",
+        line_one="Nuevo",
+        line_two="Tienda VE",
+        line_three="Envío gratis",
+        line_four="Tienda oficial",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+    )
+    assert cell is not None
+    paid = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="ML paid",
+        price="$9.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="Pago",
+        line_four="",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+    )
+    assert paid is not None
+
+
 def test_gui_modules_do_not_import_apify() -> None:
     gui_root = SRC / "bera_price_tracker" / "gui"
     for path in gui_root.rglob("*.py"):

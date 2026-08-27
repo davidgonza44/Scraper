@@ -545,6 +545,8 @@ def test_positional_cells_render_available_fields_and_blank_optional_ones() -> N
                 permalink="https://articulo.mercadolibre.com.ve/MLV1",
                 condition="Nuevo",
                 seller_name="Tienda VE",
+                shipping="Envío gratis",
+                official_store="Tienda oficial",
                 rating_average="4.1",
                 review_count="8",
                 seller_reputation="MercadoLíder",
@@ -568,9 +570,32 @@ def test_positional_cells_render_available_fields_and_blank_optional_ones() -> N
     assert "facebook_seller" not in row
     assert row["ml_condition"] == "Nuevo"
     assert row["ml_seller"] == "Tienda VE"
+    assert row["ml_shipping"] == "Envío gratis"
+    assert row["ml_official_store"] == "Tienda oficial"
     assert row["ml_rating_available"] is True
     assert row["identity_confirmed"] is False
     assert row["product_id"] == ""
+    paid = comparison.build_positional_comparison_rows(
+        ml_rows=[
+            _ml(
+                "ML paid",
+                shipping="Pago",
+                official_store="",
+                seller_name="Tienda VE",
+            )
+        ],
+        ml_status=UI_SUCCESS,
+    )[0]
+    assert paid["ml_has_listing"] is True
+    assert paid["ml_shipping"] == "Pago"
+    assert paid["ml_official_store"] == ""
+    unknown = comparison.build_positional_comparison_rows(
+        ml_rows=[_ml("ML unknown shipping", shipping="—", official_store="")],
+        ml_status=UI_SUCCESS,
+    )[0]
+    assert unknown["ml_has_listing"] is True
+    assert unknown["ml_shipping"] == ""
+    assert unknown["ml_official_store"] == ""
     missing = comparison.build_positional_comparison_rows(
         facebook_rows=[_facebook("No extras")],
         facebook_status=UI_SUCCESS,
@@ -584,6 +609,8 @@ def test_positional_cells_render_available_fields_and_blank_optional_ones() -> N
     assert sparse["alibaba_title"] == ""
     assert sparse["ml_title"] == ""
     assert sparse["ml_seller"] == ""
+    assert sparse["ml_shipping"] == ""
+    assert sparse["ml_official_store"] == ""
     assert sparse["alibaba_moq"] == ""
 
 

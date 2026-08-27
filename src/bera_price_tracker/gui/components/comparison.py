@@ -95,6 +95,7 @@ def marketplace_cell(
     rating_label: object = "Sin calificación",
     rating_caption: object = "",
     trust_line: object = "",
+    line_four: object = "",
 ) -> rx.Component:
     return rx.cond(
         has_listing,
@@ -108,6 +109,7 @@ def marketplace_cell(
             rx.cond(line_one != "", rx.text(line_one, size="1", color=styles.TEXT_MUTED)),
             rx.cond(line_two != "", rx.text(line_two, size="1", color=styles.TEXT_SECONDARY)),
             rx.cond(line_three != "", rx.text(line_three, size="1", color=styles.TEXT_SECONDARY)),
+            rx.cond(line_four != "", rx.text(line_four, size="1", color=styles.TEXT_SECONDARY)),
             rx.cond(
                 rating_caption != "",
                 rx.text(rating_caption, size="1", color=styles.TEXT_MUTED),
@@ -214,7 +216,8 @@ def comparison_row(row: rx.Var) -> rx.Component:
             price_color=styles.MERCADOLIBRE,
             line_one=row["ml_condition"],
             line_two=row["ml_seller"],
-            line_three="",
+            line_three=row["ml_shipping"],
+            line_four=row["ml_official_store"],
             relevance=row["ml_relevance"],
             match_label=row["ml_match_label"],
             url=row["ml_url"],
@@ -318,7 +321,8 @@ def positional_comparison_row(row: rx.Var) -> rx.Component:
             price_color=styles.MERCADOLIBRE,
             line_one=row["ml_condition"],
             line_two=row["ml_seller"],
-            line_three="",
+            line_three=row["ml_shipping"],
+            line_four=row["ml_official_store"],
             relevance=row["ml_relevance"],
             match_label=row["ml_match_label"],
             url=row["ml_url"],
