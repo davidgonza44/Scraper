@@ -405,6 +405,8 @@ class ComparisonRow(GuiModel):
     alibaba_rating_filled: int = 0
     alibaba_rating_label: str = "Sin calificación"
     alibaba_rating_caption: str = ""
+    alibaba_review_count: str = ""
+    alibaba_review_count_line: str = ""
     alibaba_trust_line: str = ""
     opportunity_available: bool = False
     opportunity_score: str = "0"
@@ -438,6 +440,8 @@ class ComparisonRow(GuiModel):
     ml_rating_filled: int = 0
     ml_rating_label: str = "Sin calificación"
     ml_rating_caption: str = ""
+    ml_review_count: str = ""
+    ml_review_count_line: str = ""
     ml_trust_line: str = ""
     analysis_available: bool = False
     analysis_heading: str = "Análisis no disponible"
@@ -2243,6 +2247,15 @@ class TrackerState(rx.State):
         else:
             self.alibaba_is_loading = False
             self.alibaba_ui_status = UI_INITIAL
+            self.generic_session_alibaba = GenericAlibabaSessionSnapshot(
+                generation=self.search_generation,
+                status=UI_INITIAL,
+                rows=[],
+                summary={},
+                stats_raw={},
+                error="",
+                requested_limit=self.search_limit,
+            )
         self.facebook_product_results = []
         self.facebook_product_statistics = []
         self.facebook_product_summary = {}
@@ -2258,6 +2271,15 @@ class TrackerState(rx.State):
         else:
             self.facebook_product_is_loading = False
             self.facebook_product_ui_status = UI_INITIAL
+            self.generic_session_facebook = GenericFacebookSessionSnapshot(
+                generation=self.search_generation,
+                status=UI_INITIAL,
+                rows=[],
+                summary={},
+                statistics=[],
+                error="",
+                requested_limit=self.search_limit,
+            )
         self.ml_results = []
         self.ml_summary = {}
         self.ml_error = ""
@@ -2274,6 +2296,15 @@ class TrackerState(rx.State):
             self.ml_is_loading = False
             self.ml_ui_status = UI_INITIAL
             self.ml_results_from_generic_session = False
+            self.generic_session_ml = GenericMercadoLibreSessionSnapshot(
+                generation=self.search_generation,
+                status=UI_INITIAL,
+                rows=[],
+                summary={},
+                diagnostic_summary={},
+                error="",
+                requested_limit=self.search_limit,
+            )
             self._invalidate_ml_comparison()
 
     @rx.event(background=True)
