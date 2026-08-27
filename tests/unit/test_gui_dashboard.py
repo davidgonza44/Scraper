@@ -6,15 +6,15 @@ import inspect
 from pathlib import Path
 
 from bera_price_tracker.gui import comparison, marketplace_summary, views
+from bera_price_tracker.gui.brands import PLATFORM_ALIBABA
 from bera_price_tracker.gui.images import image_alt_text, safe_public_image_url
 from bera_price_tracker.gui.navigation import NAV_ITEMS, NAV_LABELS
+from bera_price_tracker.gui.search_scope import MODE_SINGLE, plan_search
 from bera_price_tracker.gui.services import (
     alibaba_product_to_row,
     facebook_product_listing_to_row,
     mercadolibre_listing_to_row,
 )
-from bera_price_tracker.gui.brands import PLATFORM_ALIBABA
-from bera_price_tracker.gui.search_scope import MODE_SINGLE, plan_search
 from bera_price_tracker.gui.state import (
     UI_INITIAL,
     UI_SUCCESS,
