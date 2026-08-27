@@ -34,19 +34,19 @@ Search specifically for shared mutable state touched by both generic and special
 
 Compare every consumer of the changed state, not only the function that produced it.
 
-If a counterexample breaks the requirement:
-add a regression and fix it before declaring completion.
-
 ## Mutable intent / snapshot adversarial checks
 
 Whenever a value becomes generation-owned or snapshot-owned:
 
 1. Search the entire repository for every read of the corresponding live/mutable state.
+
 2. Classify every consumer as:
    - setup / next-search configuration
    - active generic-session consumer
    - specialized-view consumer
-3. Verify generic-session consumers never read the mutable setup value.
+
+3. Verify generic-session consumers never read the mutable setup value when
+   generation-owned state is required.
 
 For generic search, actively mutate after the generation starts:
 
@@ -72,4 +72,48 @@ For each mutation verify that:
 unless a new generic generation is explicitly started.
 
 Search all UI and backend consumers of every changed source of truth.
+
 Do not stop after verifying the producer.
+
+## Defect disposition loop
+
+When adversarial self-review discovers a new defect:
+
+1. Convert it into a fail-first regression.
+
+2. Determine whether the defect violates an invariant already owned by
+   the CURRENT implementation stage / PR.
+
+3. Prove current-stage ownership from the applicable sources of truth:
+   - active OpenSpec task/spec
+   - AGENTS.md
+   - existing repository contracts
+   - architecture boundaries
+
+4. If YES and the fix can remain entirely within the current stage:
+   - fix it automatically
+   - run the fail-first regression
+   - run nearby tests
+   - adversarially review the fix again
+   - search for sibling consumers of the same broken invariant
+
+5. If the fix would:
+   - implement a future OpenSpec stage
+   - change architecture outside current scope
+   - require a new product decision
+   - change provider contracts outside the current PR
+   - require changing the specification merely to make the implementation valid
+
+   then STOP and report it instead of implementing it.
+
+6. If ownership is ambiguous:
+   - do not guess
+   - do not widen scope
+   - report the defect, evidence, likely minimal fix, and scope question
+
+Never leave a confirmed current-stage invariant violation unfixed merely
+because it was discovered during adversarial review.
+
+Never change OpenSpec merely to redefine an implementation defect as valid.
+
+Every confirmed bug that is fixed must remain covered by a permanent regression test.
