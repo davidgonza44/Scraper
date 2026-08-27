@@ -1598,3 +1598,259 @@ def test_single_market_owned_empty_snapshots_for_each_selected_provider(
         _assert_generic_membership_excludes_specialized(
             state, selected=selected, monkeypatch=monkeypatch
         )
+
+
+def _canonical_alibaba_rows(count: int) -> list[AlibabaResultRow]:
+    return [
+        _alibaba(
+            f"Canonical Alibaba {index}",
+            product_id=f"ali-can-{index}",
+            price=f"${float(index):.2f}",
+        )
+        for index in range(1, count + 1)
+    ]
+
+
+def _canonical_facebook_rows(count: int) -> list[FacebookProductResultRow]:
+    return [
+        _facebook(
+            f"Canonical Facebook {index}",
+            external_id=f"fb-can-{index}",
+            usd_price=f"USD {float(index):.2f}",
+        )
+        for index in range(1, count + 1)
+    ]
+
+
+def _prepare_generic_alibaba_search(state: TrackerState, *, generation: int, limit: int) -> Any:
+    state.search_generation = generation
+    state.search_mode = MODE_SINGLE
+    state.search_platform = PLATFORM_ALIBABA
+    plan = plan_search(
+        mode=MODE_SINGLE,
+        platform=PLATFORM_ALIBABA,
+        query="wireless mouse",
+        limit=limit,
+    )
+    state.search_session_active = True
+    state.search_session_query = plan.query
+    state.search_limit = plan.limit
+    state._prepare_scoped_search(plan)
+    return plan
+
+
+def _assert_frozen_alibaba_display_limit(
+    state: TrackerState,
+    *,
+    initiating_limit: int,
+    titles: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = state.positional_comparison_rows
+    assert [row.alibaba_title for row in rows] == titles
+    assert len(rows) == initiating_limit
+    assert all(row.alibaba_has_listing for row in rows)
+    assert all(not row.facebook_has_listing for row in rows)
+    assert all(not row.ml_has_listing for row in rows)
+    assert state.search_total_results == str(initiating_limit)
+    assert state.current_export_listing_count() == initiating_limit
+    cards = {card.platform: card for card in state.generic_marketplace_summaries}
+    assert cards["Alibaba"].result_count == str(initiating_limit)
+    diagnostic = {line.label: line.value for line in cards["Alibaba"].diagnostic_lines}
+    assert diagnostic["Solicitados"] == str(initiating_limit)
+    captured: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> list[dict[str, str]]:
+        captured.update(kwargs)
+        return [{column: "" for column in search_export.CSV_COLUMNS}]
+
+    monkeypatch.setattr(search_export, "listing_rows_for_export", capture)
+    assert state.export_current_search() is not None
+    exported = cast(list[AlibabaResultRow], captured["alibaba_rows"])
+    assert [row.title for row in exported] == titles
+    assert captured["requested_limit"] == initiating_limit
+    alibaba_diag = cast(dict[str, object], captured["alibaba_diagnostic"])
+    assert alibaba_diag.get("requested") == str(initiating_limit)
+
+
+def test_mutating_ui_search_limit_does_not_shrink_frozen_generic_display_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: mutating search_limit after start must not reslice this generation."""
+
+    state = TrackerState()
+    plan = _prepare_generic_alibaba_search(state, generation=4, limit=5)
+    assert state.alibaba_limit == 5
+    assert state.alibaba_ui_status == UI_LOADING
+
+    state.search_limit = 1
+    titles = [f"Canonical Alibaba {index}" for index in range(1, 6)]
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        rows=_canonical_alibaba_rows(5),
+        summary={"resultados": "5", "minimo": "USD 1.00", "usable": "5"},
+        stats_raw={"minimum": "1.00", "median": "3.00", "average": "3.00", "maximum": "5.00"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+
+    _assert_frozen_alibaba_display_limit(
+        state, initiating_limit=5, titles=titles, monkeypatch=monkeypatch
+    )
+    assert state.generic_session_alibaba.requested_limit == 5
+    assert state.generic_session_facebook.requested_limit == 5
+    assert state.generic_session_ml.requested_limit == 5
+
+    state.search_limit = 3
+    _assert_frozen_alibaba_display_limit(
+        state, initiating_limit=5, titles=titles, monkeypatch=monkeypatch
+    )
+
+
+def test_mutating_ui_search_limit_does_not_expand_frozen_generic_display_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = TrackerState()
+    plan = _prepare_generic_alibaba_search(state, generation=4, limit=1)
+    state.search_limit = 5
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        rows=_canonical_alibaba_rows(5),
+        summary={"resultados": "5", "minimo": "USD 1.00", "usable": "5"},
+        stats_raw={"minimum": "1.00", "median": "1.00", "average": "1.00", "maximum": "5.00"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+
+    _assert_frozen_alibaba_display_limit(
+        state,
+        initiating_limit=1,
+        titles=["Canonical Alibaba 1"],
+        monkeypatch=monkeypatch,
+    )
+
+    next_plan = _prepare_generic_alibaba_search(state, generation=5, limit=5)
+    state.search_limit = 1
+    next_titles = [f"Canonical Alibaba {index}" for index in range(1, 6)]
+    state._finalize_alibaba_search(
+        request_query=next_plan.query,
+        request_limit=next_plan.limit,
+        rows=_canonical_alibaba_rows(5),
+        summary={"resultados": "5", "minimo": "USD 1.00", "usable": "5"},
+        stats_raw={"minimum": "1.00", "median": "3.00", "average": "3.00", "maximum": "5.00"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    _assert_frozen_alibaba_display_limit(
+        state, initiating_limit=5, titles=next_titles, monkeypatch=monkeypatch
+    )
+
+
+def test_mutating_ui_search_limit_after_first_provider_does_not_reslice_remaining_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = TrackerState()
+    state.search_generation = 4
+    state.search_mode = MODE_MULTI
+    plan = plan_search(mode=MODE_MULTI, query="wireless mouse", limit=5)
+    state.search_session_active = True
+    state.search_session_query = plan.query
+    state.search_limit = plan.limit
+    state._prepare_scoped_search(plan)
+    alibaba_titles = [f"Canonical Alibaba {index}" for index in range(1, 6)]
+    facebook_titles = [f"Canonical Facebook {index}" for index in range(1, 6)]
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        rows=_canonical_alibaba_rows(5),
+        summary={"resultados": "5", "minimo": "USD 1.00", "usable": "5"},
+        stats_raw={"minimum": "1.00", "median": "3.00", "average": "3.00", "maximum": "5.00"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state.search_limit = 1
+    state._finalize_facebook_product_search(
+        product_id="",
+        query=plan.query,
+        city=plan.city,
+        rows=_canonical_facebook_rows(5),
+        statistics=[_facebook_stats()],
+        summary={"usable": "5"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_mercadolibre_search(
+        search_product_id="",
+        query=plan.query,
+        rows=[],
+        summary={"usable": "0"},
+        ui_status=UI_EMPTY,
+    )
+
+    rows = state.positional_comparison_rows
+    assert [row.alibaba_title for row in rows] == alibaba_titles
+    assert [row.facebook_title for row in rows] == facebook_titles
+    assert all(not row.ml_has_listing for row in rows)
+    assert state.search_total_results == "10"
+    assert state.current_export_listing_count() == 10
+    cards = {card.platform: card for card in state.generic_marketplace_summaries}
+    assert cards["Alibaba"].result_count == "5"
+    assert cards["Facebook Marketplace"].result_count == "5"
+    assert cards["Mercado Libre"].result_count == "0"
+    alibaba_diag = {line.label: line.value for line in cards["Alibaba"].diagnostic_lines}
+    facebook_diag = {
+        line.label: line.value for line in cards["Facebook Marketplace"].diagnostic_lines
+    }
+    ml_diag = {line.label: line.value for line in cards["Mercado Libre"].diagnostic_lines}
+    assert alibaba_diag["Solicitados"] == "5"
+    assert facebook_diag["Solicitados"] == "5"
+    assert ml_diag["Solicitados"] == "5"
+    captured: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> list[dict[str, str]]:
+        captured.update(kwargs)
+        return [{column: "" for column in search_export.CSV_COLUMNS}]
+
+    monkeypatch.setattr(search_export, "listing_rows_for_export", capture)
+    assert state.export_current_search() is not None
+    assert [row.title for row in cast(list[AlibabaResultRow], captured["alibaba_rows"])] == (
+        alibaba_titles
+    )
+    assert [
+        row.title for row in cast(list[FacebookProductResultRow], captured["facebook_rows"])
+    ] == facebook_titles
+    assert captured["ml_rows"] == []
+    assert captured["requested_limit"] == 5
+
+
+def test_unselected_and_error_providers_keep_initiating_display_limit() -> None:
+    state = TrackerState()
+    plan = _prepare_generic_alibaba_search(state, generation=4, limit=5)
+    state.search_limit = 1
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        error_message="Alibaba timed out",
+        commit_generic_session=True,
+    )
+    assert state.generic_session_alibaba.requested_limit == 5
+    assert state.generic_session_facebook.requested_limit == 5
+    assert state.generic_session_ml.requested_limit == 5
+    assert state.generic_session_facebook.status == UI_INITIAL
+    assert state.generic_session_ml.status == UI_INITIAL
+    cards = {card.platform: card for card in state.generic_marketplace_summaries}
+    alibaba_diag = {line.label: line.value for line in cards["Alibaba"].diagnostic_lines}
+    facebook_diag = {
+        line.label: line.value for line in cards["Facebook Marketplace"].diagnostic_lines
+    }
+    ml_diag = {line.label: line.value for line in cards["Mercado Libre"].diagnostic_lines}
+    assert alibaba_diag["Solicitados"] == "5"
+    assert facebook_diag["Solicitados"] == "5"
+    assert ml_diag["Solicitados"] == "5"
+    assert cards["Alibaba"].result_count == "0"
+    assert cards["Facebook Marketplace"].result_count == "0"
+    assert cards["Mercado Libre"].result_count == "0"
+    assert state.search_total_results == "0"
+    assert state.current_export_listing_count() == 0

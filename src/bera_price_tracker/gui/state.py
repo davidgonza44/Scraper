@@ -590,6 +590,7 @@ class TrackerState(rx.State):
     search_elapsed_ms: int = 0
     search_completed_at: str = ""
     search_session_query: str = ""
+    search_session_limit: int = 0
     diagnostic_open_platforms: list[str] = []
     alibaba_negotiation_product_key: str = ""
     alibaba_negotiation_quantity: str = "40"
@@ -2231,6 +2232,7 @@ class TrackerState(rx.State):
     def _prepare_scoped_search(self, plan: search_scope.SearchPlan) -> None:
         self.search_query = plan.query
         self.search_limit = plan.limit
+        self.search_session_limit = plan.limit
         self._detach_alibaba_comparable_context()
         selected = set(plan.providers)
         self.alibaba_results = []
@@ -2254,7 +2256,7 @@ class TrackerState(rx.State):
                 summary={},
                 stats_raw={},
                 error="",
-                requested_limit=self.search_limit,
+                requested_limit=self.search_session_limit,
             )
         self.facebook_product_results = []
         self.facebook_product_statistics = []
@@ -2278,7 +2280,7 @@ class TrackerState(rx.State):
                 summary={},
                 statistics=[],
                 error="",
-                requested_limit=self.search_limit,
+                requested_limit=self.search_session_limit,
             )
         self.ml_results = []
         self.ml_summary = {}
@@ -2303,7 +2305,7 @@ class TrackerState(rx.State):
                 summary={},
                 diagnostic_summary={},
                 error="",
-                requested_limit=self.search_limit,
+                requested_limit=self.search_session_limit,
             )
             self._invalidate_ml_comparison()
 
@@ -2644,6 +2646,7 @@ class TrackerState(rx.State):
         self.search_completed_at = ""
         self.search_started_monotonic = ""
         self.search_session_query = ""
+        self.search_session_limit = 0
         self.alibaba_results = []
         self.alibaba_summary = {}
         self.alibaba_stats_raw = {}
@@ -3348,7 +3351,7 @@ class TrackerState(rx.State):
             summary=dict(self.alibaba_summary),
             stats_raw=dict(self.alibaba_stats_raw),
             error=self.alibaba_error,
-            requested_limit=self.search_limit,
+            requested_limit=self._generic_display_limit(),
         )
 
     def _commit_generic_session_facebook(self) -> None:
@@ -3359,7 +3362,7 @@ class TrackerState(rx.State):
             summary=dict(self.facebook_product_summary),
             statistics=list(self.facebook_product_statistics),
             error=self.facebook_product_error,
-            requested_limit=self.search_limit,
+            requested_limit=self._generic_display_limit(),
         )
 
     def _commit_generic_session_ml(self) -> None:
@@ -3374,7 +3377,7 @@ class TrackerState(rx.State):
             summary=dict(diagnostic),
             diagnostic_summary=dict(diagnostic),
             error=self.ml_error,
-            requested_limit=self.search_limit,
+            requested_limit=self._generic_display_limit(),
         )
 
     def _stored_alibaba_snapshot(self) -> GenericSessionProviderSnapshot[AlibabaResultRow]:
@@ -3400,7 +3403,7 @@ class TrackerState(rx.State):
             error=self.alibaba_error,
             metadata={
                 "stats_raw": dict(self.alibaba_stats_raw),
-                "requested_limit": self.search_limit,
+                "requested_limit": self._generic_display_limit(),
             },
         )
 
@@ -3436,7 +3439,7 @@ class TrackerState(rx.State):
             error=self.facebook_product_error,
             metadata={
                 "statistics": tuple(self.facebook_product_statistics),
-                "requested_limit": self.search_limit,
+                "requested_limit": self._generic_display_limit(),
             },
         )
 
@@ -3474,7 +3477,7 @@ class TrackerState(rx.State):
             error=self.ml_error,
             metadata={
                 "diagnostic_summary": dict(diagnostic),
-                "requested_limit": self.search_limit,
+                "requested_limit": self._generic_display_limit(),
             },
         )
 
@@ -3485,10 +3488,17 @@ class TrackerState(rx.State):
             live=self._live_ml_snapshot(),
         )
 
+    def _generic_display_limit(self) -> int:
+        """Display limit owned by the active generic generation, not the live UI control."""
+
+        if self.search_session_limit >= 1:
+            return self.search_session_limit
+        return self.search_limit
+
     def _canonical_search_rows(self, rows: list[Any], status: str) -> list[Any]:
         """Frozen generic-search prefix. Ignores specialized sort/filter projections."""
 
-        return list(comparison.canonical_provider_rows(rows, status, self.search_limit))
+        return list(comparison.canonical_provider_rows(rows, status, self._generic_display_limit()))
 
     def _generic_ml_statistics_from_rows(
         self,
@@ -3590,9 +3600,10 @@ class TrackerState(rx.State):
         canonical_facebook = self._canonical_search_rows(list(facebook.rows), facebook.status)
         canonical_ml = self._canonical_search_rows(list(ml.rows), ml.status)
         ml_summary = self._visible_generic_ml_summary(ml)
-        alibaba_limit = int(alibaba.metadata.get("requested_limit") or self.search_limit)
-        facebook_limit = int(facebook.metadata.get("requested_limit") or self.search_limit)
-        ml_limit = int(ml.metadata.get("requested_limit") or self.search_limit)
+        display_limit = self._generic_display_limit()
+        alibaba_limit = int(alibaba.metadata.get("requested_limit") or display_limit)
+        facebook_limit = int(facebook.metadata.get("requested_limit") or display_limit)
+        ml_limit = int(ml.metadata.get("requested_limit") or display_limit)
         raw = marketplace_summary.build_marketplace_summaries(
             alibaba_ui_status=alibaba.status,
             alibaba_summary=dict(alibaba.summary),
@@ -3675,7 +3686,7 @@ class TrackerState(rx.State):
             alibaba_status=alibaba.status,
             facebook_status=facebook.status,
             ml_status=ml.status,
-            display_limit=self.search_limit,
+            display_limit=self._generic_display_limit(),
         )
         return [ComparisonRow.model_validate(item) for item in raw]
 
@@ -3723,9 +3734,10 @@ class TrackerState(rx.State):
         canonical_facebook = self._canonical_search_rows(list(facebook.rows), facebook.status)
         canonical_ml = self._canonical_search_rows(list(ml.rows), ml.status)
         ml_summary = self._visible_generic_ml_summary(ml)
-        alibaba_limit = int(alibaba.metadata.get("requested_limit") or self.search_limit)
-        facebook_limit = int(facebook.metadata.get("requested_limit") or self.search_limit)
-        ml_limit = int(ml.metadata.get("requested_limit") or self.search_limit)
+        display_limit = self._generic_display_limit()
+        alibaba_limit = int(alibaba.metadata.get("requested_limit") or display_limit)
+        facebook_limit = int(facebook.metadata.get("requested_limit") or display_limit)
+        ml_limit = int(ml.metadata.get("requested_limit") or display_limit)
         if not search_diagnostics.export_enabled(
             phase=self.search_session_phase,
             listing_count=self.current_export_listing_count(),
@@ -3756,7 +3768,7 @@ class TrackerState(rx.State):
             search_query=self.search_session_query or self.search_query,
             searched_at=self.search_completed_at,
             search_mode=self.search_mode_label,
-            requested_limit=self.search_limit,
+            requested_limit=self._generic_display_limit(),
             alibaba_status=alibaba.status,
             alibaba_rows=canonical_alibaba,
             alibaba_diagnostic=alibaba_diag,
