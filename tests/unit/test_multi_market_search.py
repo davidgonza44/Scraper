@@ -1791,3 +1791,92 @@ def test_generic_ml_progress_counts_canonical_rows_not_comparables() -> None:
     details = {row.platform: row.detail for row in state.search_progress_rows}
     assert details[PLATFORM_ML] == "3 resultados"
 
+
+def test_mutating_live_mode_after_provider_error_keeps_pending_generic_providers() -> None:
+    """Adversarial: one ERROR must not complete/error the MULTI generation early."""
+
+    state = TrackerState()
+    plan = _prepare_generic_session(state, mode=MODE_MULTI)
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        error_message="Alibaba failed",
+        commit_generic_session=True,
+    )
+    assert state.search_session_phase == "RUNNING"
+    state.search_mode = MODE_SINGLE
+    state.search_platform = PLATFORM_ALIBABA
+    assert state.search_session_phase == "RUNNING"
+    assert state.export_enabled is False
+    assert {row.platform for row in state.search_progress_rows} == {
+        PLATFORM_ALIBABA,
+        PLATFORM_FACEBOOK,
+        PLATFORM_ML,
+    }
+
+
+def test_new_generic_generation_replaces_frozen_mode_and_providers() -> None:
+    """A later generation may freeze a different mode than the previous one."""
+
+    state = TrackerState()
+    plan = _prepare_generic_session(state, mode=MODE_MULTI, generation=4)
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        rows=[AlibabaResultRow(title="Generic Alibaba", product_id="ali-generic")],
+        summary={"resultados": "1"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_facebook_product_search(
+        product_id="",
+        query=plan.query,
+        city=plan.city,
+        rows=[FacebookProductResultRow(title="Generic Facebook", external_id="fb-generic")],
+        statistics=[FacebookCurrencyStatsRow()],
+        summary={"usable": "1"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_mercadolibre_search(
+        search_product_id="",
+        query=plan.query,
+        rows=[MercadoLibreResultRow(title="Generic ML", external_id="MLV-generic")],
+        summary={"usable": "1"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state.search_mode = MODE_SINGLE
+    state.search_platform = PLATFORM_ALIBABA
+    assert state.search_mode_label == MODE_LABELS[MODE_MULTI]
+    _prepare_generic_session(state, mode=MODE_SINGLE, platform=PLATFORM_ALIBABA, generation=5)
+    assert state.search_mode_label == MODE_LABELS[MODE_SINGLE]
+    assert {row.platform for row in state.search_progress_rows} == {PLATFORM_ALIBABA}
+    assert state.search_session_phase == "RUNNING"
+
+
+def test_mutating_live_query_limit_and_platform_does_not_rewrite_active_generation() -> None:
+    state = TrackerState()
+    plan = _prepare_generic_session(state, mode=MODE_MULTI, query="wireless mouse", limit=3)
+    state.search_query = "headphones"
+    state.search_limit = 1
+    state.search_platform = PLATFORM_ML
+    state.alibaba_query = "specialized alibaba"
+    assert state.search_session_phase == "RUNNING"
+    assert state.search_mode_label == MODE_LABELS[MODE_MULTI]
+    assert {row.platform for row in state.search_progress_rows} == {
+        PLATFORM_ALIBABA,
+        PLATFORM_FACEBOOK,
+        PLATFORM_ML,
+    }
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        rows=[AlibabaResultRow(title="Generic Alibaba kept", product_id="ali-kept")],
+        summary={"resultados": "1"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    assert [row.title for row in state.generic_session_alibaba.rows] == ["Generic Alibaba kept"]
+    assert state.search_session_phase == "RUNNING"
+    assert all(row.title != "Generic Alibaba kept" for row in state.alibaba_results)

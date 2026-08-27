@@ -1580,7 +1580,9 @@ def test_single_market_generic_search_freezes_unselected_provider_snapshots(
     assert state.generic_session_alibaba.status == UI_INITIAL
     assert state.generic_session_alibaba.rows == []
     assert state.generic_session_ml.generation == 5
-    assert state.generic_session_facebook.generation == GENERIC_SESSION_UNSET_GENERATION
+    assert state.generic_session_facebook.generation == 5
+    assert state.generic_session_facebook.status == UI_LOADING
+    assert state.generic_session_facebook.rows == []
     assert state.facebook_product_ui_status == UI_LOADING
     assert "Generic Alibaba only" not in " ".join(
         row.alibaba_title for row in state.positional_comparison_rows
