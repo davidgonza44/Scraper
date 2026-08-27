@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -411,13 +412,13 @@ def memo23_actor_item(**overrides: object) -> dict[str, object]:
 
 
 def _search_with_items(
-    items: list[object],
+    items: Sequence[object],
     *,
     query: str = "Iphone 15",
     limit: int = 5,
     run: object | None = None,
 ) -> tuple[ApifyAlibabaClient, FakeApify, list[AlibabaProduct]]:
-    fake = FakeApify(items, run=run)
+    fake = FakeApify(list(items), run=run)
     client = ApifyAlibabaClient(
         _api_token="token",
         actor_id=DEFAULT_APIFY_ALIBABA_ACTOR,
