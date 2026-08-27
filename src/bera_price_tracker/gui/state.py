@@ -3129,20 +3129,39 @@ class TrackerState(rx.State):
         except ValueError:
             return search_scope.ALL_PLATFORMS
 
+    def _generic_session_is_loading(self, stored_generation: int, live_loading: bool) -> bool:
+        """Owned generations are finished. Live loading belongs to a later specialized request."""
+
+        if stored_generation == self.search_generation:
+            return False
+        return bool(live_loading)
+
     @rx.var
     def search_session_phase(self) -> str:
+        alibaba = self._owned_generic_alibaba()
+        facebook = self._owned_generic_facebook()
+        ml = self._owned_generic_ml()
         return search_session.session_phase(
             session_active=self.search_session_active,
             providers=self._search_providers(),
             loading={
-                PLATFORM_ALIBABA: self.alibaba_is_loading,
-                PLATFORM_FACEBOOK: self.facebook_product_is_loading,
-                PLATFORM_ML: self.ml_is_loading,
+                PLATFORM_ALIBABA: self._generic_session_is_loading(
+                    self.generic_session_alibaba.generation,
+                    self.alibaba_is_loading,
+                ),
+                PLATFORM_FACEBOOK: self._generic_session_is_loading(
+                    self.generic_session_facebook.generation,
+                    self.facebook_product_is_loading,
+                ),
+                PLATFORM_ML: self._generic_session_is_loading(
+                    self.generic_session_ml.generation,
+                    self.ml_is_loading,
+                ),
             },
             statuses={
-                PLATFORM_ALIBABA: self.alibaba_ui_status,
-                PLATFORM_FACEBOOK: self.facebook_product_ui_status,
-                PLATFORM_ML: self.ml_ui_status,
+                PLATFORM_ALIBABA: alibaba.status,
+                PLATFORM_FACEBOOK: facebook.status,
+                PLATFORM_ML: ml.status,
             },
         )
 
@@ -3181,7 +3200,7 @@ class TrackerState(rx.State):
         alibaba_stats = dict(alibaba.metadata.get("stats_raw") or {})
         facebook_stats_rows = list(facebook.metadata.get("statistics") or ())
         facebook_stats = facebook_stats_rows[0] if facebook_stats_rows else None
-        ml_summary = dict(ml.metadata.get("diagnostic_summary") or ml.summary)
+        ml_summary = self._visible_generic_ml_summary(ml)
         tracks = [
             search_session.boxplot_track(
                 platform=PLATFORM_ALIBABA,
@@ -3311,15 +3330,16 @@ class TrackerState(rx.State):
         )
 
     def _commit_generic_session_ml(self) -> None:
+        diagnostic = self._generic_ml_statistics_from_rows(
+            self._canonical_search_rows(list(self.ml_results), self.ml_ui_status),
+            pipeline_summary=dict(self.ml_summary),
+        )
         self.generic_session_ml = GenericMercadoLibreSessionSnapshot(
             generation=self.search_generation,
             status=self.ml_ui_status,
             rows=list(self.ml_results),
-            summary=dict(self.ml_summary),
-            diagnostic_summary=self._ml_diagnostic_summary_from(
-                summary=self.ml_summary,
-                live_summary=dict(self.ml_live_summary),
-            ),
+            summary=dict(diagnostic),
+            diagnostic_summary=dict(diagnostic),
             error=self.ml_error,
             requested_limit=self.search_limit,
         )
@@ -3409,18 +3429,18 @@ class TrackerState(rx.State):
         )
 
     def _live_ml_snapshot(self) -> GenericSessionProviderSnapshot[MercadoLibreResultRow]:
-        diagnostic = self._ml_diagnostic_summary_from(
-            summary=self.ml_summary,
-            live_summary=dict(self.ml_live_summary),
+        diagnostic = self._generic_ml_statistics_from_rows(
+            self._canonical_search_rows(list(self.ml_results), self.ml_ui_status),
+            pipeline_summary=dict(self.ml_summary),
         )
         return GenericSessionProviderSnapshot(
             generation=GENERIC_SESSION_UNSET_GENERATION,
             status=self.ml_ui_status,
             rows=tuple(self.ml_results),
-            summary=dict(self.ml_summary),
+            summary=dict(diagnostic),
             error=self.ml_error,
             metadata={
-                "diagnostic_summary": diagnostic,
+                "diagnostic_summary": dict(diagnostic),
                 "requested_limit": self.search_limit,
             },
         )
@@ -3436,6 +3456,34 @@ class TrackerState(rx.State):
         """Frozen generic-search prefix. Ignores specialized sort/filter projections."""
 
         return list(comparison.canonical_provider_rows(rows, status, self.search_limit))
+
+    def _generic_ml_statistics_from_rows(
+        self,
+        rows: list[Any],
+        *,
+        pipeline_summary: Mapping[str, str],
+    ) -> dict[str, str]:
+        """Visible generic ML stats from canonical rows. Never apply specialized filters."""
+
+        computed = services.mercadolibre_summary_from_rows(
+            [_ml_row_mapping(item) for item in rows if isinstance(item, MercadoLibreResultRow)],
+            min_relevance=0,
+            total_results=len(rows),
+        )
+        merged = dict(computed)
+        for key in ("requested", "fetched", "usable", "rejected"):
+            value = str(pipeline_summary.get(key, "") or "").strip()
+            if value:
+                merged[key] = value
+        return merged
+
+    def _visible_generic_ml_summary(
+        self,
+        snapshot: GenericSessionProviderSnapshot[MercadoLibreResultRow],
+    ) -> dict[str, str]:
+        canonical = self._canonical_search_rows(list(snapshot.rows), snapshot.status)
+        pipeline = dict(snapshot.metadata.get("diagnostic_summary") or snapshot.summary)
+        return self._generic_ml_statistics_from_rows(canonical, pipeline_summary=pipeline)
 
     def _ml_diagnostic_summary_from(
         self,
@@ -3508,7 +3556,7 @@ class TrackerState(rx.State):
         canonical_alibaba = self._canonical_search_rows(list(alibaba.rows), alibaba.status)
         canonical_facebook = self._canonical_search_rows(list(facebook.rows), facebook.status)
         canonical_ml = self._canonical_search_rows(list(ml.rows), ml.status)
-        ml_summary = dict(ml.metadata.get("diagnostic_summary") or ml.summary)
+        ml_summary = self._visible_generic_ml_summary(ml)
         alibaba_limit = int(alibaba.metadata.get("requested_limit") or self.search_limit)
         facebook_limit = int(facebook.metadata.get("requested_limit") or self.search_limit)
         ml_limit = int(ml.metadata.get("requested_limit") or self.search_limit)
@@ -3641,7 +3689,7 @@ class TrackerState(rx.State):
         canonical_alibaba = self._canonical_search_rows(list(alibaba.rows), alibaba.status)
         canonical_facebook = self._canonical_search_rows(list(facebook.rows), facebook.status)
         canonical_ml = self._canonical_search_rows(list(ml.rows), ml.status)
-        ml_summary = dict(ml.metadata.get("diagnostic_summary") or ml.summary)
+        ml_summary = self._visible_generic_ml_summary(ml)
         alibaba_limit = int(alibaba.metadata.get("requested_limit") or self.search_limit)
         facebook_limit = int(facebook.metadata.get("requested_limit") or self.search_limit)
         ml_limit = int(ml.metadata.get("requested_limit") or self.search_limit)

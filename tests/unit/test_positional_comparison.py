@@ -37,6 +37,7 @@ from bera_price_tracker.gui import analysis, comparison, marketplace_summary, se
 from bera_price_tracker.gui.search_scope import MODE_MULTI, plan_search
 from bera_price_tracker.gui.state import (
     UI_ERROR,
+    UI_LOADING,
     UI_SUCCESS,
     AlibabaResultRow,
     FacebookCurrencyStatsRow,
@@ -991,3 +992,152 @@ def test_new_generic_generation_replaces_previous_snapshot_atomically() -> None:
     )
     assert "9.00" not in ml_card.average
     assert ml_card.result_count == "1"
+
+
+def test_generic_ml_statistics_use_canonical_rows_not_relevance_filter() -> None:
+    """P1: generic Búsquedas prices come from all canonical rows, not ml_min_relevance."""
+
+    state = TrackerState()
+    state.search_generation = 4
+    plan = plan_search(mode=MODE_MULTI, query="wireless mouse", limit=3)
+    state.search_session_active = True
+    state.search_session_query = plan.query
+    state.search_limit = plan.limit
+    state.ml_min_relevance = 60
+    state._prepare_scoped_search(plan)
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        rows=[_alibaba("Generic Alibaba", product_id="ali-generic", price="USD 4.00")],
+        summary={"resultados": "1", "usable": "1"},
+        stats_raw={"minimum": "4.00", "median": "4.00", "average": "4.00", "maximum": "4.00"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_facebook_product_search(
+        product_id="",
+        query=plan.query,
+        city=plan.city,
+        rows=[_facebook("Generic Facebook", external_id="fb-generic")],
+        statistics=[_facebook_stats()],
+        summary={"usable": "1"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_mercadolibre_search(
+        search_product_id="",
+        query=plan.query,
+        rows=[
+            _ml(
+                "ML cheap",
+                external_id="MLV-cheap",
+                price="USD 10.00",
+                price_raw="10.00",
+                currency="USD",
+                relevance_value=10,
+            ),
+            _ml(
+                "ML mid",
+                external_id="MLV-mid",
+                price="USD 20.00",
+                price_raw="20.00",
+                currency="USD",
+                relevance_value=20,
+            ),
+            _ml(
+                "ML high",
+                external_id="MLV-high",
+                price="USD 100.00",
+                price_raw="100.00",
+                currency="USD",
+                relevance_value=90,
+            ),
+        ],
+        summary={
+            "comparable_count": "1",
+            "comparables": "1 de 3",
+            "usable": "3",
+            "requested": "3",
+            "fetched": "3",
+            "minimo": "100.00 USD",
+            "mediana": "100.00 USD",
+            "precio_tipico": "100.00 USD",
+            "promedio": "100.00 USD",
+            "maximo": "100.00 USD",
+            "currency": "USD",
+        },
+        ui_status=UI_SUCCESS,
+    )
+
+    rows = state.positional_comparison_rows
+    assert [row.ml_title for row in rows] == ["ML cheap", "ML mid", "ML high"]
+    generic = next(
+        card for card in state.generic_marketplace_summaries if card.platform == "Mercado Libre"
+    )
+    assert generic.result_count == "3"
+    assert "10.00" in generic.minimum
+    assert "100.00" not in generic.minimum
+    assert "20.00" in generic.median
+    assert "100.00" in generic.maximum
+    assert "100.00" not in generic.average
+    ml_track = next(
+        track for track in state.price_distribution_tracks if track["platform"] == "mercadolibre"
+    )
+    assert "10.00" in ml_track["minimum"]
+    assert "100.00" not in ml_track["minimum"]
+    assert "20.00" in ml_track["median"]
+    assert "100.00" in ml_track["maximum"]
+
+    assert [row.title for row in state.ml_visible_rows] == ["ML high"]
+    specialized = next(
+        card for card in state.marketplace_summaries if card.platform == "Mercado Libre"
+    )
+    assert specialized.result_count == "1"
+    assert "100.00" in specialized.minimum
+    assert specialized.minimum != generic.minimum
+    assert specialized.average != generic.average
+
+
+def test_generic_search_phase_stays_session_owned_during_specialized_loading() -> None:
+    """P1: Búsquedas phase/visibility stay on the owned generic generation."""
+
+    state = TrackerState()
+    _complete_generic_three_platform_search(state)
+    assert state.search_session_phase == "COMPLETE"
+    assert state.search_shows_results is True
+    assert state.search_shows_setup is False
+
+    state.facebook_product_is_loading = True
+    state.facebook_product_ui_status = UI_LOADING
+    state.ml_is_loading = True
+    state.ml_ui_status = UI_LOADING
+    state.show_searches()
+    assert state.search_session_phase == "COMPLETE"
+    assert state.search_shows_results is True
+    assert state.search_shows_setup is False
+    assert [row.ml_title for row in state.positional_comparison_rows] == ["Generic ML listing"]
+    assert [row.alibaba_title for row in state.positional_comparison_rows] == ["Generic Alibaba"]
+
+    state.facebook_product_is_loading = False
+    state.facebook_product_ui_status = UI_ERROR
+    state.facebook_product_error = "Specialized Facebook failed"
+    state.facebook_product_results = []
+    state.ml_is_loading = False
+    state.ml_ui_status = UI_ERROR
+    state.ml_error = "Specialized ML failed"
+    state.ml_results = []
+    assert state.search_session_phase == "COMPLETE"
+    assert state.search_shows_results is True
+    generic_cards = {card.platform: card for card in state.generic_marketplace_summaries}
+    assert generic_cards["Facebook Marketplace"].status != "error"
+    assert generic_cards["Mercado Libre"].status != "error"
+    assert "Specialized Facebook failed" not in generic_cards["Facebook Marketplace"].note
+    assert "Specialized ML failed" not in generic_cards["Mercado Libre"].note
+
+    state.search_generation = 5
+    plan = plan_search(mode=MODE_MULTI, query="keyboard", limit=3)
+    state.search_session_query = plan.query
+    state._prepare_scoped_search(plan)
+    assert state.search_session_phase == "RUNNING"
+    assert state.search_shows_setup is True
+    assert state.search_shows_results is False

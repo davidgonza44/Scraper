@@ -100,6 +100,10 @@ def marketplace_cell(
         has_listing,
         rx.vstack(
             product_thumbnail(image_url, alt=title, size="80px"),
+            rx.cond(
+                title != "",
+                rx.text(title, size="2", weight="medium", color=styles.TEXT_PRIMARY),
+            ),
             price_metric(price, color=price_color),
             rx.cond(line_one != "", rx.text(line_one, size="1", color=styles.TEXT_MUTED)),
             rx.cond(line_two != "", rx.text(line_two, size="1", color=styles.TEXT_SECONDARY)),

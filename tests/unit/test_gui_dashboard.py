@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from bera_price_tracker.gui import comparison, marketplace_summary, views
@@ -413,6 +414,82 @@ def test_views_declare_three_marketplace_columns() -> None:
         encoding="utf-8"
     )
     assert "dashboard()" in views.__dict__ or hasattr(views, "dashboard")
+
+
+def _component_repr(node: object, *, depth: int = 0) -> str:
+    if node is None or depth > 16:
+        return ""
+    chunks = [repr(node)]
+    children = getattr(node, "children", None)
+    if isinstance(children, list | tuple):
+        for child in children:
+            chunks.append(_component_repr(child, depth=depth + 1))
+    contents = getattr(node, "contents", None)
+    if isinstance(contents, list | tuple):
+        for child in contents:
+            chunks.append(_component_repr(child, depth=depth + 1))
+    render = getattr(node, "render", None)
+    if callable(render):
+        try:
+            rendered = render()
+        except Exception:  # noqa: BLE001 - dump helper must not fail the test setup
+            rendered = None
+        if rendered is not None and rendered is not node:
+            chunks.append(repr(rendered))
+            if isinstance(rendered, dict):
+                chunks.append(str(rendered))
+            else:
+                chunks.append(_component_repr(rendered, depth=depth + 1))
+    return "\n".join(chunks)
+
+
+def test_marketplace_cell_renders_provider_title_visibly_not_only_as_alt() -> None:
+    from bera_price_tracker.gui.components import comparison as comparison_ui
+
+    title = "Alibaba listing title visible-xyz"
+    cell = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="https://s.alicdn.com/a.jpg",
+        title=title,
+        price="$4.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="",
+        relevance="",
+        match_label="",
+        url="https://www.alibaba.com/p/1",
+        empty_label="—",
+    )
+    source = inspect.getsource(comparison_ui.marketplace_cell)
+    assert "rx.text(title," in source
+    thumbnail_index = source.index("product_thumbnail")
+    visible_title_index = source.index("rx.text(title,")
+    alt_index = source.index("alt=title")
+    assert visible_title_index > thumbnail_index
+    assert alt_index != visible_title_index
+
+    blob = _component_repr(cell)
+    assert title in blob
+    assert blob.lower().count(title.lower()) >= 2
+
+    blank = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="",
+        price="$4.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+    )
+    blank_blob = _component_repr(blank)
+    assert "Sin título" not in blank_blob
+    assert "Untitled" not in blank_blob
 
 
 def test_gui_modules_do_not_import_apify() -> None:
