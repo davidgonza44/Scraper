@@ -1,3 +1,41 @@
 ---
-alwaysApply: true
+description: "Require fail-first regression and acceptance tests before production fixes"
+globs: "src/**/*.py,tests/**/*.py"
+alwaysApply: false
 ---
+
+# Fail-First Testing
+
+For bug fixes and newly required behavior:
+
+- Write the behavioral regression before the production fix whenever practical.
+- Run it against the unfixed behavior.
+- Confirm it FAILS for the expected reason.
+- A test that already passes does not prove the bug is covered.
+
+Once the regression is accepted:
+
+- Do not delete it.
+- Do not weaken assertions.
+- Do not change expected values to match the implementation.
+- Do not skip, xfail, or bypass it.
+- Do not mock away the behavior being tested.
+
+If a regression test appears incorrect, stop and explain the contradiction instead of silently changing the test.
+
+Prefer observable behavior over private implementation details.
+
+Bad:
+    assert state._internal_generation_cache == ...
+
+Better:
+    assert state.search_session_phase == "COMPLETE"
+    assert visible_rows == expected_rows
+
+For stateful behavior, test sequences, not only isolated states.
+
+Example:
+generic search
+→ specialized search
+→ return to generic search
+→ verify generic snapshot is unchanged

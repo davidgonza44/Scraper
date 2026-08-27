@@ -1,3 +1,53 @@
 ---
+description: "Mandatory engineering feedback loop for every repository change"
 alwaysApply: true
 ---
+
+# Mandatory Agent Feedback Loop
+
+Never start by editing production code.
+
+For every implementation, bugfix, or review finding:
+
+1. Read the applicable sources of truth before coding:
+   - active OpenSpec change
+   - AGENTS.md
+   - context.md when relevant
+   - existing repository contracts
+   - architecture documentation
+   - relevant tests
+
+2. State internally:
+   - required behavior
+   - invariants
+   - scope
+   - explicitly out-of-scope behavior
+   - existing behavior that must remain unchanged
+
+3. Search the repository for the existing implementation before creating a new abstraction.
+
+4. Prefer extending the existing source of truth over creating a parallel one.
+
+5. For missing behavior or bugs:
+   - create or identify a regression test first
+   - prove the test fails for the expected reason before changing production code
+   - only then implement the minimum production change
+
+6. After implementation:
+   - run the targeted regression
+   - run nearby tests
+   - run the repository verification suite
+
+7. Re-read the diff as an adversarial reviewer.
+   Ask:
+   - Can another state/session overwrite this?
+   - Is this using live data where snapshot-owned data is required?
+   - Can filtered/projection data leak into canonical data?
+   - Can missing optional metadata break the path?
+   - Can stale async work mutate a newer generation?
+   - Did this introduce another source of truth?
+   - Did this accidentally implement future staged work?
+
+8. Every discovered bug must become a permanent regression test.
+
+Never declare the task complete merely because existing tests pass.
