@@ -13,6 +13,8 @@ from bera_price_tracker.gui.services import (
     facebook_product_listing_to_row,
     mercadolibre_listing_to_row,
 )
+from bera_price_tracker.gui.brands import PLATFORM_ALIBABA
+from bera_price_tracker.gui.search_scope import MODE_SINGLE, plan_search
 from bera_price_tracker.gui.state import (
     UI_INITIAL,
     UI_SUCCESS,
@@ -801,3 +803,77 @@ def test_component_builders_execute_offline() -> None:
     assert search_setup_view() is not None
     assert search_results_view() is not None
     assert tracking_ui.history_accordion is not None
+
+
+def _assert_result_summaries_bind_frozen_display_limit() -> None:
+    from bera_price_tracker.gui.components import search_results
+    from bera_price_tracker.gui.components import search_scope as search_scope_ui
+
+    toolbar = inspect.getsource(search_results.results_toolbar)
+    rail = inspect.getsource(search_results.search_summary_rail)
+    setup = inspect.getsource(search_scope_ui)
+    assert "TrackerState.search_limit" not in toolbar
+    assert "TrackerState.search_limit" not in rail
+    assert "TrackerState.generic_display_limit" in toolbar
+    assert "TrackerState.generic_display_limit" in rail
+    assert toolbar.count("TrackerState.generic_display_limit") >= 1
+    assert rail.count("TrackerState.generic_display_limit") >= 1
+    assert "TrackerState.search_limit.to_string()" in setup
+    toolbar_blob = _component_repr(search_results.results_toolbar())
+    rail_blob = _component_repr(search_results.search_summary_rail())
+    assert "generic_display_limit" in toolbar_blob
+    assert "generic_display_limit" in rail_blob
+    assert "search_limit" not in toolbar_blob
+    assert "search_limit" not in rail_blob
+
+
+def test_generic_result_summary_labels_use_frozen_display_limit() -> None:
+    """P1 follow-up: result toolbar/rail must not follow the live search_limit control."""
+
+    _assert_result_summaries_bind_frozen_display_limit()
+
+    state = TrackerState()
+    state.search_generation = 4
+    state.search_mode = MODE_SINGLE
+    state.search_platform = PLATFORM_ALIBABA
+    plan = plan_search(
+        mode=MODE_SINGLE,
+        platform=PLATFORM_ALIBABA,
+        query="wireless mouse",
+        limit=5,
+    )
+    state.search_session_active = True
+    state.search_session_query = plan.query
+    state.search_limit = plan.limit
+    state._prepare_scoped_search(plan)
+    state.search_limit = 1
+    assert state.search_limit == 1
+    assert state.generic_display_limit == 5
+
+    state.search_generation = 5
+    next_plan = plan_search(
+        mode=MODE_SINGLE,
+        platform=PLATFORM_ALIBABA,
+        query="keyboard",
+        limit=1,
+    )
+    state.search_session_query = next_plan.query
+    state.search_limit = next_plan.limit
+    state._prepare_scoped_search(next_plan)
+    state.search_limit = 5
+    assert state.search_limit == 5
+    assert state.generic_display_limit == 1
+
+    state.search_generation = 6
+    later_plan = plan_search(
+        mode=MODE_SINGLE,
+        platform=PLATFORM_ALIBABA,
+        query="headphones",
+        limit=5,
+    )
+    state.search_session_query = later_plan.query
+    state.search_limit = later_plan.limit
+    state._prepare_scoped_search(later_plan)
+    assert state.generic_display_limit == 5
+    state.search_limit = 1
+    assert state.generic_display_limit == 5

@@ -83,7 +83,7 @@ def results_toolbar() -> rx.Component:
         ),
         rx.hstack(
             rx.text("Resultados por plataforma:", size="1", color=styles.TEXT_MUTED),
-            rx.text(TrackerState.search_limit.to_string(), size="1", weight="medium"),
+            rx.text(TrackerState.generic_display_limit.to_string(), size="1", weight="medium"),
             spacing="2",
             align="center",
         ),
@@ -169,7 +169,9 @@ def search_summary_rail() -> rx.Component:
                 rx.hstack(
                     rx.text("Resultados por plataforma", size="1", color=styles.TEXT_MUTED),
                     rx.spacer(),
-                    rx.text(TrackerState.search_limit.to_string(), size="1", weight="medium"),
+                    rx.text(
+                        TrackerState.generic_display_limit.to_string(), size="1", weight="medium"
+                    ),
                     width="100%",
                 ),
                 rx.hstack(
