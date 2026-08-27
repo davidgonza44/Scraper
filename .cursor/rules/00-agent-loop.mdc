@@ -7,9 +7,37 @@ alwaysApply: true
 
 Never start by editing production code.
 
+Repository-specific instructions override generic Cursor workflow rules.
+A mandated reading sequence must not be reordered, skipped, or replaced.
+
+Before applying this generic loop, follow any applicable repository or
+scoped preparation/read order. Those instructions take precedence over
+this rule.
+
+## Generic-search preparation
+
+When modifying generic search, read in this exact order:
+
+1. `context.md` — orientation only; not authoritative
+2. active OpenSpec: `openspec/changes/multi-market-search-semantics/**`
+3. repository implementation/contracts
+4. architecture docs: `docs/architecture/README.md` and `docs/architecture/*.puml`
+5. AI contracts/fixtures: `docs/ai-contracts/README.md`, `schemas/ai-contracts/**`,
+   `tests/fixtures/ai-contracts/**`
+6. relevant tests/code
+
+Do not place OpenSpec or AGENTS.md ahead of `context.md` in this sequence.
+
+## Outside generic search
+
+Outside generic search, follow applicable repository and scoped instructions
+before this generic loop.
+
 For every implementation, bugfix, or review finding:
 
-1. Read the applicable sources of truth before coding:
+1. Read the applicable sources of truth before coding, using any mandated
+   repository-specific sequence when one exists. When no mandated sequence
+   applies, read:
    - active OpenSpec change
    - AGENTS.md
    - context.md when relevant
