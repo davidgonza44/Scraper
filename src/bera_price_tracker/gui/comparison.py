@@ -86,6 +86,19 @@ def _attr(row: object, name: str, default: str = "") -> str:
     return _text(getattr(row, name, default)) or default
 
 
+def _independent_review_count(raw: object, *, rating_available: bool) -> tuple[str, str]:
+    """Keep review_count even when the aggregate score is unknown. Never invent stars."""
+
+    count = _text(raw)
+    if count == "—":
+        count = ""
+    if not count:
+        return "", ""
+    if rating_available:
+        return count, ""
+    return count, f"{count} reseñas"
+
+
 def _int_attr(row: object, name: str) -> int:
     raw = getattr(row, name, None) if not isinstance(row, Mapping) else row.get(name)
     try:
@@ -131,6 +144,8 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
             "alibaba_rating_filled": 0,
             "alibaba_rating_label": "Sin calificación",
             "alibaba_rating_caption": "",
+            "alibaba_review_count": "",
+            "alibaba_review_count_line": "",
             "alibaba_trust_line": "",
             "opportunity_available": False,
             "opportunity_score": "0",
@@ -141,6 +156,9 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
     moq = _attr(row, "moq")
     rating = product_rating_display(
         _attr(row, "review_score"), review_count=_attr(row, "review_count")
+    )
+    review_count, review_count_line = _independent_review_count(
+        _attr(row, "review_count"), rating_available=bool(rating["available"])
     )
     gauge = opportunity_gauge(_int_attr(row, "score_value"), _attr(row, "score"))
     trust_parts: list[str] = []
@@ -168,6 +186,8 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
         "alibaba_rating_filled": int(rating["filled"]),
         "alibaba_rating_label": str(rating["label"]),
         "alibaba_rating_caption": str(rating.get("caption") or ""),
+        "alibaba_review_count": review_count,
+        "alibaba_review_count_line": review_count_line,
         "alibaba_trust_line": " · ".join(trust_parts),
         "opportunity_available": bool(gauge["available"]),
         "opportunity_score": str(gauge["score"]),
@@ -238,6 +258,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
             "ml_rating_filled": 0,
             "ml_rating_label": "Sin calificación",
             "ml_rating_caption": "",
+            "ml_review_count": "",
+            "ml_review_count_line": "",
             "ml_trust_line": "",
         }
     relevance_value = _int_attr(row, "relevance_value")
@@ -249,6 +271,9 @@ def _ml_cell(row: Any) -> dict[str, object]:
     official_text = "" if official_store == "—" else official_store
     rating = product_rating_display(
         _attr(row, "rating_average"), review_count=_attr(row, "review_count")
+    )
+    review_count, review_count_line = _independent_review_count(
+        _attr(row, "review_count"), rating_available=bool(rating["available"])
     )
     trust_parts: list[str] = []
     reputation = _attr(row, "seller_reputation")
@@ -273,6 +298,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
         "ml_rating_filled": int(rating["filled"]),
         "ml_rating_label": str(rating["label"]),
         "ml_rating_caption": str(rating.get("caption") or ""),
+        "ml_review_count": review_count,
+        "ml_review_count_line": review_count_line,
         "ml_trust_line": " · ".join(trust_parts),
     }
 

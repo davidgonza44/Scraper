@@ -34,9 +34,12 @@ from bera_price_tracker.application.search_session import (
     positional_rows_from_snapshot,
 )
 from bera_price_tracker.gui import analysis, comparison, marketplace_summary, search_export
-from bera_price_tracker.gui.search_scope import MODE_MULTI, plan_search
+from bera_price_tracker.gui.brands import PLATFORM_ALIBABA, PLATFORM_FACEBOOK, PLATFORM_ML
+from bera_price_tracker.gui.search_scope import MODE_MULTI, MODE_SINGLE, plan_search
 from bera_price_tracker.gui.state import (
+    UI_EMPTY,
     UI_ERROR,
+    UI_INITIAL,
     UI_LOADING,
     UI_SUCCESS,
     AlibabaResultRow,
@@ -197,6 +200,114 @@ def _complete_generic_three_platform_search(state: TrackerState, *, generation: 
         },
         ui_status=UI_SUCCESS,
     )
+
+
+def _complete_single_market_generic_search(
+    state: TrackerState,
+    *,
+    platform: str,
+    generation: int = 4,
+) -> None:
+    state.search_generation = generation
+    state.search_mode = MODE_SINGLE
+    state.search_platform = platform
+    plan = plan_search(mode=MODE_SINGLE, platform=platform, query="wireless mouse", limit=3)
+    state.search_session_active = True
+    state.search_session_query = plan.query
+    state.search_limit = plan.limit
+    state._prepare_scoped_search(plan)
+    if platform == PLATFORM_ALIBABA:
+        state._finalize_alibaba_search(
+            request_query=plan.query,
+            request_limit=plan.limit,
+            rows=[_alibaba("Generic Alibaba only", product_id="ali-only")],
+            summary={"resultados": "1", "minimo": "USD 4.00", "usable": "1"},
+            stats_raw={"minimum": "4.00", "median": "4.00", "average": "4.00", "maximum": "4.00"},
+            ui_status=UI_SUCCESS,
+            commit_generic_session=True,
+        )
+        return
+    if platform == PLATFORM_FACEBOOK:
+        state._finalize_facebook_product_search(
+            product_id="",
+            query=plan.query,
+            city=plan.city,
+            rows=[_facebook("Generic Facebook only", external_id="fb-only")],
+            statistics=[_facebook_stats()],
+            summary={"usable": "1", "requested": "3", "fetched": "1"},
+            ui_status=UI_SUCCESS,
+            commit_generic_session=True,
+        )
+        return
+    state._finalize_mercadolibre_search(
+        search_product_id="",
+        query=plan.query,
+        rows=[_ml("Generic ML only", external_id="MLV-only", price="USD 9.00")],
+        summary={"usable": "1", "requested": "3", "fetched": "1"},
+        ui_status=UI_SUCCESS,
+    )
+
+
+def _inject_specialized_unselected_live_state(
+    state: TrackerState,
+    *,
+    selected: str,
+    ui_status: str,
+) -> None:
+    if selected != PLATFORM_ALIBABA:
+        state.alibaba_results = [
+            _alibaba("Specialized Alibaba — must not leak", product_id="ali-specialized")
+        ]
+        state.alibaba_summary = {
+            "resultados": "9",
+            "minimo": "USD 777.00",
+            "usable": "9",
+            "fetched": "9",
+        }
+        state.alibaba_stats_raw = {"minimum": "777.00", "average": "777.00"}
+        state.alibaba_error = "Specialized Alibaba exploded"
+        state.alibaba_ui_status = ui_status
+        state.alibaba_is_loading = ui_status == UI_LOADING
+    if selected != PLATFORM_FACEBOOK:
+        state.facebook_product_results = [
+            _facebook(
+                "Specialized Facebook — must not leak",
+                external_id="fb-specialized",
+                usd_price="USD 999.00",
+            )
+        ]
+        state.facebook_product_summary = {"usable": "9", "requested": "9", "fetched": "9"}
+        state.facebook_product_statistics = [
+            _facebook_stats(
+                label="USD specialized leak",
+                minimum="999.00",
+                average="999.00",
+                median="999.00",
+                maximum="999.00",
+            )
+        ]
+        state.facebook_product_error = "Specialized Facebook exploded"
+        state.facebook_product_ui_status = ui_status
+        state.facebook_product_is_loading = ui_status == UI_LOADING
+    if selected != PLATFORM_ML:
+        state.ml_results = [
+            _ml(
+                "Specialized ML — must not leak",
+                external_id="MLV-specialized",
+                price="USD 888.00",
+                price_raw="888.00",
+            )
+        ]
+        state.ml_summary = {
+            "usable": "9",
+            "requested": "9",
+            "fetched": "9",
+            "minimo": "USD 888.00",
+            "comparable_count": "9",
+        }
+        state.ml_error = "Specialized ML exploded"
+        state.ml_ui_status = ui_status
+        state.ml_is_loading = ui_status == UI_LOADING
 
 
 def _ml(title: str, **overrides: Any) -> MercadoLibreResultRow:
@@ -659,6 +770,118 @@ def test_positional_cells_render_available_fields_and_blank_optional_ones() -> N
     assert sparse["ml_shipping"] == ""
     assert sparse["ml_official_store"] == ""
     assert sparse["alibaba_moq"] == ""
+
+
+def test_positional_cells_preserve_review_counts_without_aggregate_ratings() -> None:
+    """P2: review_count stays visible when the aggregate score is unknown."""
+
+    count_only = comparison.build_positional_comparison_rows(
+        alibaba_rows=[_alibaba("Alibaba reviews only", review_score="", review_count="12")],
+        ml_rows=[_ml("ML reviews only", rating_average="", review_count="8")],
+        alibaba_status=UI_SUCCESS,
+        ml_status=UI_SUCCESS,
+    )[0]
+    assert count_only["alibaba_has_listing"] is True
+    assert count_only["alibaba_rating_available"] is False
+    assert count_only["alibaba_review_count"] == "12"
+    assert count_only["alibaba_review_count_line"] == "12 reseñas"
+    assert count_only["ml_has_listing"] is True
+    assert count_only["ml_rating_available"] is False
+    assert count_only["ml_review_count"] == "8"
+    assert count_only["ml_review_count_line"] == "8 reseñas"
+    both = comparison.build_positional_comparison_rows(
+        alibaba_rows=[_alibaba("Alibaba rated", review_score="4.8", review_count="12")],
+        ml_rows=[_ml("ML rated", rating_average="4.1", review_count="8")],
+        alibaba_status=UI_SUCCESS,
+        ml_status=UI_SUCCESS,
+    )[0]
+    assert both["alibaba_rating_available"] is True
+    assert "12" in str(both["alibaba_rating_label"])
+    assert both["alibaba_review_count"] == "12"
+    assert both["alibaba_review_count_line"] == ""
+    assert both["ml_rating_available"] is True
+    assert "8" in str(both["ml_rating_label"])
+    assert both["ml_review_count"] == "8"
+    assert both["ml_review_count_line"] == ""
+    score_only = comparison.build_positional_comparison_rows(
+        alibaba_rows=[_alibaba("Alibaba score only", review_score="4.8", review_count="")],
+        ml_rows=[_ml("ML score only", rating_average="4.1", review_count="")],
+        alibaba_status=UI_SUCCESS,
+        ml_status=UI_SUCCESS,
+    )[0]
+    assert score_only["alibaba_rating_available"] is True
+    assert score_only["alibaba_review_count"] == ""
+    assert score_only["alibaba_review_count_line"] == ""
+    assert "0 reseñas" not in str(score_only["alibaba_rating_label"])
+    assert score_only["ml_rating_available"] is True
+    assert score_only["ml_review_count_line"] == ""
+    neither = comparison.build_positional_comparison_rows(
+        alibaba_rows=[_alibaba("Alibaba neither", review_score="", review_count="")],
+        ml_rows=[_ml("ML neither", rating_average="", review_count="")],
+        alibaba_status=UI_SUCCESS,
+        ml_status=UI_SUCCESS,
+    )[0]
+    assert neither["alibaba_has_listing"] is True
+    assert neither["ml_has_listing"] is True
+    assert neither["alibaba_rating_available"] is False
+    assert neither["ml_rating_available"] is False
+    assert neither["alibaba_review_count"] == ""
+    assert neither["alibaba_review_count_line"] == ""
+    assert neither["ml_review_count"] == ""
+    assert neither["ml_review_count_line"] == ""
+    sentinel = comparison.build_positional_comparison_rows(
+        alibaba_rows=[_alibaba("Alibaba sentinel", review_score="", review_count="—")],
+        ml_rows=[_ml("ML sentinel", rating_average="", review_count="—")],
+        alibaba_status=UI_SUCCESS,
+        ml_status=UI_SUCCESS,
+    )[0]
+    assert sentinel["alibaba_has_listing"] is True
+    assert sentinel["ml_has_listing"] is True
+    assert sentinel["alibaba_review_count"] == ""
+    assert sentinel["alibaba_review_count_line"] == ""
+    assert sentinel["ml_review_count"] == ""
+    assert sentinel["ml_review_count_line"] == ""
+    assert "0 reseñas" not in str(sentinel["alibaba_review_count_line"])
+    inferred = comparison.build_positional_comparison_rows(
+        alibaba_rows=[
+            _alibaba(
+                "Alibaba reputation only",
+                review_score="",
+                review_count="",
+                supplier_service_score="4.9",
+                reputation_reviews="99",
+            )
+        ],
+        alibaba_status=UI_SUCCESS,
+    )[0]
+    assert inferred["alibaba_has_listing"] is True
+    assert inferred["alibaba_review_count"] == ""
+    assert inferred["alibaba_review_count_line"] == ""
+    facebook = comparison.build_positional_comparison_rows(
+        facebook_rows=[_facebook("Facebook no reviews")],
+        facebook_status=UI_SUCCESS,
+    )[0]
+    assert facebook["facebook_has_listing"] is True
+    assert "facebook_review_count" not in facebook
+    assert "facebook_review_count_line" not in facebook
+    associated = comparison.build_comparison_rows(
+        alibaba_rows=[
+            _alibaba(
+                "Alibaba associated",
+                product_id="ali-1",
+                review_score="",
+                review_count="12",
+            )
+        ],
+        ml_rows=[_ml("ML associated", rating_average="", review_count="8")],
+        alibaba_status=UI_SUCCESS,
+        ml_status=UI_SUCCESS,
+        ml_association_id="ali-1",
+    )[0]
+    assert associated["alibaba_review_count"] == "12"
+    assert associated["alibaba_review_count_line"] == "12 reseñas"
+    assert associated["ml_review_count"] == "8"
+    assert associated["ml_review_count_line"] == "8 reseñas"
 
 
 def test_row_without_alibaba_has_no_alibaba_opportunity() -> None:
@@ -1215,3 +1438,163 @@ def test_generic_search_phase_stays_session_owned_during_specialized_loading() -
     assert state.search_session_phase == "RUNNING"
     assert state.search_shows_setup is True
     assert state.search_shows_results is False
+
+
+def _assert_generic_membership_excludes_specialized(
+    state: TrackerState,
+    *,
+    selected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = {
+        PLATFORM_ALIBABA: "Generic Alibaba only",
+        PLATFORM_FACEBOOK: "Generic Facebook only",
+        PLATFORM_ML: "Generic ML only",
+    }[selected]
+    rows = state.positional_comparison_rows
+    titles = " ".join(f"{row.alibaba_title} {row.facebook_title} {row.ml_title}" for row in rows)
+    assert "must not leak" not in titles
+    if selected == PLATFORM_ALIBABA:
+        assert [row.alibaba_title for row in rows] == [expected]
+        assert all(not row.facebook_has_listing for row in rows)
+        assert all(not row.ml_has_listing for row in rows)
+    elif selected == PLATFORM_FACEBOOK:
+        assert [row.facebook_title for row in rows] == [expected]
+        assert all(not row.alibaba_has_listing for row in rows)
+        assert all(not row.ml_has_listing for row in rows)
+    else:
+        assert [row.ml_title for row in rows] == [expected]
+        assert all(not row.alibaba_has_listing for row in rows)
+        assert all(not row.facebook_has_listing for row in rows)
+    assert state.search_total_results == "1"
+    assert state.current_export_listing_count() == 1
+    cards = {card.platform: card for card in state.generic_marketplace_summaries}
+    if selected != PLATFORM_ALIBABA:
+        assert cards["Alibaba"].result_count == "0"
+        assert "777.00" not in cards["Alibaba"].average
+        assert "Specialized Alibaba exploded" not in cards["Alibaba"].note
+        assert cards["Alibaba"].status not in {"loading", "error", "ready"}
+    if selected != PLATFORM_FACEBOOK:
+        assert cards["Facebook Marketplace"].result_count == "0"
+        assert "999.00" not in cards["Facebook Marketplace"].average
+        assert "Specialized Facebook exploded" not in cards["Facebook Marketplace"].note
+        assert cards["Facebook Marketplace"].status not in {"loading", "error", "ready"}
+    if selected != PLATFORM_ML:
+        assert cards["Mercado Libre"].result_count == "0"
+        assert "888.00" not in cards["Mercado Libre"].average
+        assert "Specialized ML exploded" not in cards["Mercado Libre"].note
+        assert cards["Mercado Libre"].status not in {"loading", "error", "ready"}
+    captured: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> list[dict[str, str]]:
+        captured.update(kwargs)
+        return [{column: "" for column in search_export.CSV_COLUMNS}]
+
+    monkeypatch.setattr(search_export, "listing_rows_for_export", capture)
+    assert state.export_current_search() is not None
+    exported_alibaba = cast(list[AlibabaResultRow], captured["alibaba_rows"])
+    exported_facebook = cast(list[FacebookProductResultRow], captured["facebook_rows"])
+    exported_ml = cast(list[MercadoLibreResultRow], captured["ml_rows"])
+    if selected == PLATFORM_ALIBABA:
+        assert [row.title for row in exported_alibaba] == [expected]
+        assert exported_facebook == []
+        assert exported_ml == []
+    elif selected == PLATFORM_FACEBOOK:
+        assert exported_alibaba == []
+        assert [row.title for row in exported_facebook] == [expected]
+        assert exported_ml == []
+    else:
+        assert exported_alibaba == []
+        assert exported_facebook == []
+        assert [row.title for row in exported_ml] == [expected]
+    blob = str(captured)
+    assert "must not leak" not in blob
+    assert "Specialized Facebook exploded" not in blob
+    assert "Specialized ML exploded" not in blob
+    assert "Specialized Alibaba exploded" not in blob
+    if selected != PLATFORM_FACEBOOK:
+        fb_diag = cast(dict[str, object], captured["facebook_diagnostic"])
+        assert fb_diag.get("usable") != "9"
+        assert fb_diag.get("fetched") != "9"
+        assert fb_diag.get("detail", "") != "Specialized Facebook exploded"
+    if selected != PLATFORM_ML:
+        ml_diag = cast(dict[str, object], captured["ml_diagnostic"])
+        assert ml_diag.get("usable") != "9"
+        assert ml_diag.get("fetched") != "9"
+        assert ml_diag.get("detail", "") != "Specialized ML exploded"
+
+
+def test_single_market_generic_search_freezes_unselected_provider_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: unselected providers own empty membership for the generic generation."""
+
+    state = TrackerState()
+    _complete_single_market_generic_search(state, platform=PLATFORM_ALIBABA)
+    assert [row.alibaba_title for row in state.positional_comparison_rows] == [
+        "Generic Alibaba only"
+    ]
+    assert state.search_total_results == "1"
+
+    _inject_specialized_unselected_live_state(
+        state, selected=PLATFORM_ALIBABA, ui_status=UI_SUCCESS
+    )
+    state.show_searches()
+    _assert_generic_membership_excludes_specialized(
+        state, selected=PLATFORM_ALIBABA, monkeypatch=monkeypatch
+    )
+    assert state.facebook_product_results[0].title == "Specialized Facebook — must not leak"
+    assert state.ml_results[0].title == "Specialized ML — must not leak"
+    live_cards = {card.platform: card for card in state.marketplace_summaries}
+    assert live_cards["Facebook Marketplace"].result_count == "1"
+    assert live_cards["Mercado Libre"].result_count == "1"
+    state.alibaba_results = [
+        _alibaba("Specialized Alibaba — must not leak", product_id="ali-specialized")
+    ]
+    state.alibaba_summary = {"resultados": "9", "minimo": "USD 777.00", "usable": "9"}
+    assert [row.alibaba_title for row in state.positional_comparison_rows] == [
+        "Generic Alibaba only"
+    ]
+    assert state.search_total_results == "1"
+    assert state.generic_session_facebook.generation == state.search_generation
+    assert state.generic_session_facebook.status == UI_INITIAL
+    assert state.generic_session_ml.generation == state.search_generation
+    assert state.generic_session_ml.status == UI_INITIAL
+
+    for leak_status in (UI_LOADING, UI_EMPTY, UI_ERROR):
+        _inject_specialized_unselected_live_state(
+            state, selected=PLATFORM_ALIBABA, ui_status=leak_status
+        )
+        state.show_products()
+        state.show_searches()
+        _assert_generic_membership_excludes_specialized(
+            state, selected=PLATFORM_ALIBABA, monkeypatch=monkeypatch
+        )
+
+    state.search_generation = 5
+    state.search_platform = PLATFORM_FACEBOOK
+    next_plan = plan_search(mode=MODE_SINGLE, platform=PLATFORM_FACEBOOK, query="keyboard", limit=3)
+    state.search_session_query = next_plan.query
+    state._prepare_scoped_search(next_plan)
+    assert state.generic_session_alibaba.generation == 5
+    assert state.generic_session_alibaba.status == UI_INITIAL
+    assert state.generic_session_alibaba.rows == []
+    assert state.generic_session_ml.generation == 5
+    assert state.generic_session_facebook.generation == GENERIC_SESSION_UNSET_GENERATION
+    assert state.facebook_product_ui_status == UI_LOADING
+    assert "Generic Alibaba only" not in " ".join(
+        row.alibaba_title for row in state.positional_comparison_rows
+    )
+
+
+def test_single_market_owned_empty_snapshots_for_each_selected_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for selected in (PLATFORM_ALIBABA, PLATFORM_FACEBOOK, PLATFORM_ML):
+        state = TrackerState()
+        _complete_single_market_generic_search(state, platform=selected)
+        _inject_specialized_unselected_live_state(state, selected=selected, ui_status=UI_SUCCESS)
+        state.show_searches()
+        _assert_generic_membership_excludes_specialized(
+            state, selected=selected, monkeypatch=monkeypatch
+        )

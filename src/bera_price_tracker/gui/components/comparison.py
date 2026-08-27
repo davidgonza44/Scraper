@@ -96,6 +96,7 @@ def marketplace_cell(
     rating_caption: object = "",
     trust_line: object = "",
     line_four: object = "",
+    review_count_line: object = "",
 ) -> rx.Component:
     return rx.cond(
         has_listing,
@@ -115,6 +116,10 @@ def marketplace_cell(
                 rx.text(rating_caption, size="1", color=styles.TEXT_MUTED),
             ),
             rating_stars(rating_available, rating_filled, rating_label),
+            rx.cond(
+                review_count_line != "",
+                rx.text(review_count_line, size="1", color=styles.TEXT_MUTED),
+            ),
             rx.cond(trust_line != "", rx.text(trust_line, size="1", color=styles.TEXT_SECONDARY)),
             rx.cond(
                 match_label != "",
@@ -189,6 +194,7 @@ def comparison_row(row: rx.Var) -> rx.Component:
             rating_filled=row["alibaba_rating_filled"],
             rating_label=row["alibaba_rating_label"],
             rating_caption=row["alibaba_rating_caption"],
+            review_count_line=row["alibaba_review_count_line"],
             trust_line=row["alibaba_trust_line"],
         ),
         marketplace_cell(
@@ -226,6 +232,7 @@ def comparison_row(row: rx.Var) -> rx.Component:
             rating_filled=row["ml_rating_filled"],
             rating_label=row["ml_rating_label"],
             rating_caption=row["ml_rating_caption"],
+            review_count_line=row["ml_review_count_line"],
             trust_line=row["ml_trust_line"],
         ),
         analysis_cell(row),
@@ -294,6 +301,7 @@ def positional_comparison_row(row: rx.Var) -> rx.Component:
             rating_filled=row["alibaba_rating_filled"],
             rating_label=row["alibaba_rating_label"],
             rating_caption=row["alibaba_rating_caption"],
+            review_count_line=row["alibaba_review_count_line"],
             trust_line=row["alibaba_trust_line"],
         ),
         marketplace_cell(
@@ -331,6 +339,7 @@ def positional_comparison_row(row: rx.Var) -> rx.Component:
             rating_filled=row["ml_rating_filled"],
             rating_label=row["ml_rating_label"],
             rating_caption=row["ml_rating_caption"],
+            review_count_line=row["ml_review_count_line"],
             trust_line=row["ml_trust_line"],
         ),
         analysis_cell(row),

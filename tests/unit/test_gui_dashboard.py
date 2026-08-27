@@ -543,6 +543,63 @@ def test_marketplace_cell_renders_ml_shipping_and_official_store() -> None:
     assert paid is not None
 
 
+def test_marketplace_cell_renders_review_count_when_rating_unavailable() -> None:
+    from bera_price_tracker.gui.components import comparison as comparison_ui
+
+    source = inspect.getsource(comparison_ui)
+    assert "review_count_line" in source
+    comparison_fn = inspect.getsource(comparison_ui.comparison_row)
+    positional_fn = inspect.getsource(comparison_ui.positional_comparison_row)
+    assert 'review_count_line=row["alibaba_review_count_line"]' in comparison_fn
+    assert 'review_count_line=row["ml_review_count_line"]' in comparison_fn
+    assert 'review_count_line=row["alibaba_review_count_line"]' in positional_fn
+    assert 'review_count_line=row["ml_review_count_line"]' in positional_fn
+    assert "facebook_review_count_line" not in comparison_fn
+    assert "facebook_review_count_line" not in positional_fn
+    cell_source = inspect.getsource(comparison_ui.marketplace_cell)
+    assert "rx.text(review_count_line" in cell_source
+    stars_index = cell_source.index("rating_stars(")
+    count_index = cell_source.index("rx.text(review_count_line")
+    assert count_index != stars_index
+    cell = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="ML reviews only",
+        price="$9.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+        rating_available=False,
+        review_count_line="8 reseñas",
+    )
+    blob = _component_repr(cell)
+    assert "8 rese" in blob
+    rated = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="Alibaba rated",
+        price="$4.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+        rating_available=True,
+        rating_label="4.8 · 12 reseñas",
+        review_count_line="",
+    )
+    rated_blob = _component_repr(rated)
+    assert "4.8" in rated_blob
+
+
 def test_gui_modules_do_not_import_apify() -> None:
     gui_root = SRC / "bera_price_tracker" / "gui"
     for path in gui_root.rglob("*.py"):
