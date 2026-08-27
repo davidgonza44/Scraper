@@ -498,8 +498,14 @@ def test_marketplace_cell_renders_ml_shipping_and_official_store() -> None:
     source = inspect.getsource(comparison_ui)
     assert 'line_three=row["ml_shipping"]' in source
     assert source.count('line_three=row["ml_shipping"]') == 2
-    assert 'line_four=row["ml_official_store"]' in source
-    assert source.count('line_four=row["ml_official_store"]') == 2
+    assert "def comparison_row(" in source
+    assert "def positional_comparison_row(" in source
+    comparison_fn = inspect.getsource(comparison_ui.comparison_row)
+    positional_fn = inspect.getsource(comparison_ui.positional_comparison_row)
+    assert 'line_three=row["ml_shipping"]' in comparison_fn
+    assert 'line_four=row["ml_official_store"]' in comparison_fn
+    assert 'line_three=row["ml_shipping"]' in positional_fn
+    assert 'line_four=row["ml_official_store"]' in positional_fn
     cell_source = inspect.getsource(comparison_ui.marketplace_cell)
     assert "rx.text(line_three" in cell_source
     assert "rx.text(line_four" in cell_source

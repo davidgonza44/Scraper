@@ -245,6 +245,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
     seller = _attr(row, "seller_name")
     shipping = _attr(row, "shipping")
     official_store = _attr(row, "official_store")
+    shipping_text = "" if shipping == "—" else shipping
+    official_text = "" if official_store == "—" else official_store
     rating = product_rating_display(
         _attr(row, "rating_average"), review_count=_attr(row, "review_count")
     )
@@ -253,7 +255,7 @@ def _ml_cell(row: Any) -> dict[str, object]:
     if reputation:
         trust_parts.append(f"Reputación: {reputation}")
     status = _attr(row, "seller_status")
-    if status:
+    if status and status != official_text:
         trust_parts.append(status)
     return {
         "ml_has_listing": True,
@@ -262,8 +264,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
         "ml_price": _attr(row, "price"),
         "ml_condition": "" if condition == "—" else condition,
         "ml_seller": "" if seller == "—" else seller,
-        "ml_shipping": "" if shipping == "—" else shipping,
-        "ml_official_store": "" if official_store == "—" else official_store,
+        "ml_shipping": shipping_text,
+        "ml_official_store": official_text,
         "ml_relevance": _attr(row, "relevance"),
         "ml_match_label": match_label(relevance_value, has_listing=True),
         "ml_url": _attr(row, "permalink"),

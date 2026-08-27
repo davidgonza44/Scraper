@@ -596,6 +596,53 @@ def test_positional_cells_render_available_fields_and_blank_optional_ones() -> N
     assert unknown["ml_has_listing"] is True
     assert unknown["ml_shipping"] == ""
     assert unknown["ml_official_store"] == ""
+    inferred = comparison.build_positional_comparison_rows(
+        ml_rows=[
+            _ml(
+                "Tienda oficial mouse",
+                seller_name="Tienda oficial",
+                seller_reputation="Tienda oficial",
+                seller_status="Tienda oficial",
+                official_store="",
+                shipping="Pago",
+            )
+        ],
+        ml_status=UI_SUCCESS,
+    )[0]
+    assert inferred["ml_has_listing"] is True
+    assert inferred["ml_shipping"] == "Pago"
+    assert inferred["ml_official_store"] == ""
+    duplicate = comparison.build_positional_comparison_rows(
+        ml_rows=[
+            _ml(
+                "ML duplicate store",
+                shipping="Envío gratis",
+                official_store="Tienda oficial",
+                seller_status="Tienda oficial",
+            )
+        ],
+        ml_status=UI_SUCCESS,
+    )[0]
+    assert duplicate["ml_has_listing"] is True
+    assert duplicate["ml_official_store"] == "Tienda oficial"
+    visible_official = [str(duplicate["ml_official_store"]), str(duplicate["ml_trust_line"])]
+    assert "".join(visible_official).count("Tienda oficial") == 1
+    associated = comparison.build_comparison_rows(
+        alibaba_rows=[_alibaba("Alibaba associated", product_id="ali-1")],
+        ml_rows=[
+            _ml(
+                "ML associated",
+                shipping="Envío gratis",
+                official_store="Tienda oficial",
+            )
+        ],
+        alibaba_status=UI_SUCCESS,
+        ml_status=UI_SUCCESS,
+        ml_association_id="ali-1",
+    )
+    assert associated[0]["ml_has_listing"] is True
+    assert associated[0]["ml_shipping"] == "Envío gratis"
+    assert associated[0]["ml_official_store"] == "Tienda oficial"
     missing = comparison.build_positional_comparison_rows(
         facebook_rows=[_facebook("No extras")],
         facebook_status=UI_SUCCESS,
