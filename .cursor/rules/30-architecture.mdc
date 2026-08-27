@@ -1,0 +1,34 @@
+---
+description: "Preserve Ports and Adapters architecture and ownership boundaries"
+globs: "src/**/*.py"
+alwaysApply: false
+---
+
+# Architecture Boundaries
+
+Respect the repository's existing architecture.
+
+Before introducing logic, determine which layer owns it.
+
+Rules:
+
+- GUI / TrackerState orchestrates and presents state.
+- Application owns deterministic application behavior and contracts.
+- Infrastructure owns provider/API implementation details.
+- GUI must not become an alternate service/domain layer.
+- Provider-specific implementation details must not leak unnecessarily into provider-neutral contracts.
+
+Never create a second source of truth when an existing contract can be extended.
+
+Distinguish explicitly between:
+
+- live mutable provider state
+- generation/session-owned state
+- canonical frozen data
+- specialized presentation projections
+
+Never derive canonical membership from filtered presentation state.
+
+Never let specialized projections mutate or redefine frozen generic state.
+
+When state belongs to one search generation, all data displayed as belonging to that generation must come from the same ownership boundary.

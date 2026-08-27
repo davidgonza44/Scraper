@@ -1,0 +1,42 @@
+---
+description: "Turn every discovered defect and review finding into permanent regression coverage"
+alwaysApply: true
+---
+
+# Regression Memory
+
+Every meaningful bug discovered by:
+
+- user testing
+- Codex review
+- Cursor review
+- CI
+- production behavior
+- live smoke testing
+
+must improve the repository's future defenses.
+
+For each valid defect:
+
+1. Identify the violated invariant.
+2. Add the smallest behavioral regression reproducing it.
+3. Confirm the regression fails before the fix when practical.
+4. Implement the fix.
+5. Confirm the regression passes.
+6. Preserve the test permanently.
+
+When several bugs share one root cause, add:
+- concrete regression examples, and
+- a broader invariant/property test when practical.
+
+Never fix only the exact example when the underlying invariant is broader.
+
+Example:
+
+Finding:
+specialized ML overwrites generic metadata.
+
+Do not test only one value.
+
+Protect the invariant:
+specialized state cannot alter any state owned by a completed generic generation.
