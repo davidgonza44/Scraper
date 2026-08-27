@@ -3495,6 +3495,12 @@ class TrackerState(rx.State):
             return self.search_session_limit
         return self.search_limit
 
+    @rx.var
+    def generic_display_limit(self) -> int:
+        """Visible maximum frozen when the current generic generation started."""
+
+        return self._generic_display_limit()
+
     def _canonical_search_rows(self, rows: list[Any], status: str) -> list[Any]:
         """Frozen generic-search prefix. Ignores specialized sort/filter projections."""
 

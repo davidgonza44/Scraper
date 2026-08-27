@@ -1646,6 +1646,7 @@ def _assert_frozen_alibaba_display_limit(
     titles: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    assert state.generic_display_limit == initiating_limit
     rows = state.positional_comparison_rows
     assert [row.alibaba_title for row in rows] == titles
     assert len(rows) == initiating_limit
