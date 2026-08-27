@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Protocol, cast
-from urllib.parse import quote_plus
 
 from bera_price_tracker.application import MarketplaceSourceUnavailable
 from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
 from bera_price_tracker.application.provider_acquisition import ProviderAcquisitionMetrics
 from bera_price_tracker.application.services import validate_alibaba_search
+from bera_price_tracker.config import DEFAULT_APIFY_ALIBABA_ACTOR
 from bera_price_tracker.domain.alibaba import AlibabaProduct
 from bera_price_tracker.infrastructure.providers.apify import (
     ApifyClientConfiguration,
     ApifyConfigurationError,
 )
 
-DEFAULT_ALIBABA_ACTOR = "scraper-engine/alibaba-scraper"
-_TOKEN_ENV = "BERA_TRACKER_APIFY_API_TOKEN"
+DEFAULT_ALIBABA_ACTOR = DEFAULT_APIFY_ALIBABA_ACTOR
 _NUMBER = re.compile(r"(\d+(?:\.\d+)?)")
 _ISO_CURRENCY = re.compile(r"\b([A-Z]{3})\b")
 
@@ -46,20 +46,12 @@ class _ApifyClientLike(Protocol):
 ClientFactory = Callable[[str], _ApifyClientLike]
 
 
-def build_alibaba_search_url(query: str) -> str:
-    """Build the single trade/search URL required by this Actor schema."""
-
-    encoded = quote_plus(query)
-    return (
-        f"https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&keywords={encoded}&page=1"
-    )
-
-
 def build_alibaba_run_input(*, query: str, limit: int) -> dict[str, object]:
-    """Actor input using only documented fields: urls + maxItems."""
+    """Actor input using only documented fields: searchTerms, maxPages, maxItems."""
 
     return {
-        "urls": [build_alibaba_search_url(query)],
+        "searchTerms": [query],
+        "maxPages": 1,
         "maxItems": limit,
     }
 
@@ -73,10 +65,23 @@ def _as_mapping(value: object) -> Mapping[str, object] | None:
 def _scalar_text(value: object) -> str | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, (str, int)):
-        normalized = str(value).strip()
-        if normalized:
-            return normalized
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return str(value)
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    return None
+
+
+def _first_scalar(record: Mapping[str, object], *keys: str) -> str | None:
+    for key in keys:
+        text = _scalar_text(record.get(key))
+        if text is not None:
+            return text
     return None
 
 
@@ -132,9 +137,11 @@ def map_alibaba_item(raw: object) -> AlibabaProduct | None:
         min_price=min_price,
         max_price=max_price,
         currency=currency,
-        moq=_scalar_text(record.get("moq")),
-        supplier_name=_scalar_text(record.get("companyName")),
-        supplier_country=_scalar_text(record.get("countryCode")),
+        moq=_first_scalar(record, "minOrder", "moq"),
+        supplier_name=_first_scalar(record, "supplierName", "companyName"),
+        supplier_country=_first_scalar(
+            record, "supplierCountryCode", "supplierCountry", "countryCode"
+        ),
         image_url=_scalar_text(record.get("mainImage")),
         gold_supplier_years=_scalar_text(record.get("goldSupplierYears")),
         supplier_service_score=_scalar_text(record.get("supplierServiceScore")),
@@ -165,7 +172,7 @@ def _default_client_factory(token: str) -> _ApifyClientLike:
 
 @dataclass(frozen=True, slots=True)
 class ApifyAlibabaClient:
-    """Run scraper-engine/alibaba-scraper once and map public product fields."""
+    """Run memo23/alibaba-scraper once and map public product fields."""
 
     _api_token: str | None = field(default=None, repr=False)
     actor_id: str = DEFAULT_ALIBABA_ACTOR
@@ -234,7 +241,6 @@ __all__ = [
     "DEFAULT_ALIBABA_ACTOR",
     "ApifyAlibabaClient",
     "build_alibaba_run_input",
-    "build_alibaba_search_url",
     "map_alibaba_item",
     "parse_alibaba_price",
 ]
