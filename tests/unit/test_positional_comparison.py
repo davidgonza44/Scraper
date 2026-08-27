@@ -13,6 +13,7 @@ from bera_price_tracker.application.search_session import (
     AcquisitionBatch,
     AcquisitionBudgetPolicy,
     ExactProductContext,
+    GenericSessionProviderSnapshot,
     InternalAcquisitionStep,
     ProviderBudgetRule,
     ProviderRunResult,
@@ -28,14 +29,17 @@ from bera_price_tracker.application.search_session import (
     generic_session_owned_provider_view,
     native_listing_ids_establish_cross_market_identity,
     ordered_usable_pool_from_batches,
+    owned_generic_session_provider,
     positional_row_authorizes_exact_workflows,
     positional_rows_from_snapshot,
 )
 from bera_price_tracker.gui import analysis, comparison, marketplace_summary, search_export
 from bera_price_tracker.gui.search_scope import MODE_MULTI, plan_search
 from bera_price_tracker.gui.state import (
+    UI_ERROR,
     UI_SUCCESS,
     AlibabaResultRow,
+    FacebookCurrencyStatsRow,
     FacebookProductResultRow,
     MercadoLibreResultRow,
     TrackerState,
@@ -112,6 +116,86 @@ def _facebook(title: str, **overrides: Any) -> FacebookProductResultRow:
     }
     payload.update(overrides)
     return FacebookProductResultRow.model_validate(payload)
+
+
+def _facebook_stats(**overrides: Any) -> FacebookCurrencyStatsRow:
+    payload: dict[str, Any] = {
+        "currency": "USD",
+        "label": "USD generic",
+        "basis": "USD",
+        "count": "1",
+        "minimum": "150.00",
+        "average": "150.00",
+        "median": "150.00",
+        "maximum": "150.00",
+        "p25": "150.00",
+        "p75": "150.00",
+    }
+    payload.update(overrides)
+    return FacebookCurrencyStatsRow.model_validate(payload)
+
+
+def _complete_generic_three_platform_search(state: TrackerState, *, generation: int = 4) -> None:
+    state.search_generation = generation
+    plan = plan_search(mode=MODE_MULTI, query="wireless mouse", limit=3)
+    state.search_session_active = True
+    state.search_session_query = plan.query
+    state.search_limit = plan.limit
+    state._prepare_scoped_search(plan)
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        rows=[_alibaba("Generic Alibaba", product_id="ali-generic", price="USD 4.00")],
+        summary={
+            "resultados": "1",
+            "minimo": "USD 4.00",
+            "mediana": "USD 4.00",
+            "promedio": "USD 4.00",
+            "maximo": "USD 4.00",
+            "requested": "3",
+            "fetched": "1",
+            "usable": "1",
+        },
+        stats_raw={"minimum": "4.00", "median": "4.00", "average": "4.00", "maximum": "4.00"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_facebook_product_search(
+        product_id="",
+        query=plan.query,
+        city=plan.city,
+        rows=[_facebook("Generic Facebook", external_id="fb-generic", usd_price="USD 150.00")],
+        statistics=[_facebook_stats()],
+        summary={"usable": "1", "requested": "3", "fetched": "1"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_mercadolibre_search(
+        search_product_id="",
+        query=plan.query,
+        rows=[
+            _ml(
+                "Generic ML listing",
+                external_id="MLV-generic",
+                price="USD 9.00",
+                price_raw="9.00",
+                currency="USD",
+                relevance_value=80,
+            )
+        ],
+        summary={
+            "comparable_count": "1",
+            "usable": "1",
+            "requested": "3",
+            "fetched": "1",
+            "minimo": "USD 9.00",
+            "mediana": "USD 9.00",
+            "precio_tipico": "USD 9.00",
+            "maximo": "USD 9.00",
+            "currency": "USD",
+        },
+        ui_status=UI_SUCCESS,
+    )
 
 
 def _ml(title: str, **overrides: Any) -> MercadoLibreResultRow:
@@ -560,36 +644,40 @@ def test_association_builder_remains_available_for_specialized_views() -> None:
 
 
 def test_generic_session_owned_view_prefers_matching_generation_snapshot() -> None:
-    live = (FakeCandidate("specialized"),)
-    stored = (FakeCandidate("generic"),)
-    owned = generic_session_owned_provider_view(
-        stored_rows=stored,
-        stored_status="SUCCESS",
-        stored_generation=4,
-        active_generation=4,
-        live_rows=live,
-        live_status="SUCCESS",
+    live = GenericSessionProviderSnapshot(
+        generation=GENERIC_SESSION_UNSET_GENERATION,
+        status="ERROR",
+        rows=(FakeCandidate("specialized"),),
+        summary={"usable": "9", "minimo": "USD 99.00"},
+        error="specialized failed",
+        metadata={"diagnostic_summary": {"usable": "9"}},
     )
+    stored = GenericSessionProviderSnapshot(
+        generation=4,
+        status="SUCCESS",
+        rows=(FakeCandidate("generic"),),
+        summary={"usable": "1", "minimo": "USD 9.00"},
+        error="",
+        metadata={"diagnostic_summary": {"usable": "1"}},
+    )
+    owned = owned_generic_session_provider(stored=stored, active_generation=4, live=live)
     assert [item.title for item in owned.rows] == ["generic"]
+    assert owned.summary["minimo"] == "USD 9.00"
+    assert owned.error == ""
     fallback = generic_session_owned_provider_view(
-        stored_rows=stored,
-        stored_status="SUCCESS",
+        stored_rows=stored.rows,
+        stored_status=stored.status,
         stored_generation=GENERIC_SESSION_UNSET_GENERATION,
         active_generation=4,
-        live_rows=live,
-        live_status="ERROR",
+        live_rows=live.rows,
+        live_status=live.status,
     )
     assert [item.title for item in fallback.rows] == ["specialized"]
     assert fallback.status == "ERROR"
-    stale = generic_session_owned_provider_view(
-        stored_rows=stored,
-        stored_status="SUCCESS",
-        stored_generation=3,
-        active_generation=4,
-        live_rows=live,
-        live_status="SUCCESS",
-    )
+    stale = owned_generic_session_provider(stored=stored, active_generation=5, live=live)
     assert [item.title for item in stale.rows] == ["specialized"]
+    assert stale.summary["usable"] == "9"
+    assert stale.error == "specialized failed"
 
 
 def test_generic_busquedas_keeps_session_owned_ml_after_specialized_overwrite(
@@ -598,42 +686,37 @@ def test_generic_busquedas_keeps_session_owned_ml_after_specialized_overwrite(
     """P1: specialized ML must not mix into the still-active generic Búsquedas session."""
 
     state = TrackerState()
-    state.search_generation = 4
-    plan = plan_search(mode=MODE_MULTI, query="wireless mouse", limit=3)
-    state.search_session_active = True
-    state.search_session_query = plan.query
-    state.search_limit = plan.limit
-    state._prepare_scoped_search(plan)
-    state._finalize_alibaba_search(
-        request_query=plan.query,
-        request_limit=plan.limit,
-        rows=[_alibaba("Generic Alibaba", product_id="ali-generic")],
-        summary={"resultados": "1"},
-        ui_status=UI_SUCCESS,
-        commit_generic_session=True,
-    )
-    state._finalize_facebook_product_search(
-        product_id="",
-        query=plan.query,
-        city=plan.city,
-        rows=[_facebook("Generic Facebook", external_id="fb-generic")],
-        ui_status=UI_SUCCESS,
-        commit_generic_session=True,
-    )
-    state._finalize_mercadolibre_search(
-        search_product_id="",
-        query=plan.query,
-        rows=[_ml("Generic ML listing", external_id="MLV-generic")],
-        summary={"comparable_count": "1", "usable": "1"},
-        ui_status=UI_SUCCESS,
-    )
+    _complete_generic_three_platform_search(state)
     assert state.ml_results_from_generic_session is True
     assert [row.ml_title for row in state.positional_comparison_rows] == ["Generic ML listing"]
+    generic_ml_card = next(
+        card for card in state.generic_marketplace_summaries if card.platform == "Mercado Libre"
+    )
+    generic_average = generic_ml_card.average
+    generic_diag = {line.label: line.value for line in generic_ml_card.diagnostic_lines}
 
     state.ml_results_from_generic_session = False
     state.ml_query = "specialized headphones"
-    state.ml_results = [_ml("Specialized ML listing", external_id="MLV-specialized")]
-    state.ml_summary = {"comparable_count": "1", "usable": "1"}
+    state.ml_results = [
+        _ml(
+            "Specialized ML listing",
+            external_id="MLV-specialized",
+            price="USD 99.00",
+            price_raw="99.00",
+            relevance_value=95,
+        )
+    ]
+    state.ml_summary = {
+        "comparable_count": "9",
+        "usable": "9",
+        "requested": "9",
+        "fetched": "9",
+        "minimo": "USD 99.00",
+        "mediana": "USD 99.00",
+        "precio_tipico": "USD 99.00",
+        "maximo": "USD 99.00",
+    }
+    state.ml_error = "Specialized ML exploded"
     state.ml_ui_status = UI_SUCCESS
     state.show_searches()
 
@@ -649,6 +732,15 @@ def test_generic_busquedas_keeps_session_owned_ml_after_specialized_overwrite(
         card for card in state.generic_marketplace_summaries if card.platform == "Mercado Libre"
     )
     assert ml_card.result_count == "1"
+    assert ml_card.status != "error"
+    assert ml_card.average == generic_average
+    assert "99.00" not in ml_card.average
+    assert "99.00" not in ml_card.minimum
+    assert "Specialized ML exploded" not in ml_card.note
+    assert "Specialized ML exploded" not in ml_card.diagnostic_detail
+    diag = {line.label: line.value for line in ml_card.diagnostic_lines}
+    assert diag == generic_diag
+    assert diag.get("Válidos") != "9"
     assert state.current_export_listing_count() == 3
     captured: dict[str, object] = {}
 
@@ -660,9 +752,17 @@ def test_generic_busquedas_keeps_session_owned_ml_after_specialized_overwrite(
     assert state.export_current_search() is not None
     exported_ml = cast(list[MercadoLibreResultRow], captured["ml_rows"])
     assert [row.title for row in exported_ml] == ["Generic ML listing"]
+    ml_diag = cast(dict[str, object], captured["ml_diagnostic"])
+    assert ml_diag.get("usable") != "9"
+    assert ml_diag.get("detail", "") != "Specialized ML exploded"
     assert state.ml_results[0].title == "Specialized ML listing"
-    specialized = state.comparison_rows
-    ml_specialized_titles = [row.ml_title for row in specialized if row.ml_has_listing]
+    assert state.ml_error == "Specialized ML exploded"
+    spec_ml = next(card for card in state.marketplace_summaries if card.platform == "Mercado Libre")
+    assert spec_ml.result_count == "1"
+    spec_diag = {line.label: line.value for line in spec_ml.diagnostic_lines}
+    assert spec_diag.get("Válidos") == "9"
+    spec_rows = state.comparison_rows
+    ml_specialized_titles = [row.ml_title for row in spec_rows if row.ml_has_listing]
     assert "Specialized ML listing" in ml_specialized_titles
     assert "Generic ML listing" not in ml_specialized_titles
 
@@ -734,3 +834,160 @@ def test_specialized_card_count_equals_visible_projection_not_raw_comparable() -
     )
     assert state.ml_visible_rows == []
     assert empty_card.result_count == "0"
+
+
+def test_generic_busquedas_keeps_session_owned_facebook_after_specialized_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = TrackerState()
+    _complete_generic_three_platform_search(state)
+    generic_fb = next(
+        card
+        for card in state.generic_marketplace_summaries
+        if card.platform == "Facebook Marketplace"
+    )
+    generic_average = generic_fb.average
+    generic_note = generic_fb.note
+
+    state.facebook_product_results = [
+        _facebook(
+            "Specialized Facebook",
+            external_id="fb-specialized",
+            usd_price="USD 999.00",
+            price="USD 999.00",
+        )
+    ]
+    state.facebook_product_summary = {"usable": "9", "requested": "9", "fetched": "9"}
+    state.facebook_product_statistics = [
+        _facebook_stats(
+            label="USD specialized",
+            minimum="999.00",
+            average="999.00",
+            median="999.00",
+            maximum="999.00",
+        )
+    ]
+    state.facebook_product_error = "Specialized Facebook exploded"
+    state.facebook_product_ui_status = UI_ERROR
+    state.show_searches()
+
+    rows = state.positional_comparison_rows
+    assert rows[0].facebook_title == "Generic Facebook"
+    assert rows[0].ml_title == "Generic ML listing"
+    fb_card = next(
+        card
+        for card in state.generic_marketplace_summaries
+        if card.platform == "Facebook Marketplace"
+    )
+    assert fb_card.result_count == "1"
+    assert fb_card.status != "error"
+    assert fb_card.average == generic_average
+    assert "999.00" not in fb_card.average
+    assert "Specialized Facebook exploded" not in fb_card.note
+    assert fb_card.note == generic_note
+    captured: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> list[dict[str, str]]:
+        captured.update(kwargs)
+        return [{column: "" for column in search_export.CSV_COLUMNS}]
+
+    monkeypatch.setattr(search_export, "listing_rows_for_export", capture)
+    assert state.export_current_search() is not None
+    exported_fb = cast(list[FacebookProductResultRow], captured["facebook_rows"])
+    assert [row.title for row in exported_fb] == ["Generic Facebook"]
+    fb_diag = cast(dict[str, object], captured["facebook_diagnostic"])
+    assert fb_diag.get("usable") != "9"
+    assert fb_diag.get("detail", "") != "Specialized Facebook exploded"
+    spec_fb = next(
+        card for card in state.marketplace_summaries if card.platform == "Facebook Marketplace"
+    )
+    assert spec_fb.status == "error"
+    assert "Specialized Facebook exploded" in spec_fb.note
+    assert state.facebook_product_results[0].title == "Specialized Facebook"
+
+
+def test_new_generic_generation_replaces_previous_snapshot_atomically() -> None:
+    state = TrackerState()
+    _complete_generic_three_platform_search(state, generation=4)
+    assert [row.ml_title for row in state.positional_comparison_rows] == ["Generic ML listing"]
+    stale = GenericSessionProviderSnapshot(
+        generation=4,
+        status=UI_SUCCESS,
+        rows=(FakeCandidate("stale"),),
+        summary={"usable": "1", "minimo": "USD 4.00"},
+        error="",
+        metadata={},
+    )
+    live = GenericSessionProviderSnapshot(
+        generation=GENERIC_SESSION_UNSET_GENERATION,
+        status=UI_SUCCESS,
+        rows=(FakeCandidate("keyboard"),),
+        summary={"usable": "1", "minimo": "USD 20.00"},
+        error="",
+        metadata={},
+    )
+    replaced = owned_generic_session_provider(stored=stale, active_generation=5, live=live)
+    assert [item.title for item in replaced.rows] == ["keyboard"]
+    assert replaced.summary["minimo"] == "USD 20.00"
+
+    state.search_generation = 5
+    plan = plan_search(mode=MODE_MULTI, query="keyboard", limit=3)
+    state.search_session_query = plan.query
+    state._prepare_scoped_search(plan)
+    assert state.positional_comparison_rows == []
+    mouse_cards = " ".join(
+        f"{card.average} {card.note} {card.diagnostic_detail}"
+        for card in state.generic_marketplace_summaries
+    )
+    assert "Generic ML listing" not in mouse_cards
+    assert "USD 9.00" not in mouse_cards or all(
+        card.result_count == "0" for card in state.generic_marketplace_summaries
+    )
+
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        rows=[_alibaba("Keyboard Alibaba", product_id="ali-keyboard", price="USD 20.00")],
+        summary={
+            "resultados": "1",
+            "minimo": "USD 20.00",
+            "mediana": "USD 20.00",
+            "promedio": "USD 20.00",
+            "maximo": "USD 20.00",
+            "usable": "1",
+        },
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_facebook_product_search(
+        product_id="",
+        query=plan.query,
+        city=plan.city,
+        rows=[_facebook("Keyboard Facebook", external_id="fb-keyboard")],
+        statistics=[_facebook_stats(minimum="20.00", average="20.00", median="20.00")],
+        summary={"usable": "1"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_mercadolibre_search(
+        search_product_id="",
+        query=plan.query,
+        rows=[_ml("Keyboard ML", external_id="MLV-keyboard", price="USD 20.00")],
+        summary={
+            "usable": "1",
+            "comparable_count": "1",
+            "minimo": "USD 20.00",
+            "precio_tipico": "USD 20.00",
+        },
+        ui_status=UI_SUCCESS,
+    )
+    rows = state.positional_comparison_rows
+    assert [row.alibaba_title for row in rows] == ["Keyboard Alibaba"]
+    assert [row.facebook_title for row in rows] == ["Keyboard Facebook"]
+    assert [row.ml_title for row in rows] == ["Keyboard ML"]
+    assert all("Generic" not in row.ml_title for row in rows)
+    ml_card = next(
+        card for card in state.generic_marketplace_summaries if card.platform == "Mercado Libre"
+    )
+    assert "9.00" not in ml_card.average
+    assert ml_card.result_count == "1"

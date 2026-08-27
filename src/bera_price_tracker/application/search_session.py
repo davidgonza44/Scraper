@@ -643,11 +643,48 @@ def positional_row_authorizes_exact_workflows(
 
 
 @dataclass(frozen=True, slots=True)
-class GenericSessionProviderView[CandidateT]:
-    """Canonical generic-session rows for one provider in the active generation."""
+class GenericSessionProviderSnapshot[CandidateT]:
+    """Generation-owned provider payload for generic Búsquedas and export."""
 
-    rows: tuple[CandidateT, ...]
+    generation: int
     status: str
+    rows: tuple[CandidateT, ...]
+    summary: Mapping[str, str]
+    error: str
+    metadata: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "summary", MappingProxyType(dict(self.summary)))
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+
+
+def empty_generic_session_provider_snapshot[CandidateT]() -> GenericSessionProviderSnapshot[
+    CandidateT
+]:
+    return GenericSessionProviderSnapshot(
+        generation=GENERIC_SESSION_UNSET_GENERATION,
+        status="",
+        rows=(),
+        summary={},
+        error="",
+        metadata={},
+    )
+
+
+def owned_generic_session_provider[CandidateT](
+    *,
+    stored: GenericSessionProviderSnapshot[CandidateT],
+    active_generation: int,
+    live: GenericSessionProviderSnapshot[CandidateT],
+) -> GenericSessionProviderSnapshot[CandidateT]:
+    """Prefer the generation-owned snapshot over later specialized live copies."""
+
+    if (
+        stored.generation != GENERIC_SESSION_UNSET_GENERATION
+        and stored.generation == active_generation
+    ):
+        return stored
+    return live
 
 
 def generic_session_owned_provider_view[CandidateT](
@@ -658,20 +695,28 @@ def generic_session_owned_provider_view[CandidateT](
     active_generation: int,
     live_rows: Sequence[CandidateT],
     live_status: str,
-) -> GenericSessionProviderView[CandidateT]:
-    """Prefer generation-owned canonical rows over later specialized live copies.
+) -> GenericSessionProviderSnapshot[CandidateT]:
+    """Row/status adapter around the generation-owned provider snapshot."""
 
-    When no snapshot exists for the active generic generation, live working
-    copies are used. Specialized overwrites after a generic commit cannot leak
-    into generic Búsquedas, totals, summaries, or export membership.
-    """
-
-    if (
-        stored_generation != GENERIC_SESSION_UNSET_GENERATION
-        and stored_generation == active_generation
-    ):
-        return GenericSessionProviderView(rows=tuple(stored_rows), status=stored_status)
-    return GenericSessionProviderView(rows=tuple(live_rows), status=live_status)
+    return owned_generic_session_provider(
+        stored=GenericSessionProviderSnapshot(
+            generation=stored_generation,
+            status=stored_status,
+            rows=tuple(stored_rows),
+            summary={},
+            error="",
+            metadata={},
+        ),
+        active_generation=active_generation,
+        live=GenericSessionProviderSnapshot(
+            generation=GENERIC_SESSION_UNSET_GENERATION,
+            status=live_status,
+            rows=tuple(live_rows),
+            summary={},
+            error="",
+            metadata={},
+        ),
+    )
 
 
 def freeze_canonical_prefix[CandidateT](
@@ -741,7 +786,7 @@ __all__ = [
     "BoundedAcquisitionPlan",
     "CoverageStatus",
     "ExactProductContext",
-    "GenericSessionProviderView",
+    "GenericSessionProviderSnapshot",
     "InternalAcquisitionStep",
     "ProviderBudgetRule",
     "ProviderRunResult",
@@ -752,10 +797,12 @@ __all__ = [
     "build_search_position_comparison_rows",
     "displayed_listing_total",
     "exact_product_context",
+    "empty_generic_session_provider_snapshot",
     "execute_bounded_provider_search",
     "extend_ordered_usable_pool",
     "freeze_canonical_prefix",
     "generic_session_owned_provider_view",
+    "owned_generic_session_provider",
     "native_listing_ids_establish_cross_market_identity",
     "ordered_usable_pool_from_batches",
     "positional_row_authorizes_exact_workflows",
