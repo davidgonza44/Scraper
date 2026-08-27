@@ -16,6 +16,7 @@ from bera_price_tracker.application.provider_acquisition import ProviderRunMetri
 
 MAX_DISPLAY_LIMIT = 10
 SUPPORTED_DISPLAY_LIMITS = frozenset({1, 3, 5, 10})
+GENERIC_SESSION_UNSET_GENERATION = -1
 
 
 class ProviderStatus(StrEnum):
@@ -641,6 +642,38 @@ def positional_row_authorizes_exact_workflows(
     return False
 
 
+@dataclass(frozen=True, slots=True)
+class GenericSessionProviderView[CandidateT]:
+    """Canonical generic-session rows for one provider in the active generation."""
+
+    rows: tuple[CandidateT, ...]
+    status: str
+
+
+def generic_session_owned_provider_view[CandidateT](
+    *,
+    stored_rows: Sequence[CandidateT],
+    stored_status: str,
+    stored_generation: int,
+    active_generation: int,
+    live_rows: Sequence[CandidateT],
+    live_status: str,
+) -> GenericSessionProviderView[CandidateT]:
+    """Prefer generation-owned canonical rows over later specialized live copies.
+
+    When no snapshot exists for the active generic generation, live working
+    copies are used. Specialized overwrites after a generic commit cannot leak
+    into generic Búsquedas, totals, summaries, or export membership.
+    """
+
+    if (
+        stored_generation != GENERIC_SESSION_UNSET_GENERATION
+        and stored_generation == active_generation
+    ):
+        return GenericSessionProviderView(rows=tuple(stored_rows), status=stored_status)
+    return GenericSessionProviderView(rows=tuple(live_rows), status=live_status)
+
+
 def freeze_canonical_prefix[CandidateT](
     ordered_usable_pool: Sequence[CandidateT],
     display_limit: int,
@@ -700,6 +733,7 @@ def positional_rows_from_snapshot(
 
 
 __all__ = [
+    "GENERIC_SESSION_UNSET_GENERATION",
     "MAX_DISPLAY_LIMIT",
     "SUPPORTED_DISPLAY_LIMITS",
     "AcquisitionBatch",
@@ -707,6 +741,7 @@ __all__ = [
     "BoundedAcquisitionPlan",
     "CoverageStatus",
     "ExactProductContext",
+    "GenericSessionProviderView",
     "InternalAcquisitionStep",
     "ProviderBudgetRule",
     "ProviderRunResult",
@@ -720,6 +755,7 @@ __all__ = [
     "execute_bounded_provider_search",
     "extend_ordered_usable_pool",
     "freeze_canonical_prefix",
+    "generic_session_owned_provider_view",
     "native_listing_ids_establish_cross_market_identity",
     "ordered_usable_pool_from_batches",
     "positional_row_authorizes_exact_workflows",

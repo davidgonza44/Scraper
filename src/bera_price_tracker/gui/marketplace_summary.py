@@ -41,14 +41,10 @@ def _metric(mapping: Mapping[str, object], *keys: str) -> str:
     return EMPTY_METRIC
 
 
-def _projection_result_count(summary_count: str, rows: Sequence[Any]) -> str:
-    """Visible projection count. Empty filtered views cannot claim nonzero results."""
+def visible_result_count(rows: Sequence[Any]) -> str:
+    """Card result_count is the rows passed in, never specialized/raw metrics."""
 
-    if not rows:
-        return "0"
-    if summary_count == EMPTY_METRIC or summary_count == "0":
-        return str(len(rows))
-    return summary_count
+    return str(len(rows))
 
 
 def empty_marketplace_card(platform: str, platform_id: str) -> dict[str, str | int | bool]:
@@ -115,8 +111,7 @@ def alibaba_summary_card(
         return card
     card["status"] = "ready" if ui_status == UI_SUCCESS and rows else "empty-results"
     card["status_label"] = "Resultados" if rows else "Sin resultados"
-    summary_count = _metric(summary, "resultados")
-    card["result_count"] = _projection_result_count(summary_count, rows)
+    card["result_count"] = visible_result_count(rows)
     card["minimum"] = _metric(summary, "minimo")
     card["median"] = _metric(summary, "mediana")
     card["average"] = _metric(summary, "promedio")
@@ -167,8 +162,7 @@ def facebook_summary_card(
         return card
     card["status"] = "ready" if ui_status == UI_SUCCESS and rows else "empty-results"
     card["status_label"] = "Con precio" if rows else "Sin resultados"
-    usable = _metric(summary, "usable")
-    card["result_count"] = _projection_result_count(usable, rows)
+    card["result_count"] = visible_result_count(rows)
     first_stats = statistics[0] if statistics else None
     card["minimum"] = _metric(
         first_stats if isinstance(first_stats, Mapping) else {},
@@ -244,10 +238,7 @@ def mercadolibre_summary_card(
         return card
     card["status"] = "ready" if ui_status == UI_SUCCESS and rows else "empty-results"
     card["status_label"] = "Comparables" if rows else "Sin resultados"
-    count = _metric(summary, "comparable_count")
-    if count == EMPTY_METRIC:
-        count = _metric(summary, "comparables")
-    card["result_count"] = _projection_result_count(count, rows)
+    card["result_count"] = visible_result_count(rows)
     card["minimum"] = _metric(summary, "minimo")
     card["median"] = _metric(summary, "mediana")
     card["average"] = _metric(summary, "precio_tipico")

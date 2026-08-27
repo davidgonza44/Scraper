@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from bera_price_tracker.application.provider_acquisition import ProviderRunMetrics
 from bera_price_tracker.application.search_session import (
+    GENERIC_SESSION_UNSET_GENERATION,
     AcquisitionBatch,
     AcquisitionBudgetPolicy,
     ExactProductContext,
@@ -24,12 +25,14 @@ from bera_price_tracker.application.search_session import (
     exact_product_context,
     execute_bounded_provider_search,
     freeze_canonical_prefix,
+    generic_session_owned_provider_view,
     native_listing_ids_establish_cross_market_identity,
     ordered_usable_pool_from_batches,
     positional_row_authorizes_exact_workflows,
     positional_rows_from_snapshot,
 )
-from bera_price_tracker.gui import analysis, comparison, marketplace_summary
+from bera_price_tracker.gui import analysis, comparison, marketplace_summary, search_export
+from bera_price_tracker.gui.search_scope import MODE_MULTI, plan_search
 from bera_price_tracker.gui.state import (
     UI_SUCCESS,
     AlibabaResultRow,
@@ -554,3 +557,180 @@ def test_association_builder_remains_available_for_specialized_views() -> None:
     )
     assert len(associated) == 1
     assert associated[0]["product_id"] == "ali-A"
+
+
+def test_generic_session_owned_view_prefers_matching_generation_snapshot() -> None:
+    live = (FakeCandidate("specialized"),)
+    stored = (FakeCandidate("generic"),)
+    owned = generic_session_owned_provider_view(
+        stored_rows=stored,
+        stored_status="SUCCESS",
+        stored_generation=4,
+        active_generation=4,
+        live_rows=live,
+        live_status="SUCCESS",
+    )
+    assert [item.title for item in owned.rows] == ["generic"]
+    fallback = generic_session_owned_provider_view(
+        stored_rows=stored,
+        stored_status="SUCCESS",
+        stored_generation=GENERIC_SESSION_UNSET_GENERATION,
+        active_generation=4,
+        live_rows=live,
+        live_status="ERROR",
+    )
+    assert [item.title for item in fallback.rows] == ["specialized"]
+    assert fallback.status == "ERROR"
+    stale = generic_session_owned_provider_view(
+        stored_rows=stored,
+        stored_status="SUCCESS",
+        stored_generation=3,
+        active_generation=4,
+        live_rows=live,
+        live_status="SUCCESS",
+    )
+    assert [item.title for item in stale.rows] == ["specialized"]
+
+
+def test_generic_busquedas_keeps_session_owned_ml_after_specialized_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: specialized ML must not mix into the still-active generic Búsquedas session."""
+
+    state = TrackerState()
+    state.search_generation = 4
+    plan = plan_search(mode=MODE_MULTI, query="wireless mouse", limit=3)
+    state.search_session_active = True
+    state.search_session_query = plan.query
+    state.search_limit = plan.limit
+    state._prepare_scoped_search(plan)
+    state._finalize_alibaba_search(
+        request_query=plan.query,
+        request_limit=plan.limit,
+        rows=[_alibaba("Generic Alibaba", product_id="ali-generic")],
+        summary={"resultados": "1"},
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_facebook_product_search(
+        product_id="",
+        query=plan.query,
+        city=plan.city,
+        rows=[_facebook("Generic Facebook", external_id="fb-generic")],
+        ui_status=UI_SUCCESS,
+        commit_generic_session=True,
+    )
+    state._finalize_mercadolibre_search(
+        search_product_id="",
+        query=plan.query,
+        rows=[_ml("Generic ML listing", external_id="MLV-generic")],
+        summary={"comparable_count": "1", "usable": "1"},
+        ui_status=UI_SUCCESS,
+    )
+    assert state.ml_results_from_generic_session is True
+    assert [row.ml_title for row in state.positional_comparison_rows] == ["Generic ML listing"]
+
+    state.ml_results_from_generic_session = False
+    state.ml_query = "specialized headphones"
+    state.ml_results = [_ml("Specialized ML listing", external_id="MLV-specialized")]
+    state.ml_summary = {"comparable_count": "1", "usable": "1"}
+    state.ml_ui_status = UI_SUCCESS
+    state.show_searches()
+
+    rows = state.positional_comparison_rows
+    assert len(rows) == 1
+    assert rows[0].resultado_label == "Resultado #1"
+    assert rows[0].alibaba_title == "Generic Alibaba"
+    assert rows[0].facebook_title == "Generic Facebook"
+    assert rows[0].ml_title == "Generic ML listing"
+    assert rows[0].ml_title != "Specialized ML listing"
+    assert state.search_total_results == "3"
+    ml_card = next(
+        card for card in state.generic_marketplace_summaries if card.platform == "Mercado Libre"
+    )
+    assert ml_card.result_count == "1"
+    assert state.current_export_listing_count() == 3
+    captured: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> list[dict[str, str]]:
+        captured.update(kwargs)
+        return [{column: "" for column in search_export.CSV_COLUMNS}]
+
+    monkeypatch.setattr(search_export, "listing_rows_for_export", capture)
+    assert state.export_current_search() is not None
+    exported_ml = cast(list[MercadoLibreResultRow], captured["ml_rows"])
+    assert [row.title for row in exported_ml] == ["Generic ML listing"]
+    assert state.ml_results[0].title == "Specialized ML listing"
+    specialized = state.comparison_rows
+    ml_specialized_titles = [row.ml_title for row in specialized if row.ml_has_listing]
+    assert "Specialized ML listing" in ml_specialized_titles
+    assert "Generic ML listing" not in ml_specialized_titles
+
+
+def test_generic_card_count_equals_canonical_rows_not_comparable_count() -> None:
+    """P2: generic Búsquedas counts canonical session rows, not specialized comparables."""
+
+    state = TrackerState()
+    state.search_limit = 5
+    state.ml_ui_status = UI_SUCCESS
+    state.ml_min_relevance = 60
+    state.ml_results = [
+        _ml("ML low", relevance_value=10, external_id="MLV-1"),
+        _ml("ML mid", relevance_value=40, external_id="MLV-2"),
+        _ml("ML high", relevance_value=90, external_id="MLV-3"),
+    ]
+    state.ml_summary = {
+        "comparable_count": "1",
+        "comparables": "1 de 3",
+        "usable": "3",
+        "requested": "3",
+        "fetched": "3",
+    }
+    assert [row.title for row in state.ml_visible_rows] == ["ML high"]
+    assert state.search_total_results == "3"
+    rows = state.positional_comparison_rows
+    assert len(rows) == 3
+    assert [row.ml_title for row in rows] == ["ML low", "ML mid", "ML high"]
+    ml_card = next(
+        card for card in state.generic_marketplace_summaries if card.platform == "Mercado Libre"
+    )
+    assert ml_card.result_count == "3"
+
+
+def test_specialized_card_count_equals_visible_projection_not_raw_comparable() -> None:
+    """P2: specialized cards follow the filtered projection, including empty."""
+
+    cards_one = marketplace_summary.build_marketplace_summaries(
+        alibaba_ui_status=UI_SUCCESS,
+        alibaba_summary={"resultados": "3"},
+        alibaba_rows=[_alibaba("A1"), _alibaba("A2", product_id="ali-2")],
+        facebook_ui_status=UI_SUCCESS,
+        facebook_summary={"usable": "3"},
+        facebook_rows=[_facebook("F1")],
+        ml_ui_status=UI_SUCCESS,
+        ml_summary={"comparable_count": "3", "comparables": "3"},
+        ml_rows=[_ml("ML high", relevance_value=90)],
+    )
+    assert cards_one[0]["result_count"] == "2"
+    assert cards_one[1]["result_count"] == "1"
+    assert cards_one[2]["result_count"] == "1"
+
+    state = TrackerState()
+    state.ml_ui_status = UI_SUCCESS
+    state.ml_min_relevance = 60
+    state.ml_results = [
+        _ml("ML low", relevance_value=10, external_id="MLV-1"),
+        _ml("ML mid", relevance_value=40, external_id="MLV-2"),
+        _ml("ML high", relevance_value=90, external_id="MLV-3"),
+    ]
+    state.ml_summary = {"comparable_count": "3", "usable": "3"}
+    ml_card = next(card for card in state.marketplace_summaries if card.platform == "Mercado Libre")
+    assert len(state.ml_visible_rows) == 1
+    assert ml_card.result_count == "1"
+
+    state.ml_min_relevance = 99
+    empty_card = next(
+        card for card in state.marketplace_summaries if card.platform == "Mercado Libre"
+    )
+    assert state.ml_visible_rows == []
+    assert empty_card.result_count == "0"

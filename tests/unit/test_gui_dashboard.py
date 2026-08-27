@@ -296,7 +296,7 @@ def test_summary_cards_use_real_ready_data_only() -> None:
         },
         ml_rows=[MercadoLibreResultRow(condition="Nuevo", seller_name="Tienda")],
     )
-    assert cards[0]["result_count"] == "3"
+    assert cards[0]["result_count"] == "1"
     assert cards[0]["meta_one"] == "MOQ típico: 10"
     assert cards[1]["meta_one"] == "USD normalizado · Facebook Venezuela"
     assert cards[2]["meta_one"] == "Nuevo"

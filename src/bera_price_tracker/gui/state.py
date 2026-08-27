@@ -26,6 +26,10 @@ from bera_price_tracker.application.alibaba_ranking import (
     validate_ranking_weights,
 )
 from bera_price_tracker.application.mercadolibre_benchmark import DEFAULT_BENCHMARK_RELEVANCE
+from bera_price_tracker.application.search_session import (
+    GENERIC_SESSION_UNSET_GENERATION,
+    generic_session_owned_provider_view,
+)
 from bera_price_tracker.application.services import (
     alibaba_credit_warning,
     mercadolibre_credit_warning,
@@ -513,6 +517,15 @@ class TrackerState(rx.State):
     ml_translation_source_language: str = ""
     ml_query_origin: str = ""
     ml_results_from_generic_session: bool = False
+    generic_session_alibaba_results: list[AlibabaResultRow] = []
+    generic_session_alibaba_status: str = UI_INITIAL
+    generic_session_alibaba_generation: int = GENERIC_SESSION_UNSET_GENERATION
+    generic_session_facebook_results: list[FacebookProductResultRow] = []
+    generic_session_facebook_status: str = UI_INITIAL
+    generic_session_facebook_generation: int = GENERIC_SESSION_UNSET_GENERATION
+    generic_session_ml_results: list[MercadoLibreResultRow] = []
+    generic_session_ml_status: str = UI_INITIAL
+    generic_session_ml_generation: int = GENERIC_SESSION_UNSET_GENERATION
     facebook_product_query: str = ""
     facebook_product_city: str = "caracas"
     facebook_product_limit: int = 5
@@ -1279,6 +1292,7 @@ class TrackerState(rx.State):
         ui_status: str = "",
         error_message: str | None = None,
         request_generation: int | None = None,
+        commit_generic_session: bool = False,
     ) -> None:
         if request_generation is not None and request_generation != self.search_generation:
             return
@@ -1299,12 +1313,16 @@ class TrackerState(rx.State):
             self.alibaba_summary = {}
             self.alibaba_stats_raw = {}
             self.alibaba_ui_status = UI_ERROR
+            if commit_generic_session:
+                self._commit_generic_session_alibaba()
             return
         self.alibaba_error = ""
         self.alibaba_results = list(rows or [])
         self.alibaba_summary = dict(summary or {})
         self.alibaba_stats_raw = dict(stats_raw or {})
         self.alibaba_ui_status = ui_status or UI_EMPTY
+        if commit_generic_session:
+            self._commit_generic_session_alibaba()
 
     def _clear_facebook_product_results(self) -> None:
         self.facebook_product_results = []
@@ -1468,6 +1486,7 @@ class TrackerState(rx.State):
         ui_status: str = "",
         error_message: str | None = None,
         request_generation: int | None = None,
+        commit_generic_session: bool = False,
     ) -> None:
         if request_generation is not None and request_generation != self.search_generation:
             return
@@ -1488,6 +1507,8 @@ class TrackerState(rx.State):
             self.facebook_product_provenance = {}
             self.facebook_product_error = error_message
             self.facebook_product_ui_status = UI_ERROR
+            if commit_generic_session:
+                self._commit_generic_session_facebook()
             return
         self.facebook_product_results = list(rows or [])
         self.facebook_product_statistics = list(statistics or [])
@@ -1505,6 +1526,8 @@ class TrackerState(rx.State):
             if product_id
             else {}
         )
+        if commit_generic_session:
+            self._commit_generic_session_facebook()
 
     @rx.event(background=True)
     async def search_facebook_products(self) -> None:
@@ -1875,6 +1898,7 @@ class TrackerState(rx.State):
         ui_status: str = "",
         error_message: str | None = None,
         request_generation: int | None = None,
+        commit_generic_session: bool | None = None,
     ) -> None:
         if request_generation is not None and request_generation != self.search_generation:
             return
@@ -1887,12 +1911,19 @@ class TrackerState(rx.State):
                 self.ml_ui_status = UI_INITIAL
             return
         self.ml_is_loading = False
+        should_commit = (
+            self.ml_results_from_generic_session
+            if commit_generic_session is None
+            else commit_generic_session
+        )
         if error_message is not None:
             self.ml_error = error_message
             self.ml_results = []
             self.ml_summary = {}
             self.ml_ui_status = UI_ERROR
             self._invalidate_ml_comparison()
+            if should_commit:
+                self._commit_generic_session_ml()
             return
         self.ml_error = ""
         self.ml_results = list(rows or [])
@@ -1901,6 +1932,8 @@ class TrackerState(rx.State):
         self.ml_last_search_query = query.strip()
         self.ml_association_product_id = search_product_id
         self._invalidate_ml_comparison()
+        if should_commit:
+            self._commit_generic_session_ml()
 
     @rx.event(background=True)
     async def search_mercadolibre(self) -> None:
@@ -2173,6 +2206,7 @@ class TrackerState(rx.State):
         self.alibaba_stats_raw = {}
         self.alibaba_error = ""
         self.diagnostic_open_platforms = []
+        self._clear_generic_session_alibaba()
         if PLATFORM_ALIBABA in selected:
             self.alibaba_query = plan.query
             self.alibaba_limit = plan.limit
@@ -2186,6 +2220,7 @@ class TrackerState(rx.State):
         self.facebook_product_summary = {}
         self.facebook_product_error = ""
         self.facebook_product_provenance = {}
+        self._clear_generic_session_facebook()
         if PLATFORM_FACEBOOK in selected:
             self.facebook_product_query = plan.query
             self.facebook_product_limit = plan.limit
@@ -2198,6 +2233,7 @@ class TrackerState(rx.State):
         self.ml_results = []
         self.ml_summary = {}
         self.ml_error = ""
+        self._clear_generic_session_ml()
         if PLATFORM_ML in selected:
             self.ml_query = plan.query
             self.ml_limit = plan.limit
@@ -2261,6 +2297,7 @@ class TrackerState(rx.State):
                             request_limit=plan.limit,
                             error_message=services.sanitize_alibaba_error(exc),
                             request_generation=generation,
+                            commit_generic_session=True,
                         )
                     elif provider == PLATFORM_FACEBOOK:
                         # Session search is never an Alibaba-comparable lookup.
@@ -2270,6 +2307,7 @@ class TrackerState(rx.State):
                             city=plan.city,
                             error_message=services.sanitize_facebook_product_error(exc),
                             request_generation=generation,
+                            commit_generic_session=True,
                         )
                     else:
                         self._finalize_mercadolibre_search(
@@ -2277,6 +2315,7 @@ class TrackerState(rx.State):
                             query=plan.query,
                             error_message=services.sanitize_mercadolibre_error(exc),
                             request_generation=generation,
+                            commit_generic_session=True,
                         )
                 return
             if not isinstance(payload, dict):
@@ -2291,6 +2330,7 @@ class TrackerState(rx.State):
                         stats_raw=dict(payload.get("stats_raw") or {}),
                         ui_status=str(payload.get("ui_status") or UI_EMPTY),
                         request_generation=generation,
+                        commit_generic_session=True,
                     )
                 elif provider == PLATFORM_FACEBOOK:
                     rows, statistics = self._facebook_rows_from_payload(payload)
@@ -2303,6 +2343,7 @@ class TrackerState(rx.State):
                         summary=dict(payload.get("summary") or {}),
                         ui_status=str(payload.get("ui_status") or UI_EMPTY),
                         request_generation=generation,
+                        commit_generic_session=True,
                     )
                 else:
                     self._finalize_mercadolibre_search(
@@ -2312,6 +2353,7 @@ class TrackerState(rx.State):
                         summary=dict(payload.get("summary") or {}),
                         ui_status=str(payload.get("ui_status") or UI_EMPTY),
                         request_generation=generation,
+                        commit_generic_session=True,
                     )
 
         await asyncio.gather(*[run_provider(provider) for provider in plan.providers])
@@ -2561,6 +2603,9 @@ class TrackerState(rx.State):
         self.ml_is_loading = False
         self.ml_ui_status = UI_INITIAL
         self.ml_results_from_generic_session = False
+        self._clear_generic_session_alibaba()
+        self._clear_generic_session_facebook()
+        self._clear_generic_session_ml()
         self.diagnostic_open_platforms = []
         self._detach_alibaba_comparable_context()
 
@@ -3093,14 +3138,13 @@ class TrackerState(rx.State):
 
     @rx.var
     def search_total_results(self) -> str:
+        alibaba_rows, alibaba_status = self._generic_session_alibaba_view()
+        facebook_rows, facebook_status = self._generic_session_facebook_view()
+        ml_rows, ml_status = self._generic_session_ml_view()
         return str(
-            len(self._canonical_search_rows(self.alibaba_results, self.alibaba_ui_status))
-            + len(
-                self._canonical_search_rows(
-                    self.facebook_product_results, self.facebook_product_ui_status
-                )
-            )
-            + len(self._canonical_search_rows(self.ml_results, self.ml_ui_status))
+            len(self._canonical_search_rows(alibaba_rows, alibaba_status))
+            + len(self._canonical_search_rows(facebook_rows, facebook_status))
+            + len(self._canonical_search_rows(ml_rows, ml_status))
         )
 
     @rx.var
@@ -3200,6 +3244,69 @@ class TrackerState(rx.State):
             parts.append(f"Alibaba · {self.alibaba_summary['resultados']} resultados")
         return " · ".join(parts)
 
+    def _clear_generic_session_alibaba(self) -> None:
+        self.generic_session_alibaba_results = []
+        self.generic_session_alibaba_status = UI_INITIAL
+        self.generic_session_alibaba_generation = GENERIC_SESSION_UNSET_GENERATION
+
+    def _clear_generic_session_facebook(self) -> None:
+        self.generic_session_facebook_results = []
+        self.generic_session_facebook_status = UI_INITIAL
+        self.generic_session_facebook_generation = GENERIC_SESSION_UNSET_GENERATION
+
+    def _clear_generic_session_ml(self) -> None:
+        self.generic_session_ml_results = []
+        self.generic_session_ml_status = UI_INITIAL
+        self.generic_session_ml_generation = GENERIC_SESSION_UNSET_GENERATION
+
+    def _commit_generic_session_alibaba(self) -> None:
+        self.generic_session_alibaba_results = list(self.alibaba_results)
+        self.generic_session_alibaba_status = self.alibaba_ui_status
+        self.generic_session_alibaba_generation = self.search_generation
+
+    def _commit_generic_session_facebook(self) -> None:
+        self.generic_session_facebook_results = list(self.facebook_product_results)
+        self.generic_session_facebook_status = self.facebook_product_ui_status
+        self.generic_session_facebook_generation = self.search_generation
+
+    def _commit_generic_session_ml(self) -> None:
+        self.generic_session_ml_results = list(self.ml_results)
+        self.generic_session_ml_status = self.ml_ui_status
+        self.generic_session_ml_generation = self.search_generation
+
+    def _generic_session_alibaba_view(self) -> tuple[list[AlibabaResultRow], str]:
+        view = generic_session_owned_provider_view(
+            stored_rows=self.generic_session_alibaba_results,
+            stored_status=self.generic_session_alibaba_status,
+            stored_generation=self.generic_session_alibaba_generation,
+            active_generation=self.search_generation,
+            live_rows=self.alibaba_results,
+            live_status=self.alibaba_ui_status,
+        )
+        return list(view.rows), view.status
+
+    def _generic_session_facebook_view(self) -> tuple[list[FacebookProductResultRow], str]:
+        view = generic_session_owned_provider_view(
+            stored_rows=self.generic_session_facebook_results,
+            stored_status=self.generic_session_facebook_status,
+            stored_generation=self.generic_session_facebook_generation,
+            active_generation=self.search_generation,
+            live_rows=self.facebook_product_results,
+            live_status=self.facebook_product_ui_status,
+        )
+        return list(view.rows), view.status
+
+    def _generic_session_ml_view(self) -> tuple[list[MercadoLibreResultRow], str]:
+        view = generic_session_owned_provider_view(
+            stored_rows=self.generic_session_ml_results,
+            stored_status=self.generic_session_ml_status,
+            stored_generation=self.generic_session_ml_generation,
+            active_generation=self.search_generation,
+            live_rows=self.ml_results,
+            live_status=self.ml_ui_status,
+        )
+        return list(view.rows), view.status
+
     def _canonical_search_rows(self, rows: list[Any], status: str) -> list[Any]:
         """Frozen generic-search prefix. Ignores specialized sort/filter projections."""
 
@@ -3259,43 +3366,47 @@ class TrackerState(rx.State):
 
     @rx.var
     def generic_marketplace_summaries(self) -> list[MarketplaceSummaryCard]:
+        alibaba_rows, alibaba_status = self._generic_session_alibaba_view()
+        facebook_rows, facebook_status = self._generic_session_facebook_view()
+        ml_rows, ml_status = self._generic_session_ml_view()
+        canonical_alibaba = self._canonical_search_rows(alibaba_rows, alibaba_status)
+        canonical_facebook = self._canonical_search_rows(facebook_rows, facebook_status)
+        canonical_ml = self._canonical_search_rows(ml_rows, ml_status)
         raw = marketplace_summary.build_marketplace_summaries(
-            alibaba_ui_status=self.alibaba_ui_status,
+            alibaba_ui_status=alibaba_status,
             alibaba_summary=self.alibaba_summary,
-            alibaba_rows=self._canonical_search_rows(self.alibaba_results, self.alibaba_ui_status),
-            facebook_ui_status=self.facebook_product_ui_status,
+            alibaba_rows=canonical_alibaba,
+            facebook_ui_status=facebook_status,
             facebook_summary=self.facebook_product_summary,
             facebook_statistics=self.facebook_product_statistics,
-            facebook_rows=self._canonical_search_rows(
-                self.facebook_product_results, self.facebook_product_ui_status
-            ),
+            facebook_rows=canonical_facebook,
             facebook_error=self.facebook_product_error,
-            ml_ui_status=self.ml_ui_status,
+            ml_ui_status=ml_status,
             ml_summary=self._ml_diagnostic_summary(),
-            ml_rows=self._canonical_search_rows(self.ml_results, self.ml_ui_status),
+            ml_rows=canonical_ml,
         )
         attached = search_diagnostics.attach_diagnostics(
             raw,
             [
                 search_diagnostics.alibaba_diagnostic(
-                    ui_status=self.alibaba_ui_status,
+                    ui_status=alibaba_status,
                     summary=self.alibaba_summary,
                     requested_limit=self.search_limit,
-                    usable_rows=len(self.alibaba_results),
+                    usable_rows=len(canonical_alibaba),
                     error=self.alibaba_error,
                 ),
                 search_diagnostics.facebook_diagnostic(
-                    ui_status=self.facebook_product_ui_status,
+                    ui_status=facebook_status,
                     summary=self.facebook_product_summary,
                     requested_limit=self.search_limit,
-                    usable_rows=len(self.facebook_product_results),
+                    usable_rows=len(canonical_facebook),
                     error=self.facebook_product_error,
                 ),
                 search_diagnostics.mercadolibre_diagnostic(
-                    ui_status=self.ml_ui_status,
+                    ui_status=ml_status,
                     summary=self._ml_diagnostic_summary(),
                     requested_limit=self.search_limit,
-                    usable_rows=len(self.ml_results),
+                    usable_rows=len(canonical_ml),
                     error=self.ml_error,
                 ),
             ],
@@ -3333,13 +3444,16 @@ class TrackerState(rx.State):
 
     @rx.var
     def positional_comparison_rows(self) -> list[ComparisonRow]:
+        alibaba_rows, alibaba_status = self._generic_session_alibaba_view()
+        facebook_rows, facebook_status = self._generic_session_facebook_view()
+        ml_rows, ml_status = self._generic_session_ml_view()
         raw = comparison.build_positional_comparison_rows(
-            alibaba_rows=self.alibaba_results,
-            facebook_rows=self.facebook_product_results,
-            ml_rows=self.ml_results,
-            alibaba_status=self.alibaba_ui_status,
-            facebook_status=self.facebook_product_ui_status,
-            ml_status=self.ml_ui_status,
+            alibaba_rows=alibaba_rows,
+            facebook_rows=facebook_rows,
+            ml_rows=ml_rows,
+            alibaba_status=alibaba_status,
+            facebook_status=facebook_status,
+            ml_status=ml_status,
             display_limit=self.search_limit,
         )
         return [ComparisonRow.model_validate(item) for item in raw]
@@ -3349,13 +3463,16 @@ class TrackerState(rx.State):
         return len(self.positional_comparison_rows) > 0
 
     def current_export_listing_count(self) -> int:
+        alibaba_rows, alibaba_status = self._generic_session_alibaba_view()
+        facebook_rows, facebook_status = self._generic_session_facebook_view()
+        ml_rows, ml_status = self._generic_session_ml_view()
         count = 0
-        if self.alibaba_ui_status == UI_SUCCESS:
-            count += len(self.alibaba_results)
-        if self.facebook_product_ui_status == UI_SUCCESS:
-            count += len(self.facebook_product_results)
-        if self.ml_ui_status == UI_SUCCESS:
-            count += len(self.ml_results)
+        if alibaba_status == UI_SUCCESS:
+            count += len(self._canonical_search_rows(alibaba_rows, alibaba_status))
+        if facebook_status == UI_SUCCESS:
+            count += len(self._canonical_search_rows(facebook_rows, facebook_status))
+        if ml_status == UI_SUCCESS:
+            count += len(self._canonical_search_rows(ml_rows, ml_status))
         return count
 
     @rx.var
@@ -3378,30 +3495,36 @@ class TrackerState(rx.State):
     def export_current_search(self) -> object:
         """Download current-session listings as CSV. Zero provider I/O."""
 
+        alibaba_rows, alibaba_status = self._generic_session_alibaba_view()
+        facebook_rows, facebook_status = self._generic_session_facebook_view()
+        ml_rows, ml_status = self._generic_session_ml_view()
+        canonical_alibaba = self._canonical_search_rows(alibaba_rows, alibaba_status)
+        canonical_facebook = self._canonical_search_rows(facebook_rows, facebook_status)
+        canonical_ml = self._canonical_search_rows(ml_rows, ml_status)
         if not search_diagnostics.export_enabled(
             phase=self.search_session_phase,
             listing_count=self.current_export_listing_count(),
         ):
             return None
         alibaba_diag = search_diagnostics.alibaba_diagnostic(
-            ui_status=self.alibaba_ui_status,
+            ui_status=alibaba_status,
             summary=self.alibaba_summary,
             requested_limit=self.search_limit,
-            usable_rows=len(self.alibaba_results),
+            usable_rows=len(canonical_alibaba),
             error=self.alibaba_error,
         )
         facebook_diag = search_diagnostics.facebook_diagnostic(
-            ui_status=self.facebook_product_ui_status,
+            ui_status=facebook_status,
             summary=self.facebook_product_summary,
             requested_limit=self.search_limit,
-            usable_rows=len(self.facebook_product_results),
+            usable_rows=len(canonical_facebook),
             error=self.facebook_product_error,
         )
         ml_diag = search_diagnostics.mercadolibre_diagnostic(
-            ui_status=self.ml_ui_status,
+            ui_status=ml_status,
             summary=self._ml_diagnostic_summary(),
             requested_limit=self.search_limit,
-            usable_rows=len(self.ml_results),
+            usable_rows=len(canonical_ml),
             error=self.ml_error,
         )
         rows = search_export.listing_rows_for_export(
@@ -3409,14 +3532,14 @@ class TrackerState(rx.State):
             searched_at=self.search_completed_at,
             search_mode=self.search_mode_label,
             requested_limit=self.search_limit,
-            alibaba_status=self.alibaba_ui_status,
-            alibaba_rows=self.alibaba_results,
+            alibaba_status=alibaba_status,
+            alibaba_rows=canonical_alibaba,
             alibaba_diagnostic=alibaba_diag,
-            facebook_status=self.facebook_product_ui_status,
-            facebook_rows=self.facebook_product_results,
+            facebook_status=facebook_status,
+            facebook_rows=canonical_facebook,
             facebook_diagnostic=facebook_diag,
-            ml_status=self.ml_ui_status,
-            ml_rows=self.ml_results,
+            ml_status=ml_status,
+            ml_rows=canonical_ml,
             ml_diagnostic=ml_diag,
         )
         if not rows:
