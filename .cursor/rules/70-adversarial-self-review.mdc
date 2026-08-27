@@ -36,3 +36,40 @@ Compare every consumer of the changed state, not only the function that produced
 
 If a counterexample breaks the requirement:
 add a regression and fix it before declaring completion.
+
+## Mutable intent / snapshot adversarial checks
+
+Whenever a value becomes generation-owned or snapshot-owned:
+
+1. Search the entire repository for every read of the corresponding live/mutable state.
+2. Classify every consumer as:
+   - setup / next-search configuration
+   - active generic-session consumer
+   - specialized-view consumer
+3. Verify generic-session consumers never read the mutable setup value.
+
+For generic search, actively mutate after the generation starts:
+
+- query
+- display limit
+- search mode
+- selected platform/providers
+- filters
+- sorting
+- specialized provider state
+
+For each mutation verify that:
+
+- canonical membership does not change
+- provider participation does not change
+- session phase does not change incorrectly
+- labels do not change
+- totals do not change
+- summaries do not change
+- diagnostics do not change
+- export membership does not change
+
+unless a new generic generation is explicitly started.
+
+Search all UI and backend consumers of every changed source of truth.
+Do not stop after verifying the producer.
