@@ -1,3 +1,38 @@
 ---
+description: "Require adversarial review after tests pass"
 alwaysApply: true
 ---
+
+# Adversarial Self Review
+
+Passing tests begins review; it does not end it.
+
+After all tests pass, attempt to falsify the implementation.
+
+For every changed invariant, construct at least one counterexample involving where relevant:
+
+- empty input
+- one result
+- maximum allowed results
+- missing optional metadata
+- ERROR
+- EMPTY
+- PARTIAL
+- stale generation
+- later specialized operation
+- navigation away and back
+- filtering
+- sorting
+- duplicate identity
+- identity-less item
+- different query
+- different provider
+- async completion after replacement
+- export after state mutation
+
+Search specifically for shared mutable state touched by both generic and specialized workflows.
+
+Compare every consumer of the changed state, not only the function that produced it.
+
+If a counterexample breaks the requirement:
+add a regression and fix it before declaring completion.
