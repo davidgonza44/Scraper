@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 import pytest
 
@@ -153,12 +153,36 @@ def test_url_encoding_uses_quote_plus() -> None:
     assert url == (
         "https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&keywords="
         + quote_plus(query)
+        + "&page=1"
     )
     assert "keywords=Men%27s+Jackets" in url
     payload = build_alibaba_run_input(query=query, limit=10)
     assert list(payload.keys()) == ["urls", "maxItems"]
     assert payload["urls"] == [url]
     assert payload["maxItems"] == 10
+
+
+def test_alibaba_search_url_includes_page_one() -> None:
+    """Actor search URLs must include page=1 or the dataset comes back empty."""
+
+    query = "Iphone 15"
+    url = build_alibaba_search_url(query)
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "www.alibaba.com"
+    assert parsed.path == "/trade/search"
+    assert params.get("page") == ["1"]
+    assert params.get("fsb") == ["y"]
+    assert params.get("IndexArea") == ["product_en"]
+    assert params.get("keywords") == [query]
+
+    payload = build_alibaba_run_input(query=query, limit=20)
+    assert payload["urls"] == [url]
+    actor_url = cast(list[object], payload["urls"])[0]
+    assert isinstance(actor_url, str)
+    assert parse_qs(urlparse(actor_url).query).get("page") == ["1"]
 
 
 @pytest.mark.parametrize("limit", [1, 20, 500])

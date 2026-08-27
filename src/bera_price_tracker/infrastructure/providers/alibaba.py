@@ -50,7 +50,9 @@ def build_alibaba_search_url(query: str) -> str:
     """Build the single trade/search URL required by this Actor schema."""
 
     encoded = quote_plus(query)
-    return f"https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&keywords={encoded}"
+    return (
+        f"https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&keywords={encoded}&page=1"
+    )
 
 
 def build_alibaba_run_input(*, query: str, limit: int) -> dict[str, object]:
