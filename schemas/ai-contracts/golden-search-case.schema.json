@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "golden-search-case.schema.json",
   "title": "GoldenSearchCase",
-  "description": "Golden example of multi-market search semantics. Fixtures illustrate OpenSpec; they are not a competing source of truth. implementation_stage A-E marks staged work. Later-stage fixtures describe expected semantics and must not be treated as implemented. The provider field uses current BERA marketplace vocabulary. Structural PR A contracts remain provider-neutral.",
+  "description": "Golden example of multi-market search semantics. Fixtures illustrate OpenSpec; they are not a competing source of truth. implementation_stage A-E marks staged work. Later-stage fixtures describe expected semantics and must not be treated as implemented. The provider field uses current BERA marketplace vocabulary. Structural PR A contracts remain provider-neutral. Implementation PR B positional comparison is implemented.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -44,7 +44,7 @@
     "implementation_stage": {
       "type": "string",
       "enum": ["A", "B", "C", "D", "E"],
-      "description": "OpenSpec implementation PR that owns this semantic. A is the search-session core and is implemented. B-E remain unimplemented until their PRs land."
+      "description": "OpenSpec implementation PR that owns this semantic. A (search-session core) and B (positional comparison) are implemented. C-E remain unimplemented until their PRs land."
     },
     "runtime_check": {
       "type": ["string", "null"],
@@ -55,9 +55,10 @@
         "mercadolibre_search_boundary",
         "search_session_core",
         "facebook_one_execute",
+        "positional_comparison",
         null
       ],
-      "description": "Selects exactly one runtime handler in tests/unit/test_ai_contracts.py. Unknown values fail. Later-stage B-E fixtures may keep runtime_check null."
+      "description": "Selects exactly one runtime handler in tests/unit/test_ai_contracts.py. Unknown values fail. Later-stage C-E fixtures may keep runtime_check null."
     },
     "given": {
       "type": "object"

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from bera_price_tracker.gui import comparison, marketplace_summary, views
+from bera_price_tracker.gui.brands import PLATFORM_ALIBABA
 from bera_price_tracker.gui.images import image_alt_text, safe_public_image_url
 from bera_price_tracker.gui.navigation import NAV_ITEMS, NAV_LABELS
+from bera_price_tracker.gui.search_scope import MODE_SINGLE, plan_search
 from bera_price_tracker.gui.services import (
     alibaba_product_to_row,
     facebook_product_listing_to_row,
@@ -296,7 +299,7 @@ def test_summary_cards_use_real_ready_data_only() -> None:
         },
         ml_rows=[MercadoLibreResultRow(condition="Nuevo", seller_name="Tienda")],
     )
-    assert cards[0]["result_count"] == "3"
+    assert cards[0]["result_count"] == "1"
     assert cards[0]["meta_one"] == "MOQ típico: 10"
     assert cards[1]["meta_one"] == "USD normalizado · Facebook Venezuela"
     assert cards[2]["meta_one"] == "Nuevo"
@@ -413,6 +416,190 @@ def test_views_declare_three_marketplace_columns() -> None:
         encoding="utf-8"
     )
     assert "dashboard()" in views.__dict__ or hasattr(views, "dashboard")
+
+
+def _component_repr(node: object, *, depth: int = 0) -> str:
+    if node is None or depth > 16:
+        return ""
+    chunks = [repr(node)]
+    children = getattr(node, "children", None)
+    if isinstance(children, list | tuple):
+        for child in children:
+            chunks.append(_component_repr(child, depth=depth + 1))
+    contents = getattr(node, "contents", None)
+    if isinstance(contents, list | tuple):
+        for child in contents:
+            chunks.append(_component_repr(child, depth=depth + 1))
+    render = getattr(node, "render", None)
+    if callable(render):
+        try:
+            rendered = render()
+        except Exception:  # noqa: BLE001 - dump helper must not fail the test setup
+            rendered = None
+        if rendered is not None and rendered is not node:
+            chunks.append(repr(rendered))
+            if isinstance(rendered, dict):
+                chunks.append(str(rendered))
+            else:
+                chunks.append(_component_repr(rendered, depth=depth + 1))
+    return "\n".join(chunks)
+
+
+def test_marketplace_cell_renders_provider_title_visibly_not_only_as_alt() -> None:
+    from bera_price_tracker.gui.components import comparison as comparison_ui
+
+    title = "Alibaba listing title visible-xyz"
+    cell = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="https://s.alicdn.com/a.jpg",
+        title=title,
+        price="$4.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="",
+        relevance="",
+        match_label="",
+        url="https://www.alibaba.com/p/1",
+        empty_label="—",
+    )
+    source = inspect.getsource(comparison_ui.marketplace_cell)
+    assert "rx.text(title," in source
+    thumbnail_index = source.index("product_thumbnail")
+    visible_title_index = source.index("rx.text(title,")
+    alt_index = source.index("alt=title")
+    assert visible_title_index > thumbnail_index
+    assert alt_index != visible_title_index
+
+    blob = _component_repr(cell)
+    assert title in blob
+    assert blob.lower().count(title.lower()) >= 2
+
+    blank = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="",
+        price="$4.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+    )
+    blank_blob = _component_repr(blank)
+    assert "Sin título" not in blank_blob
+    assert "Untitled" not in blank_blob
+
+
+def test_marketplace_cell_renders_ml_shipping_and_official_store() -> None:
+    from bera_price_tracker.gui.components import comparison as comparison_ui
+
+    source = inspect.getsource(comparison_ui)
+    assert 'line_three=row["ml_shipping"]' in source
+    assert source.count('line_three=row["ml_shipping"]') == 2
+    assert "def comparison_row(" in source
+    assert "def positional_comparison_row(" in source
+    comparison_fn = inspect.getsource(comparison_ui.comparison_row)
+    positional_fn = inspect.getsource(comparison_ui.positional_comparison_row)
+    assert 'line_three=row["ml_shipping"]' in comparison_fn
+    assert 'line_four=row["ml_official_store"]' in comparison_fn
+    assert 'line_three=row["ml_shipping"]' in positional_fn
+    assert 'line_four=row["ml_official_store"]' in positional_fn
+    cell_source = inspect.getsource(comparison_ui.marketplace_cell)
+    assert "rx.text(line_three" in cell_source
+    assert "rx.text(line_four" in cell_source
+    cell = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="ML listing",
+        price="$9.00",
+        price_color="#111111",
+        line_one="Nuevo",
+        line_two="Tienda VE",
+        line_three="Envío gratis",
+        line_four="Tienda oficial",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+    )
+    assert cell is not None
+    paid = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="ML paid",
+        price="$9.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="Pago",
+        line_four="",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+    )
+    assert paid is not None
+
+
+def test_marketplace_cell_renders_review_count_when_rating_unavailable() -> None:
+    from bera_price_tracker.gui.components import comparison as comparison_ui
+
+    source = inspect.getsource(comparison_ui)
+    assert "review_count_line" in source
+    comparison_fn = inspect.getsource(comparison_ui.comparison_row)
+    positional_fn = inspect.getsource(comparison_ui.positional_comparison_row)
+    assert 'review_count_line=row["alibaba_review_count_line"]' in comparison_fn
+    assert 'review_count_line=row["ml_review_count_line"]' in comparison_fn
+    assert 'review_count_line=row["alibaba_review_count_line"]' in positional_fn
+    assert 'review_count_line=row["ml_review_count_line"]' in positional_fn
+    assert "facebook_review_count_line" not in comparison_fn
+    assert "facebook_review_count_line" not in positional_fn
+    cell_source = inspect.getsource(comparison_ui.marketplace_cell)
+    assert "rx.text(review_count_line" in cell_source
+    stars_index = cell_source.index("rating_stars(")
+    count_index = cell_source.index("rx.text(review_count_line")
+    assert count_index != stars_index
+    cell = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="ML reviews only",
+        price="$9.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+        rating_available=False,
+        review_count_line="8 reseñas",
+    )
+    blob = _component_repr(cell)
+    assert "8 rese" in blob
+    rated = comparison_ui.marketplace_cell(
+        has_listing=True,
+        image_url="",
+        title="Alibaba rated",
+        price="$4.00",
+        price_color="#111111",
+        line_one="",
+        line_two="",
+        line_three="",
+        relevance="",
+        match_label="",
+        url="",
+        empty_label="—",
+        rating_available=True,
+        rating_label="4.8 · 12 reseñas",
+        review_count_line="",
+    )
+    rated_blob = _component_repr(rated)
+    assert "4.8" in rated_blob
 
 
 def test_gui_modules_do_not_import_apify() -> None:
@@ -616,3 +803,77 @@ def test_component_builders_execute_offline() -> None:
     assert search_setup_view() is not None
     assert search_results_view() is not None
     assert tracking_ui.history_accordion is not None
+
+
+def _assert_result_summaries_bind_frozen_display_limit() -> None:
+    from bera_price_tracker.gui.components import search_results
+    from bera_price_tracker.gui.components import search_scope as search_scope_ui
+
+    toolbar = inspect.getsource(search_results.results_toolbar)
+    rail = inspect.getsource(search_results.search_summary_rail)
+    setup = inspect.getsource(search_scope_ui)
+    assert "TrackerState.search_limit" not in toolbar
+    assert "TrackerState.search_limit" not in rail
+    assert "TrackerState.generic_display_limit" in toolbar
+    assert "TrackerState.generic_display_limit" in rail
+    assert toolbar.count("TrackerState.generic_display_limit") >= 1
+    assert rail.count("TrackerState.generic_display_limit") >= 1
+    assert "TrackerState.search_limit.to_string()" in setup
+    toolbar_blob = _component_repr(search_results.results_toolbar())
+    rail_blob = _component_repr(search_results.search_summary_rail())
+    assert "generic_display_limit" in toolbar_blob
+    assert "generic_display_limit" in rail_blob
+    assert "search_limit" not in toolbar_blob
+    assert "search_limit" not in rail_blob
+
+
+def test_generic_result_summary_labels_use_frozen_display_limit() -> None:
+    """P1 follow-up: result toolbar/rail must not follow the live search_limit control."""
+
+    _assert_result_summaries_bind_frozen_display_limit()
+
+    state = TrackerState()
+    state.search_generation = 4
+    state.search_mode = MODE_SINGLE
+    state.search_platform = PLATFORM_ALIBABA
+    plan = plan_search(
+        mode=MODE_SINGLE,
+        platform=PLATFORM_ALIBABA,
+        query="wireless mouse",
+        limit=5,
+    )
+    state.search_session_active = True
+    state.search_session_query = plan.query
+    state.search_limit = plan.limit
+    state._prepare_scoped_search(plan)
+    state.search_limit = 1
+    assert state.search_limit == 1
+    assert state.generic_display_limit == 5
+
+    state.search_generation = 5
+    next_plan = plan_search(
+        mode=MODE_SINGLE,
+        platform=PLATFORM_ALIBABA,
+        query="keyboard",
+        limit=1,
+    )
+    state.search_session_query = next_plan.query
+    state.search_limit = next_plan.limit
+    state._prepare_scoped_search(next_plan)
+    state.search_limit = 5
+    assert state.search_limit == 5
+    assert state.generic_display_limit == 1
+
+    state.search_generation = 6
+    later_plan = plan_search(
+        mode=MODE_SINGLE,
+        platform=PLATFORM_ALIBABA,
+        query="headphones",
+        limit=5,
+    )
+    state.search_session_query = later_plan.query
+    state.search_limit = later_plan.limit
+    state._prepare_scoped_search(later_plan)
+    assert state.generic_display_limit == 5
+    state.search_limit = 1
+    assert state.generic_display_limit == 5

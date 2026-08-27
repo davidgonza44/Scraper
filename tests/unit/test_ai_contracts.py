@@ -215,9 +215,8 @@ def _assert_search_intent_application_invariants(payload: Mapping[str, Any]) -> 
 
 def test_later_stage_fixtures_are_not_marked_implemented() -> None:
     later = [
-        case for _stem, _path, case in CASES if case["implementation_stage"] in {"B", "C", "D", "E"}
+        case for _stem, _path, case in CASES if case["implementation_stage"] in {"C", "D", "E"}
     ]
-    assert later
     for case in later:
         assert case.get("runtime_check") is None
         assert case["expected"].get("implemented") is not True
@@ -363,6 +362,61 @@ def _check_facebook_one_execute(case: Mapping[str, Any]) -> None:
     assert len(provider.calls) == 2
 
 
+def _check_positional_comparison(case: Mapping[str, Any]) -> None:
+    given = case["given"]
+    expected = case["expected"]
+    if "resultado" in given:
+        alibaba = _PositionalCandidate(
+            title=str(given["alibaba"]["title"]),
+            native_id=str(given["alibaba"]["native_id"]),
+        )
+        facebook = _PositionalCandidate(
+            title=str(given["facebook"]["title"]),
+            native_id=str(given["facebook"]["native_id"]),
+        )
+        mercadolibre = _PositionalCandidate(
+            title=str(given["mercadolibre"]["title"]),
+            native_id=str(given["mercadolibre"]["native_id"]),
+        )
+        rows = search_session.build_search_position_comparison_rows(
+            alibaba_candidates=(alibaba,),
+            facebook_candidates=(facebook,),
+            mercadolibre_candidates=(mercadolibre,),
+        )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.rank == int(given["resultado"])
+        assert row.identity_confirmed is False is expected["identity_confirmed"]
+        assert expected["comparison_kind"] == "positional"
+        assert row.alibaba_candidate is alibaba
+        assert row.facebook_candidate is facebook
+        assert row.mercadolibre_candidate is mercadolibre
+        assert search_session.positional_row_authorizes_exact_workflows(row) is False
+        assert search_session.exact_product_context() is None
+        return
+    left = given["alibaba_native_id"]
+    right = given["facebook_native_id"]
+    assert search_session.native_listing_ids_establish_cross_market_identity(left, right) is False
+    assert expected["cross_market_exact_identity"] is False
+    assert expected["identity_confirmed"] is False
+    rows = search_session.build_search_position_comparison_rows(
+        alibaba_candidates=(_PositionalCandidate(title="Alibaba", native_id=str(left)),),
+        facebook_candidates=(_PositionalCandidate(title="Facebook", native_id=str(right)),),
+    )
+    assert rows[0].identity_confirmed is False
+    assert search_session.positional_row_authorizes_exact_workflows(rows[0]) is False
+    assert search_session.exact_product_context(facebook_association_id=right, context_id=left) is (
+        None
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _PositionalCandidate:
+    title: str
+    native_id: str = ""
+    identity: str | None = None
+
+
 RUNTIME_HANDLERS: dict[str, Callable[[Mapping[str, Any]], None]] = {
     "alibaba_mapper": _check_alibaba_mapper,
     "facebook_priced_only": _check_facebook_priced_only,
@@ -370,6 +424,7 @@ RUNTIME_HANDLERS: dict[str, Callable[[Mapping[str, Any]], None]] = {
     "mercadolibre_search_boundary": _check_mercadolibre_search_boundary,
     "search_session_core": _check_search_session_core,
     "facebook_one_execute": _check_facebook_one_execute,
+    "positional_comparison": _check_positional_comparison,
 }
 
 

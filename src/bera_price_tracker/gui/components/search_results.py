@@ -12,9 +12,9 @@ from bera_price_tracker.gui.components.brands import (
     marketplace_brand_facebook,
     marketplace_brand_ml,
 )
-from bera_price_tracker.gui.components.comparison import comparison_matrix
+from bera_price_tracker.gui.components.comparison import positional_comparison_matrix
 from bera_price_tracker.gui.components.primitives import action_button
-from bera_price_tracker.gui.components.summary import marketplace_summary_row
+from bera_price_tracker.gui.components.summary import generic_marketplace_summary_row
 from bera_price_tracker.gui.state import TrackerState
 
 
@@ -83,7 +83,7 @@ def results_toolbar() -> rx.Component:
         ),
         rx.hstack(
             rx.text("Resultados por plataforma:", size="1", color=styles.TEXT_MUTED),
-            rx.text(TrackerState.search_limit.to_string(), size="1", weight="medium"),
+            rx.text(TrackerState.generic_display_limit.to_string(), size="1", weight="medium"),
             spacing="2",
             align="center",
         ),
@@ -169,7 +169,9 @@ def search_summary_rail() -> rx.Component:
                 rx.hstack(
                     rx.text("Resultados por plataforma", size="1", color=styles.TEXT_MUTED),
                     rx.spacer(),
-                    rx.text(TrackerState.search_limit.to_string(), size="1", weight="medium"),
+                    rx.text(
+                        TrackerState.generic_display_limit.to_string(), size="1", weight="medium"
+                    ),
                     width="100%",
                 ),
                 rx.hstack(
@@ -300,11 +302,11 @@ def search_results_view() -> rx.Component:
     return rx.vstack(
         results_header(),
         results_toolbar(),
-        marketplace_summary_row(),
+        generic_marketplace_summary_row(),
         rx.box(
             rx.box(
                 results_section_nav(),
-                comparison_matrix(),
+                positional_comparison_matrix(),
                 flex="1",
                 min_width="0",
                 class_name="bera-results-main",

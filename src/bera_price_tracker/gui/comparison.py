@@ -5,6 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from bera_price_tracker.application.search_session import (
+    build_search_position_comparison_rows,
+    exact_product_context,
+)
 from bera_price_tracker.gui.images import safe_public_image_url
 from bera_price_tracker.gui.search_session import opportunity_gauge, product_rating_display
 
@@ -14,6 +18,9 @@ ANALYSIS_UNAVAILABLE = "Análisis no disponible"
 MATCH_HIGH = "Alta coincidencia"
 MATCH_MEDIUM = "Coincidencia media"
 MATCH_COMPARABLE = "Comparable"
+POSITIONAL_DISCLOSURE = "Comparables de la misma búsqueda · identidad exacta no confirmada"
+POSITIONAL_KIND = "positional"
+ASSOCIATION_KIND = "association"
 
 
 def match_label(relevance_value: object, *, has_listing: bool) -> str:
@@ -79,6 +86,19 @@ def _attr(row: object, name: str, default: str = "") -> str:
     return _text(getattr(row, name, default)) or default
 
 
+def _independent_review_count(raw: object, *, rating_available: bool) -> tuple[str, str]:
+    """Keep review_count even when the aggregate score is unknown. Never invent stars."""
+
+    count = _text(raw)
+    if count == "—":
+        count = ""
+    if not count:
+        return "", ""
+    if rating_available:
+        return count, ""
+    return count, f"{count} reseñas"
+
+
 def _int_attr(row: object, name: str) -> int:
     raw = getattr(row, name, None) if not isinstance(row, Mapping) else row.get(name)
     try:
@@ -124,6 +144,8 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
             "alibaba_rating_filled": 0,
             "alibaba_rating_label": "Sin calificación",
             "alibaba_rating_caption": "",
+            "alibaba_review_count": "",
+            "alibaba_review_count_line": "",
             "alibaba_trust_line": "",
             "opportunity_available": False,
             "opportunity_score": "0",
@@ -134,6 +156,9 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
     moq = _attr(row, "moq")
     rating = product_rating_display(
         _attr(row, "review_score"), review_count=_attr(row, "review_count")
+    )
+    review_count, review_count_line = _independent_review_count(
+        _attr(row, "review_count"), rating_available=bool(rating["available"])
     )
     gauge = opportunity_gauge(_int_attr(row, "score_value"), _attr(row, "score"))
     trust_parts: list[str] = []
@@ -161,6 +186,8 @@ def _alibaba_cell(row: Any) -> dict[str, object]:
         "alibaba_rating_filled": int(rating["filled"]),
         "alibaba_rating_label": str(rating["label"]),
         "alibaba_rating_caption": str(rating.get("caption") or ""),
+        "alibaba_review_count": review_count,
+        "alibaba_review_count_line": review_count_line,
         "alibaba_trust_line": " · ".join(trust_parts),
         "opportunity_available": bool(gauge["available"]),
         "opportunity_score": str(gauge["score"]),
@@ -222,6 +249,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
             "ml_price": "",
             "ml_condition": "",
             "ml_seller": "",
+            "ml_shipping": "",
+            "ml_official_store": "",
             "ml_relevance": "",
             "ml_match_label": "",
             "ml_url": "",
@@ -229,20 +258,29 @@ def _ml_cell(row: Any) -> dict[str, object]:
             "ml_rating_filled": 0,
             "ml_rating_label": "Sin calificación",
             "ml_rating_caption": "",
+            "ml_review_count": "",
+            "ml_review_count_line": "",
             "ml_trust_line": "",
         }
     relevance_value = _int_attr(row, "relevance_value")
     condition = _attr(row, "condition")
     seller = _attr(row, "seller_name")
+    shipping = _attr(row, "shipping")
+    official_store = _attr(row, "official_store")
+    shipping_text = "" if shipping == "—" else shipping
+    official_text = "" if official_store == "—" else official_store
     rating = product_rating_display(
         _attr(row, "rating_average"), review_count=_attr(row, "review_count")
+    )
+    review_count, review_count_line = _independent_review_count(
+        _attr(row, "review_count"), rating_available=bool(rating["available"])
     )
     trust_parts: list[str] = []
     reputation = _attr(row, "seller_reputation")
     if reputation:
         trust_parts.append(f"Reputación: {reputation}")
     status = _attr(row, "seller_status")
-    if status:
+    if status and status != official_text:
         trust_parts.append(status)
     return {
         "ml_has_listing": True,
@@ -251,6 +289,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
         "ml_price": _attr(row, "price"),
         "ml_condition": "" if condition == "—" else condition,
         "ml_seller": "" if seller == "—" else seller,
+        "ml_shipping": shipping_text,
+        "ml_official_store": official_text,
         "ml_relevance": _attr(row, "relevance"),
         "ml_match_label": match_label(relevance_value, has_listing=True),
         "ml_url": _attr(row, "permalink"),
@@ -258,6 +298,8 @@ def _ml_cell(row: Any) -> dict[str, object]:
         "ml_rating_filled": int(rating["filled"]),
         "ml_rating_label": str(rating["label"]),
         "ml_rating_caption": str(rating.get("caption") or ""),
+        "ml_review_count": review_count,
+        "ml_review_count_line": review_count_line,
         "ml_trust_line": " · ".join(trust_parts),
     }
 
@@ -318,6 +360,11 @@ def _empty_row() -> dict[str, object]:
         "product_image_url": "",
         "product_subtitle": "Producto comparable en distintas plataformas",
         "product_id": "",
+        "rank": 0,
+        "identity_confirmed": False,
+        "disclosure": "",
+        "resultado_label": "",
+        "comparison_kind": ASSOCIATION_KIND,
     }
     row.update(_alibaba_cell(None))
     row.update(_facebook_cell(None))
@@ -347,14 +394,12 @@ def shared_alibaba_association(
 ) -> str:
     """Return the Alibaba id only when FB, ML, and context all name the same product."""
 
-    facebook_id = _text(facebook_association_id)
-    ml_id = _text(ml_association_id)
-    selected_id = _text(context_id)
-    if not facebook_id or not ml_id or not selected_id:
-        return ""
-    if facebook_id == ml_id == selected_id:
-        return selected_id
-    return ""
+    context = exact_product_context(
+        facebook_association_id=facebook_association_id,
+        ml_association_id=ml_association_id,
+        context_id=context_id,
+    )
+    return context.product_id if context is not None else ""
 
 
 def _results_heading(query: object, status: object) -> str:
@@ -566,4 +611,61 @@ def build_comparison_rows(
         rows.append(_standalone_facebook_row(facebook_best, fallback_title))
     if ml_best is not None and not ml_placed:
         rows.append(_standalone_ml_row(ml_best, fallback_title))
+    return rows
+
+
+def resultado_label(rank: int) -> str:
+    return f"Resultado #{rank}"
+
+
+def canonical_provider_rows(
+    rows: Sequence[Any],
+    status: str,
+    display_limit: int | None,
+) -> tuple[Any, ...]:
+    if status != UI_SUCCESS:
+        return ()
+    ordered = tuple(rows)
+    if display_limit is None:
+        return ordered
+    if isinstance(display_limit, bool) or not isinstance(display_limit, int) or display_limit < 1:
+        raise ValueError("display_limit must be a positive integer")
+    return ordered[:display_limit]
+
+
+def build_positional_comparison_rows(
+    *,
+    alibaba_rows: Sequence[Any] = (),
+    facebook_rows: Sequence[Any] = (),
+    ml_rows: Sequence[Any] = (),
+    alibaba_status: str = "",
+    facebook_status: str = "",
+    ml_status: str = "",
+    display_limit: int | None = None,
+) -> list[dict[str, object]]:
+    """Generic Búsquedas rows. Position only; never association or presentation filters."""
+
+    positions = build_search_position_comparison_rows(
+        alibaba_candidates=canonical_provider_rows(alibaba_rows, alibaba_status, display_limit),
+        facebook_candidates=canonical_provider_rows(facebook_rows, facebook_status, display_limit),
+        mercadolibre_candidates=canonical_provider_rows(ml_rows, ml_status, display_limit),
+    )
+    rows: list[dict[str, object]] = []
+    for position in positions:
+        label = resultado_label(position.rank)
+        row = _empty_row()
+        row["rank"] = position.rank
+        row["identity_confirmed"] = False
+        row["disclosure"] = POSITIONAL_DISCLOSURE
+        row["resultado_label"] = label
+        row["comparison_kind"] = POSITIONAL_KIND
+        row["product_title"] = label
+        row["product_subtitle"] = POSITIONAL_DISCLOSURE
+        row["product_id"] = ""
+        row["product_image_url"] = ""
+        row.update(_alibaba_cell(position.alibaba_candidate))
+        row.update(_facebook_cell(position.facebook_candidate))
+        row.update(_ml_cell(position.mercadolibre_candidate))
+        row.update(build_analysis(alibaba_row=position.alibaba_candidate))
+        rows.append(row)
     return rows

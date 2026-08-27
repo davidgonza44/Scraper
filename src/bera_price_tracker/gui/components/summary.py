@@ -161,3 +161,13 @@ def marketplace_summary_row() -> rx.Component:
         align="stretch",
         class_name="bera-summary-row",
     )
+
+
+def generic_marketplace_summary_row() -> rx.Component:
+    return rx.hstack(
+        rx.foreach(TrackerState.generic_marketplace_summaries, marketplace_summary_card),
+        spacing="3",
+        width="100%",
+        align="stretch",
+        class_name="bera-summary-row",
+    )

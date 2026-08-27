@@ -69,10 +69,10 @@ First determine whether the implementation or the specification changed.**
 6. Then read the existing tests and code.
 7. Do not implement staged OpenSpec work early.
 
-`implementation_stage` on a fixture is `A`, `B`, `C`, `D`, or `E`. Stage `A`
-is the search-session core and is implemented. A non-null `runtime_check`
-selects exactly one handler in `tests/unit/test_ai_contracts.py`. Later stages
-are semantic fixtures, not proof that the corresponding PR is implemented.
+`implementation_stage` on a fixture is `A`, `B`, `C`, `D`, or `E`. Stages `A`
+and `B` are implemented. A non-null `runtime_check` selects exactly one handler
+in `tests/unit/test_ai_contracts.py`. Later stages are semantic fixtures, not
+proof that the corresponding PR is implemented.
 
 ## How maintainers update this pack
 

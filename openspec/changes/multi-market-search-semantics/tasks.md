@@ -15,13 +15,13 @@
 
 ## Implementation PR B — Positional comparison and exact-identity isolation
 
-- [ ] B.1 Introduce `SearchPositionComparisonRow` with one-based rank, optional provider candidates, and immutable `identity_confirmed = false`; keep it structurally separate from exact-product contexts.
-- [ ] B.2 Preserve single-acquisition result order; deduplicate only on truthful stable identity and retain identity-less candidates. Only multi-acquisition searches without native global order use documented deterministic BERA aggregation. Freeze the result.
-- [ ] B.3 Ensure presentation sorting/filtering/ranking presets cannot change generic `Resultado #N`, totals, export membership, status, or snapshot; specialized views may independently project the frozen data.
-- [ ] B.4 Keep Alibaba opportunity/ranking/relevance, reputation, and price sorting as annotations or specialized projections that cannot reorder frozen generic results; add concise non-identity disclosure and no global score.
-- [ ] B.5 Preserve the existing exact workflow invariant for non-empty agreeing association/context IDs; prove native marketplace ID string equality and positional alignment cannot create association or authorize provenance workflows.
-- [ ] B.6 Render truthful provider-owned image, title, price/currency, URL, seller/supplier, genuine rating/reviews, reputation/service metadata, Alibaba MOQ, Mercado Libre condition, and other available fields; blank missing optional fields and fabricate nothing.
-- [ ] B.7 Add offline tests for provider-result order, deterministic partition aggregation, immutability under Alibaba/UI rankings, exact association IDs versus native listing IDs, available cell fields, missing optional fields, and no fabricated Facebook seller/rating.
+- [x] B.1 Introduce `SearchPositionComparisonRow` with one-based rank, optional provider candidates, and immutable `identity_confirmed = false`; keep it structurally separate from exact-product contexts.
+- [x] B.2 Preserve single-acquisition result order; deduplicate only on truthful stable identity and retain identity-less candidates. Only multi-acquisition searches without native global order use documented deterministic BERA aggregation. Freeze the result.
+- [x] B.3 Ensure presentation sorting/filtering/ranking presets cannot change generic `Resultado #N`, totals, export membership, status, or snapshot; specialized views may independently project the frozen data.
+- [x] B.4 Keep Alibaba opportunity/ranking/relevance, reputation, and price sorting as annotations or specialized projections that cannot reorder frozen generic results; add concise non-identity disclosure and no global score.
+- [x] B.5 Preserve the existing exact workflow invariant for non-empty agreeing association/context IDs; prove native marketplace ID string equality and positional alignment cannot create association or authorize provenance workflows.
+- [x] B.6 Render truthful provider-owned image, title, price/currency, URL, seller/supplier, genuine rating/reviews, reputation/service metadata, Alibaba MOQ, Mercado Libre condition, and other available fields; blank missing optional fields and fabricate nothing.
+- [x] B.7 Add offline tests for provider-result order, deterministic partition aggregation, immutability under Alibaba/UI rankings, exact association IDs versus native listing IDs, available cell fields, missing optional fields, and no fabricated Facebook seller/rating.
 
 ## Implementation PR C — Provider instrumentation and compact diagnostics
 

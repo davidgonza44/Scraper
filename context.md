@@ -34,12 +34,13 @@ frontend to React, Next.js, or Vite.
 ## Active staged OpenSpec change
 
 The change `openspec/changes/multi-market-search-semantics/` is planned as
-staged implementation PRs A–E. Only Implementation PR A is currently
-implemented on main. PRs B–E remain unimplemented. Do not implement later
+staged implementation PRs A–E. Implementation PRs A and B are currently
+implemented on main. PRs C–E remain unimplemented. Do not implement later
 stages early.
 
 ## Current implementation stage
 
 Implementation PR A (search intent, snapshot, bounded acquisition, metrics,
-and status) is on `main`. `TrackerState` still uses the existing GUI search
-path and is not wired to the PR A core. PRs B–E remain unimplemented.
+and status) and Implementation PR B (positional comparison and exact-identity
+isolation) are on `main`. `TrackerState` still uses the existing GUI search
+path and is not wired to the PR A core. PRs C–E remain unimplemented.
