@@ -1601,6 +1601,87 @@ def test_stale_alibaba_finalize_does_not_reset_non_loading_status() -> None:
     assert state.alibaba_results == []
 
 
+def _negotiation_plan_row(product_id: str, unit_price: str) -> dict[str, str]:
+    return {
+        "product_id": product_id,
+        "title": f"Product {product_id}",
+        "public_unit_price": f"${unit_price}",
+        "opening_offer": f"${unit_price}",
+        "target_price": f"${unit_price}",
+        "ceiling_price": f"${unit_price}",
+        "desired_quantity": "40",
+        "currency": "USD",
+    }
+
+
+def test_late_negotiation_opening_for_product_a_does_not_overwrite_product_b() -> None:
+    state = TrackerState()
+    state._apply_negotiation_plan(_negotiation_plan_row("A", "4.00"))
+    request_generation = state.alibaba_negotiation_generation
+    state.alibaba_negotiation_is_drafting = True
+    state._apply_negotiation_plan(_negotiation_plan_row("B", "12.00"))
+    state._finalize_alibaba_negotiation_draft(
+        request_generation=request_generation,
+        message="We can offer USD 4.00 per unit for Product A.",
+    )
+    assert state.alibaba_negotiation_plan_payload["product_id"] == "B"
+    assert state.alibaba_negotiation_opening == "$12.00"
+    assert state.alibaba_negotiation_message == ""
+    assert state.alibaba_negotiation_is_drafting is False
+
+
+def test_late_negotiation_error_for_product_a_does_not_overwrite_product_b() -> None:
+    state = TrackerState()
+    state._apply_negotiation_plan(_negotiation_plan_row("A", "4.00"))
+    request_generation = state.alibaba_negotiation_generation
+    state.alibaba_negotiation_is_drafting = True
+    state._apply_negotiation_plan(_negotiation_plan_row("B", "12.00"))
+    state._finalize_alibaba_negotiation_draft(
+        request_generation=request_generation,
+        error_message="No se pudo generar el borrador de A.",
+    )
+    assert state.alibaba_negotiation_plan_payload["product_id"] == "B"
+    assert state.alibaba_negotiation_error == ""
+    assert state.alibaba_negotiation_is_drafting is False
+
+
+def test_late_negotiation_analysis_for_product_a_does_not_overwrite_product_b() -> None:
+    state = TrackerState()
+    state._apply_negotiation_plan(_negotiation_plan_row("A", "4.00"))
+    request_generation = state.alibaba_negotiation_generation
+    state.alibaba_negotiation_is_drafting = True
+    state._apply_negotiation_plan(_negotiation_plan_row("B", "12.00"))
+    state._finalize_alibaba_negotiation_draft(
+        request_generation=request_generation,
+        analysis_row={
+            "response_summary": "Supplier quoted 6.00 for A",
+            "decision": "ABOVE_CEILING",
+            "notes": "Above A's ceiling",
+            "quoted_unit_price": "6.00",
+            "authorized_price": "4.00",
+        },
+    )
+    assert state.alibaba_negotiation_plan_payload["product_id"] == "B"
+    assert state.alibaba_negotiation_analysis_decision == ""
+    assert state.alibaba_negotiation_analysis_summary == ""
+    assert state.alibaba_negotiation_analysis_notes == ""
+    assert state.alibaba_negotiation_is_drafting is False
+
+
+def test_matching_negotiation_draft_still_applies() -> None:
+    state = TrackerState()
+    state._apply_negotiation_plan(_negotiation_plan_row("A", "4.00"))
+    request_generation = state.alibaba_negotiation_generation
+    state.alibaba_negotiation_is_drafting = True
+    state._finalize_alibaba_negotiation_draft(
+        request_generation=request_generation,
+        message="We can offer USD 4.00 per unit.",
+    )
+    assert state.alibaba_negotiation_plan_payload["product_id"] == "A"
+    assert state.alibaba_negotiation_message == "We can offer USD 4.00 per unit."
+    assert state.alibaba_negotiation_is_drafting is False
+
+
 def test_as_mapping_rejects_invalid_forms_and_price_parser_invalid_operation() -> None:
     assert _as_mapping({"title": "Mouse"}) == {"title": "Mouse"}
     assert _as_mapping(["not", "a", "map"]) is None
