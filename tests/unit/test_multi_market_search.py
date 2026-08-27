@@ -1976,9 +1976,7 @@ def test_generic_facebook_completion_does_not_clear_concurrent_specialized_loadi
         state.search_query = "wireless mouse"
         state.search_limit = 3
         state.facebook_product_city = "caracas"
-        state.alibaba_tracked_rows = [
-            AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")
-        ]
+        state.alibaba_tracked_rows = [AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")]
         generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
         await _wait_thread_event(generic_started)
         assert state.facebook_product_is_loading is True
@@ -1994,7 +1992,9 @@ def test_generic_facebook_completion_does_not_clear_concurrent_specialized_loadi
         generic_release.set()
         await generic_task
         try:
-            assert [row.title for row in state.generic_session_facebook.rows] == ["Generic Facebook"]
+            assert [row.title for row in state.generic_session_facebook.rows] == [
+                "Generic Facebook"
+            ]
             assert state.generic_session_facebook.status == UI_SUCCESS
             assert state.facebook_product_is_loading is True
             assert state.facebook_product_ui_status == UI_LOADING
@@ -2049,9 +2049,7 @@ def test_generic_ml_completion_does_not_clear_concurrent_specialized_loading(
         state.search_platform = PLATFORM_ML
         state.search_query = "wireless mouse"
         state.search_limit = 3
-        state.alibaba_tracked_rows = [
-            AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")
-        ]
+        state.alibaba_tracked_rows = [AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")]
         generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
         await _wait_thread_event(generic_started)
         assert state.ml_is_loading is True
@@ -2066,16 +2064,451 @@ def test_generic_ml_completion_does_not_clear_concurrent_specialized_loading(
         assert state.ml_ui_status == UI_LOADING
         generic_release.set()
         await generic_task
-        assert [row.title for row in state.generic_session_ml.rows] == ["Generic ML"]
-        assert state.generic_session_ml.status == UI_SUCCESS
-        assert state.ml_is_loading is True
-        assert state.ml_ui_status == UI_LOADING
-        assert state.ml_query == "specialized ml"
-        assert all(row.title != "Generic ML" for row in state.ml_results)
-        specialized_release.set()
-        await specialized_task
-        assert [row.title for row in state.ml_results] == ["Specialized ML"]
-        assert state.ml_is_loading is False
-        assert state.ml_ui_status == UI_SUCCESS
+        try:
+            assert [row.title for row in state.generic_session_ml.rows] == ["Generic ML"]
+            assert state.generic_session_ml.status == UI_SUCCESS
+            assert state.ml_is_loading is True
+            assert state.ml_ui_status == UI_LOADING
+            assert state.ml_query == "specialized ml"
+            assert all(row.title != "Generic ML" for row in state.ml_results)
+            specialized_release.set()
+            await specialized_task
+            assert [row.title for row in state.ml_results] == ["Specialized ML"]
+            assert state.ml_is_loading is False
+            assert state.ml_ui_status == UI_SUCCESS
+        finally:
+            specialized_release.set()
 
     asyncio.run(scenario())
+
+
+def test_generic_facebook_completion_does_not_clear_specialized_loading_when_query_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same live query is not ownership: product_id differs after prepare."""
+
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    generic_started = threading.Event()
+    generic_release = threading.Event()
+    specialized_started = threading.Event()
+    specialized_release = threading.Event()
+    calls = {"count": 0}
+
+    def run_facebook(query: str, city: str, limit: int) -> dict[str, object]:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            generic_started.set()
+            generic_release.wait(5)
+            return {
+                "results": [{"title": "Generic Facebook", "external_id": "fb-generic"}],
+                "statistics": [],
+                "summary": {"usable": "1"},
+                "ui_status": UI_SUCCESS,
+            }
+        specialized_started.set()
+        specialized_release.wait(5)
+        return {
+            "results": [{"title": "Specialized Facebook", "external_id": "fb-spec"}],
+            "statistics": [],
+            "summary": {"usable": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_facebook_product_search", run_facebook)
+
+    async def scenario() -> None:
+        state = TrackerState()
+        state.search_mode = MODE_SINGLE
+        state.search_platform = PLATFORM_FACEBOOK
+        state.search_query = "wireless mouse"
+        state.search_limit = 3
+        state.facebook_product_city = "caracas"
+        state.alibaba_tracked_rows = [AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")]
+        generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
+        await _wait_thread_event(generic_started)
+        opening = state.prepare_facebook_comparables_from_alibaba_tracked("P-SPEC")
+        assert opening is TrackerState.translate_selected_alibaba_title_for_facebook
+        state.set_facebook_product_query("wireless mouse")
+        specialized_task = asyncio.create_task(
+            cast(Any, TrackerState.search_facebook_products).fn(state)
+        )
+        await _wait_thread_event(specialized_started)
+        assert state.facebook_product_is_loading is True
+        generic_release.set()
+        await generic_task
+        try:
+            assert [row.title for row in state.generic_session_facebook.rows] == [
+                "Generic Facebook"
+            ]
+            assert state.facebook_product_is_loading is True
+            assert state.facebook_product_ui_status == UI_LOADING
+            assert state.facebook_product_query == "wireless mouse"
+            assert all(row.title != "Generic Facebook" for row in state.facebook_product_results)
+            specialized_release.set()
+            await specialized_task
+            assert [row.title for row in state.facebook_product_results] == ["Specialized Facebook"]
+        finally:
+            specialized_release.set()
+
+    asyncio.run(scenario())
+
+
+def test_generic_facebook_error_does_not_clear_concurrent_specialized_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    generic_started = threading.Event()
+    generic_release = threading.Event()
+    specialized_started = threading.Event()
+    specialized_release = threading.Event()
+
+    def run_facebook(query: str, city: str, limit: int) -> dict[str, object]:
+        if query == "specialized facebook":
+            specialized_started.set()
+            specialized_release.wait(5)
+            return {
+                "results": [{"title": "Specialized Facebook", "external_id": "fb-spec"}],
+                "statistics": [],
+                "summary": {"usable": "1"},
+                "ui_status": UI_SUCCESS,
+            }
+        generic_started.set()
+        generic_release.wait(5)
+        raise RuntimeError("generic facebook failed")
+
+    monkeypatch.setattr(services, "run_facebook_product_search", run_facebook)
+
+    async def scenario() -> None:
+        state = TrackerState()
+        state.search_mode = MODE_SINGLE
+        state.search_platform = PLATFORM_FACEBOOK
+        state.search_query = "wireless mouse"
+        state.search_limit = 3
+        state.facebook_product_city = "caracas"
+        state.alibaba_tracked_rows = [AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")]
+        generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
+        await _wait_thread_event(generic_started)
+        state.prepare_facebook_comparables_from_alibaba_tracked("P-SPEC")
+        state.set_facebook_product_query("specialized facebook")
+        specialized_task = asyncio.create_task(
+            cast(Any, TrackerState.search_facebook_products).fn(state)
+        )
+        await _wait_thread_event(specialized_started)
+        generic_release.set()
+        await generic_task
+        try:
+            assert state.generic_session_facebook.status == UI_ERROR
+            assert state.generic_session_facebook.rows == []
+            assert state.facebook_product_is_loading is True
+            assert state.facebook_product_ui_status == UI_LOADING
+            specialized_release.set()
+            await specialized_task
+            assert [row.title for row in state.facebook_product_results] == ["Specialized Facebook"]
+            assert state.generic_session_facebook.status == UI_ERROR
+        finally:
+            specialized_release.set()
+
+    asyncio.run(scenario())
+
+
+def test_generic_ml_error_does_not_clear_concurrent_specialized_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    generic_started = threading.Event()
+    generic_release = threading.Event()
+    specialized_started = threading.Event()
+    specialized_release = threading.Event()
+
+    def run_ml(query: str, limit: int) -> dict[str, object]:
+        if query == "specialized ml":
+            specialized_started.set()
+            specialized_release.wait(5)
+            return {
+                "results": [{"title": "Specialized ML", "external_id": "MLV-spec"}],
+                "summary": {"usable": "1"},
+                "ui_status": UI_SUCCESS,
+            }
+        generic_started.set()
+        generic_release.wait(5)
+        raise RuntimeError("generic ml failed")
+
+    monkeypatch.setattr(services, "run_mercadolibre_search", run_ml)
+
+    async def scenario() -> None:
+        state = TrackerState()
+        state.search_mode = MODE_SINGLE
+        state.search_platform = PLATFORM_ML
+        state.search_query = "wireless mouse"
+        state.search_limit = 3
+        state.alibaba_tracked_rows = [AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")]
+        generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
+        await _wait_thread_event(generic_started)
+        state.prepare_ml_comparables_from_alibaba_tracked("P-SPEC")
+        state.set_ml_query("specialized ml")
+        specialized_task = asyncio.create_task(
+            cast(Any, TrackerState.search_mercadolibre).fn(state)
+        )
+        await _wait_thread_event(specialized_started)
+        generic_release.set()
+        await generic_task
+        try:
+            assert state.generic_session_ml.status == UI_ERROR
+            assert state.generic_session_ml.rows == []
+            assert state.ml_is_loading is True
+            assert state.ml_ui_status == UI_LOADING
+            specialized_release.set()
+            await specialized_task
+            assert [row.title for row in state.ml_results] == ["Specialized ML"]
+            assert state.generic_session_ml.status == UI_ERROR
+        finally:
+            specialized_release.set()
+
+    asyncio.run(scenario())
+
+
+def test_specialized_facebook_error_after_generic_overlap_does_not_rewrite_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    generic_started = threading.Event()
+    generic_release = threading.Event()
+    specialized_started = threading.Event()
+    specialized_release = threading.Event()
+
+    def run_facebook(query: str, city: str, limit: int) -> dict[str, object]:
+        if query == "specialized facebook":
+            specialized_started.set()
+            specialized_release.wait(5)
+            raise RuntimeError("specialized facebook failed")
+        generic_started.set()
+        generic_release.wait(5)
+        return {
+            "results": [{"title": "Generic Facebook", "external_id": "fb-generic"}],
+            "statistics": [],
+            "summary": {"usable": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_facebook_product_search", run_facebook)
+
+    async def scenario() -> None:
+        state = TrackerState()
+        state.search_mode = MODE_SINGLE
+        state.search_platform = PLATFORM_FACEBOOK
+        state.search_query = "wireless mouse"
+        state.search_limit = 3
+        state.facebook_product_city = "caracas"
+        state.alibaba_tracked_rows = [AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")]
+        generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
+        await _wait_thread_event(generic_started)
+        state.prepare_facebook_comparables_from_alibaba_tracked("P-SPEC")
+        state.set_facebook_product_query("specialized facebook")
+        specialized_task = asyncio.create_task(
+            cast(Any, TrackerState.search_facebook_products).fn(state)
+        )
+        await _wait_thread_event(specialized_started)
+        generic_release.set()
+        await generic_task
+        try:
+            assert [row.title for row in state.generic_session_facebook.rows] == [
+                "Generic Facebook"
+            ]
+            assert state.facebook_product_is_loading is True
+            specialized_release.set()
+            await specialized_task
+            assert state.facebook_product_is_loading is False
+            assert state.facebook_product_ui_status == UI_ERROR
+            assert state.facebook_product_results == []
+            assert [row.title for row in state.generic_session_facebook.rows] == [
+                "Generic Facebook"
+            ]
+            assert state.generic_session_facebook.status == UI_SUCCESS
+        finally:
+            specialized_release.set()
+
+    asyncio.run(scenario())
+
+
+def test_generic_alibaba_completion_clears_owned_loading_after_live_query_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generic still owns Alibaba live state; mutating the query must not stick LOADING."""
+
+    from bera_price_tracker.gui import services
+
+    generic_started = threading.Event()
+    generic_release = threading.Event()
+    specialized_calls = {"count": 0}
+
+    def run_alibaba(query: str, limit: int) -> dict[str, object]:
+        if query == "mutated alibaba":
+            specialized_calls["count"] += 1
+            return {"results": [{"title": "Specialized Alibaba", "product_id": "ali-spec"}]}
+        generic_started.set()
+        generic_release.wait(5)
+        return {
+            "results": [{"title": "Generic Alibaba", "product_id": "ali-generic"}],
+            "summary": {"resultados": "1"},
+            "stats_raw": {},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_alibaba_search", run_alibaba)
+
+    async def scenario() -> None:
+        state = TrackerState()
+        state.search_mode = MODE_SINGLE
+        state.search_platform = PLATFORM_ALIBABA
+        state.search_query = "wireless mouse"
+        state.search_limit = 3
+        generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
+        await _wait_thread_event(generic_started)
+        state.set_alibaba_query("mutated alibaba")
+        await cast(Any, TrackerState.search_alibaba).fn(state)
+        assert specialized_calls["count"] == 0
+        assert state.alibaba_is_loading is True
+        generic_release.set()
+        await generic_task
+        assert [row.title for row in state.generic_session_alibaba.rows] == ["Generic Alibaba"]
+        assert state.generic_session_alibaba.status == UI_SUCCESS
+        assert state.alibaba_is_loading is False
+        assert state.alibaba_ui_status == UI_INITIAL
+        assert all(row.title != "Generic Alibaba" for row in state.alibaba_results)
+
+    asyncio.run(scenario())
+
+
+def test_generic_facebook_completion_still_applies_when_it_owns_live_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+
+    def run_facebook(query: str, city: str, limit: int) -> dict[str, object]:
+        return {
+            "results": [{"title": "Generic Facebook", "external_id": "fb-generic"}],
+            "statistics": [],
+            "summary": {"usable": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_facebook_product_search", run_facebook)
+
+    state = TrackerState()
+    state.search_mode = MODE_SINGLE
+    state.search_platform = PLATFORM_FACEBOOK
+    state.search_query = "wireless mouse"
+    state.search_limit = 3
+    state.facebook_product_city = "caracas"
+    asyncio.run(cast(Any, TrackerState.run_scoped_search).fn(state))
+    assert [row.title for row in state.generic_session_facebook.rows] == ["Generic Facebook"]
+    assert [row.title for row in state.facebook_product_results] == ["Generic Facebook"]
+    assert state.facebook_product_is_loading is False
+    assert state.facebook_product_ui_status == UI_SUCCESS
+
+
+def test_stale_facebook_specialized_completion_does_not_clear_newer_specialized_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    first_started = threading.Event()
+    first_release = threading.Event()
+    second_started = threading.Event()
+    second_release = threading.Event()
+
+    def run_facebook(query: str, city: str, limit: int) -> dict[str, object]:
+        if query == "second specialized":
+            second_started.set()
+            second_release.wait(5)
+            return {
+                "results": [{"title": "Second Specialized", "external_id": "fb-2"}],
+                "statistics": [],
+                "summary": {"usable": "1"},
+                "ui_status": UI_SUCCESS,
+            }
+        first_started.set()
+        first_release.wait(5)
+        return {
+            "results": [{"title": "First Specialized", "external_id": "fb-1"}],
+            "statistics": [],
+            "summary": {"usable": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_facebook_product_search", run_facebook)
+
+    async def scenario() -> None:
+        state = TrackerState()
+        state.facebook_product_city = "caracas"
+        state.facebook_product_query = "first specialized"
+        state.alibaba_tracked_rows = [
+            AlibabaTrackedRow(product_id="P-1", title="First tracked"),
+            AlibabaTrackedRow(product_id="P-2", title="Second tracked"),
+        ]
+        first_task = asyncio.create_task(cast(Any, TrackerState.search_facebook_products).fn(state))
+        await _wait_thread_event(first_started)
+        opening = state.prepare_facebook_comparables_from_alibaba_tracked("P-2")
+        assert opening is TrackerState.translate_selected_alibaba_title_for_facebook
+        state.set_facebook_product_query("second specialized")
+        second_task = asyncio.create_task(
+            cast(Any, TrackerState.search_facebook_products).fn(state)
+        )
+        await _wait_thread_event(second_started)
+        assert state.facebook_product_is_loading is True
+        first_release.set()
+        await first_task
+        try:
+            assert state.facebook_product_is_loading is True
+            assert state.facebook_product_ui_status == UI_LOADING
+            assert all(row.title != "First Specialized" for row in state.facebook_product_results)
+            second_release.set()
+            await second_task
+            assert [row.title for row in state.facebook_product_results] == ["Second Specialized"]
+            assert state.facebook_product_is_loading is False
+        finally:
+            first_release.set()
+            second_release.set()
+
+    asyncio.run(scenario())
+
+
+def test_repeated_facebook_specialized_search_after_completion_replaces_live_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+
+    def run_facebook(query: str, city: str, limit: int) -> dict[str, object]:
+        return {
+            "results": [{"title": query, "external_id": f"fb-{query}"}],
+            "statistics": [],
+            "summary": {"usable": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_facebook_product_search", run_facebook)
+
+    state = TrackerState()
+    state.facebook_product_city = "caracas"
+    state.facebook_product_query = "first specialized"
+    asyncio.run(cast(Any, TrackerState.search_facebook_products).fn(state))
+    assert [row.title for row in state.facebook_product_results] == ["first specialized"]
+    assert state.facebook_product_is_loading is False
+    state.set_facebook_product_query("second specialized")
+    asyncio.run(cast(Any, TrackerState.search_facebook_products).fn(state))
+    assert [row.title for row in state.facebook_product_results] == ["second specialized"]
+    assert state.facebook_product_is_loading is False
+    assert state.facebook_product_ui_status == UI_SUCCESS

@@ -498,6 +498,7 @@ class TrackerState(rx.State):
     alibaba_limit: int = 20
     alibaba_results: list[AlibabaResultRow] = []
     alibaba_is_loading: bool = False
+    alibaba_live_request: int = 0
     alibaba_error: str = ""
     alibaba_summary: dict[str, str] = {}
     alibaba_ui_status: str = UI_INITIAL
@@ -531,6 +532,7 @@ class TrackerState(rx.State):
     ml_limit: int = 10
     ml_results: list[MercadoLibreResultRow] = []
     ml_is_loading: bool = False
+    ml_live_request: int = 0
     ml_error: str = ""
     ml_summary: dict[str, str] = {}
     ml_ui_status: str = UI_INITIAL
@@ -567,6 +569,7 @@ class TrackerState(rx.State):
     facebook_product_ui_status: str = UI_INITIAL
     facebook_product_error: str = ""
     facebook_product_is_loading: bool = False
+    facebook_live_request: int = 0
     facebook_product_alibaba_context: dict[str, str] = {}
     facebook_product_has_alibaba_context: bool = False
     facebook_product_provenance: dict[str, str] = {}
@@ -1166,6 +1169,8 @@ class TrackerState(rx.State):
                 self.alibaba_is_loading = False
                 return
             self.alibaba_is_loading = True
+            self.alibaba_live_request += 1
+            live_request = self.alibaba_live_request
             self.alibaba_error = ""
             self.alibaba_warning = alibaba_credit_warning(limit) or ""
             self.alibaba_ui_status = UI_LOADING
@@ -1185,6 +1190,7 @@ class TrackerState(rx.State):
                     request_limit=limit,
                     error_message=message,
                     request_generation=generation,
+                    live_request=live_request,
                 )
             return
 
@@ -1240,6 +1246,7 @@ class TrackerState(rx.State):
                 stats_raw=dict(payload.get("stats_raw") or {}),
                 ui_status=str(payload.get("ui_status") or UI_EMPTY),
                 request_generation=generation,
+                live_request=live_request,
             )
 
     def set_alibaba_sort(self, value: str) -> None:
@@ -1329,6 +1336,7 @@ class TrackerState(rx.State):
         error_message: str | None = None,
         request_generation: int | None = None,
         commit_generic_session: bool = False,
+        live_request: int | None = None,
     ) -> None:
         if request_generation is not None and request_generation != self.search_generation:
             return
@@ -1353,7 +1361,8 @@ class TrackerState(rx.State):
                     stats_raw=dict(stats_raw or {}),
                     error="",
                 )
-        # Specialized stale-request guard: do not apply the payload to live state.
+        if live_request is not None and live_request != self.alibaba_live_request:
+            return
         if not live_matches:
             self.alibaba_is_loading = False
             if self.alibaba_ui_status == UI_LOADING:
@@ -1536,6 +1545,7 @@ class TrackerState(rx.State):
         error_message: str | None = None,
         request_generation: int | None = None,
         commit_generic_session: bool = False,
+        live_request: int | None = None,
     ) -> None:
         if request_generation is not None and request_generation != self.search_generation:
             return
@@ -1561,6 +1571,8 @@ class TrackerState(rx.State):
                     statistics=list(statistics or []),
                     error="",
                 )
+        if live_request is not None and live_request != self.facebook_live_request:
+            return
         if not live_matches:
             self.facebook_product_is_loading = False
             if self.facebook_product_ui_status == UI_LOADING:
@@ -1613,6 +1625,8 @@ class TrackerState(rx.State):
                 return
             self.facebook_product_limit = limit
             self.facebook_product_is_loading = True
+            self.facebook_live_request += 1
+            live_request = self.facebook_live_request
             self.facebook_product_error = ""
             self.facebook_product_ui_status = UI_LOADING
             self.facebook_product_provenance = {}
@@ -1632,6 +1646,7 @@ class TrackerState(rx.State):
                     city=city,
                     error_message=services.sanitize_facebook_product_error(exc),
                     request_generation=generation,
+                    live_request=live_request,
                 )
             return
         rows = [
@@ -1691,6 +1706,7 @@ class TrackerState(rx.State):
                 summary=dict(payload.get("summary") or {}),
                 ui_status=str(payload.get("ui_status") or UI_EMPTY),
                 request_generation=generation,
+                live_request=live_request,
             )
 
     def set_ml_query(self, value: str) -> None:
@@ -1962,6 +1978,7 @@ class TrackerState(rx.State):
         error_message: str | None = None,
         request_generation: int | None = None,
         commit_generic_session: bool | None = None,
+        live_request: int | None = None,
     ) -> None:
         if request_generation is not None and request_generation != self.search_generation:
             return
@@ -1989,6 +2006,8 @@ class TrackerState(rx.State):
                     pipeline_summary=dict(summary or {}),
                     error="",
                 )
+        if live_request is not None and live_request != self.ml_live_request:
+            return
         if not live_matches:
             self.ml_is_loading = False
             if self.ml_ui_status == UI_LOADING:
@@ -2036,6 +2055,8 @@ class TrackerState(rx.State):
                 self._invalidate_ml_comparison()
                 return
             self.ml_is_loading = True
+            self.ml_live_request += 1
+            live_request = self.ml_live_request
             self.ml_error = ""
             self.ml_warning = mercadolibre_credit_warning(limit) or ""
             self.ml_ui_status = UI_LOADING
@@ -2056,6 +2077,7 @@ class TrackerState(rx.State):
                     query=query,
                     error_message=message,
                     request_generation=generation,
+                    live_request=live_request,
                 )
             return
 
@@ -2094,6 +2116,7 @@ class TrackerState(rx.State):
                 summary=dict(payload.get("summary") or {}),
                 ui_status=str(payload.get("ui_status") or UI_EMPTY),
                 request_generation=generation,
+                live_request=live_request,
             )
 
     def _payload_maps(self, payload: dict[str, object], key: str) -> list[dict[str, Any]]:
@@ -2293,6 +2316,7 @@ class TrackerState(rx.State):
             self.alibaba_limit = plan.limit
             self.alibaba_is_loading = True
             self.alibaba_ui_status = UI_LOADING
+            self.alibaba_live_request += 1
             self.generic_session_alibaba = GenericAlibabaSessionSnapshot(
                 generation=self.search_generation,
                 status=UI_LOADING,
@@ -2326,6 +2350,7 @@ class TrackerState(rx.State):
             self.facebook_product_query_origin = services.ML_QUERY_ORIGIN_USER
             self.facebook_product_is_loading = True
             self.facebook_product_ui_status = UI_LOADING
+            self.facebook_live_request += 1
             self.generic_session_facebook = GenericFacebookSessionSnapshot(
                 generation=self.search_generation,
                 status=UI_LOADING,
@@ -2357,6 +2382,7 @@ class TrackerState(rx.State):
             self.ml_query_origin = services.ML_QUERY_ORIGIN_USER
             self.ml_is_loading = True
             self.ml_ui_status = UI_LOADING
+            self.ml_live_request += 1
             self.ml_results_from_generic_session = True
             self.generic_session_ml = GenericMercadoLibreSessionSnapshot(
                 generation=self.search_generation,
@@ -2406,6 +2432,9 @@ class TrackerState(rx.State):
             self.search_elapsed_ms = 0
             self.search_completed_at = ""
             self._prepare_scoped_search(plan)
+            alibaba_live_request = self.alibaba_live_request
+            facebook_live_request = self.facebook_live_request
+            ml_live_request = self.ml_live_request
 
         async def run_provider(provider: str) -> None:
             try:
@@ -2433,6 +2462,7 @@ class TrackerState(rx.State):
                             error_message=services.sanitize_alibaba_error(exc),
                             request_generation=generation,
                             commit_generic_session=True,
+                            live_request=alibaba_live_request,
                         )
                     elif provider == PLATFORM_FACEBOOK:
                         # Session search is never an Alibaba-comparable lookup.
@@ -2443,6 +2473,7 @@ class TrackerState(rx.State):
                             error_message=services.sanitize_facebook_product_error(exc),
                             request_generation=generation,
                             commit_generic_session=True,
+                            live_request=facebook_live_request,
                         )
                     else:
                         self._finalize_mercadolibre_search(
@@ -2451,6 +2482,7 @@ class TrackerState(rx.State):
                             error_message=services.sanitize_mercadolibre_error(exc),
                             request_generation=generation,
                             commit_generic_session=True,
+                            live_request=ml_live_request,
                         )
                 return
             if not isinstance(payload, dict):
@@ -2466,6 +2498,7 @@ class TrackerState(rx.State):
                         ui_status=str(payload.get("ui_status") or UI_EMPTY),
                         request_generation=generation,
                         commit_generic_session=True,
+                        live_request=alibaba_live_request,
                     )
                 elif provider == PLATFORM_FACEBOOK:
                     rows, statistics = self._facebook_rows_from_payload(payload)
@@ -2479,6 +2512,7 @@ class TrackerState(rx.State):
                         ui_status=str(payload.get("ui_status") or UI_EMPTY),
                         request_generation=generation,
                         commit_generic_session=True,
+                        live_request=facebook_live_request,
                     )
                 else:
                     self._finalize_mercadolibre_search(
@@ -2489,6 +2523,7 @@ class TrackerState(rx.State):
                         ui_status=str(payload.get("ui_status") or UI_EMPTY),
                         request_generation=generation,
                         commit_generic_session=True,
+                        live_request=ml_live_request,
                     )
 
         await asyncio.gather(*[run_provider(provider) for provider in plan.providers])
