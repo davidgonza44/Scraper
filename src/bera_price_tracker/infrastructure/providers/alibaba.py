@@ -51,8 +51,7 @@ def build_alibaba_search_url(query: str) -> str:
 
     encoded = quote_plus(query)
     return (
-        "https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en"
-        f"&keywords={encoded}&page=1"
+        f"https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&keywords={encoded}&page=1"
     )
 
 
