@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -31,6 +32,7 @@ from bera_price_tracker.gui.state import (
     UI_LOADING,
     UI_SUCCESS,
     AlibabaResultRow,
+    AlibabaTrackedRow,
     FacebookCurrencyStatsRow,
     FacebookProductResultRow,
     MercadoLibreResultRow,
@@ -1880,3 +1882,200 @@ def test_mutating_live_query_limit_and_platform_does_not_rewrite_active_generati
     assert [row.title for row in state.generic_session_alibaba.rows] == ["Generic Alibaba kept"]
     assert state.search_session_phase == "RUNNING"
     assert all(row.title != "Generic Alibaba kept" for row in state.alibaba_results)
+
+
+async def _wait_thread_event(event: threading.Event, *, timeout: float = 5.0) -> None:
+    await asyncio.to_thread(event.wait, timeout)
+    assert event.is_set()
+
+
+def test_alibaba_specialized_search_cannot_start_while_generic_alibaba_is_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alibaba overlap is not production-reachable: shared loading blocks search_alibaba."""
+
+    from bera_price_tracker.gui import services
+
+    generic_started = threading.Event()
+    generic_release = threading.Event()
+    specialized_calls = {"count": 0}
+
+    def run_alibaba(query: str, limit: int) -> dict[str, object]:
+        if query == "specialized alibaba":
+            specialized_calls["count"] += 1
+            return {"results": [{"title": "Specialized Alibaba", "product_id": "ali-spec"}]}
+        generic_started.set()
+        generic_release.wait(5)
+        return {
+            "results": [{"title": "Generic Alibaba", "product_id": "ali-generic"}],
+            "summary": {"resultados": "1"},
+            "stats_raw": {},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_alibaba_search", run_alibaba)
+
+    async def scenario() -> None:
+        state = TrackerState()
+        state.search_mode = MODE_SINGLE
+        state.search_platform = PLATFORM_ALIBABA
+        state.search_query = "wireless mouse"
+        state.search_limit = 3
+        generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
+        await _wait_thread_event(generic_started)
+        assert state.alibaba_is_loading is True
+        state.set_alibaba_query("specialized alibaba")
+        await cast(Any, TrackerState.search_alibaba).fn(state)
+        assert specialized_calls["count"] == 0
+        assert state.alibaba_is_loading is True
+        assert state.alibaba_ui_status == UI_LOADING
+        generic_release.set()
+        await generic_task
+
+    asyncio.run(scenario())
+
+
+def test_generic_facebook_completion_does_not_clear_concurrent_specialized_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: generic Facebook finalize must not reset a specialized live request it does not own."""
+
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    generic_started = threading.Event()
+    generic_release = threading.Event()
+    specialized_started = threading.Event()
+    specialized_release = threading.Event()
+
+    def run_facebook(query: str, city: str, limit: int) -> dict[str, object]:
+        if query == "specialized facebook":
+            specialized_started.set()
+            specialized_release.wait(5)
+            return {
+                "results": [{"title": "Specialized Facebook", "external_id": "fb-spec"}],
+                "statistics": [],
+                "summary": {"usable": "1"},
+                "ui_status": UI_SUCCESS,
+            }
+        generic_started.set()
+        generic_release.wait(5)
+        return {
+            "results": [{"title": "Generic Facebook", "external_id": "fb-generic"}],
+            "statistics": [],
+            "summary": {"usable": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_facebook_product_search", run_facebook)
+
+    async def scenario() -> None:
+        state = TrackerState()
+        state.search_mode = MODE_SINGLE
+        state.search_platform = PLATFORM_FACEBOOK
+        state.search_query = "wireless mouse"
+        state.search_limit = 3
+        state.facebook_product_city = "caracas"
+        state.alibaba_tracked_rows = [
+            AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")
+        ]
+        generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
+        await _wait_thread_event(generic_started)
+        assert state.facebook_product_is_loading is True
+        opening = state.prepare_facebook_comparables_from_alibaba_tracked("P-SPEC")
+        assert opening is TrackerState.translate_selected_alibaba_title_for_facebook
+        state.set_facebook_product_query("specialized facebook")
+        specialized_task = asyncio.create_task(
+            cast(Any, TrackerState.search_facebook_products).fn(state)
+        )
+        await _wait_thread_event(specialized_started)
+        assert state.facebook_product_is_loading is True
+        assert state.facebook_product_ui_status == UI_LOADING
+        generic_release.set()
+        await generic_task
+        try:
+            assert [row.title for row in state.generic_session_facebook.rows] == ["Generic Facebook"]
+            assert state.generic_session_facebook.status == UI_SUCCESS
+            assert state.facebook_product_is_loading is True
+            assert state.facebook_product_ui_status == UI_LOADING
+            assert state.facebook_product_query == "specialized facebook"
+            assert all(row.title != "Generic Facebook" for row in state.facebook_product_results)
+            specialized_release.set()
+            await specialized_task
+            assert [row.title for row in state.facebook_product_results] == ["Specialized Facebook"]
+            assert state.facebook_product_is_loading is False
+            assert state.facebook_product_ui_status == UI_SUCCESS
+        finally:
+            specialized_release.set()
+
+    asyncio.run(scenario())
+
+
+def test_generic_ml_completion_does_not_clear_concurrent_specialized_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1: generic Mercado Libre finalize must not reset a specialized live request it does not own."""
+
+    from bera_price_tracker.gui import services
+
+    monkeypatch.setattr(services, "product_translator_is_configured", lambda: False)
+    generic_started = threading.Event()
+    generic_release = threading.Event()
+    specialized_started = threading.Event()
+    specialized_release = threading.Event()
+
+    def run_ml(query: str, limit: int) -> dict[str, object]:
+        if query == "specialized ml":
+            specialized_started.set()
+            specialized_release.wait(5)
+            return {
+                "results": [{"title": "Specialized ML", "external_id": "MLV-spec"}],
+                "summary": {"usable": "1"},
+                "ui_status": UI_SUCCESS,
+            }
+        generic_started.set()
+        generic_release.wait(5)
+        return {
+            "results": [{"title": "Generic ML", "external_id": "MLV-generic"}],
+            "summary": {"usable": "1"},
+            "ui_status": UI_SUCCESS,
+        }
+
+    monkeypatch.setattr(services, "run_mercadolibre_search", run_ml)
+
+    async def scenario() -> None:
+        state = TrackerState()
+        state.search_mode = MODE_SINGLE
+        state.search_platform = PLATFORM_ML
+        state.search_query = "wireless mouse"
+        state.search_limit = 3
+        state.alibaba_tracked_rows = [
+            AlibabaTrackedRow(product_id="P-SPEC", title="Tracked mouse")
+        ]
+        generic_task = asyncio.create_task(cast(Any, TrackerState.run_scoped_search).fn(state))
+        await _wait_thread_event(generic_started)
+        assert state.ml_is_loading is True
+        opening = state.prepare_ml_comparables_from_alibaba_tracked("P-SPEC")
+        assert opening is TrackerState.translate_selected_alibaba_title
+        state.set_ml_query("specialized ml")
+        specialized_task = asyncio.create_task(
+            cast(Any, TrackerState.search_mercadolibre).fn(state)
+        )
+        await _wait_thread_event(specialized_started)
+        assert state.ml_is_loading is True
+        assert state.ml_ui_status == UI_LOADING
+        generic_release.set()
+        await generic_task
+        assert [row.title for row in state.generic_session_ml.rows] == ["Generic ML"]
+        assert state.generic_session_ml.status == UI_SUCCESS
+        assert state.ml_is_loading is True
+        assert state.ml_ui_status == UI_LOADING
+        assert state.ml_query == "specialized ml"
+        assert all(row.title != "Generic ML" for row in state.ml_results)
+        specialized_release.set()
+        await specialized_task
+        assert [row.title for row in state.ml_results] == ["Specialized ML"]
+        assert state.ml_is_loading is False
+        assert state.ml_ui_status == UI_SUCCESS
+
+    asyncio.run(scenario())
