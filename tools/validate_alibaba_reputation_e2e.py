@@ -24,7 +24,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -134,13 +134,76 @@ class ReplayActorMismatch(ValueError):
     """Replayed Apify run does not belong to the configured SEARCH Actor."""
 
 
-def normalize_actor_ref(value: object) -> str | None:
+class ReplayProvenanceUnavailable(ValueError):
+    """Replayed Apify run Actor provenance cannot be verified."""
+
+
+ReplayProvenance = Literal["match", "mismatch", "unavailable"]
+ReplaySearchFailureKind = Literal["mismatch", "unavailable", "other"]
+
+
+def _actor_ref_text(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
     if not text:
         return None
-    return text.replace("~", "/").casefold()
+    return text
+
+
+def _is_named_actor_ref(value: str) -> bool:
+    return "/" in value or "~" in value
+
+
+def _named_actor_canonical(value: str) -> str:
+    return value.replace("~", "/")
+
+
+def _alias_refs(configured_actor_id: object, extra_ids: object) -> tuple[str, ...]:
+    values: list[object] = [configured_actor_id]
+    extra_items: Sequence[object]
+    if isinstance(extra_ids, (str, bytes)):
+        extra_items = (extra_ids,)
+    elif isinstance(extra_ids, Sequence):
+        extra_items = extra_ids
+    else:
+        extra_items = ()
+    values.extend(extra_items)
+    refs: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = _actor_ref_text(item)
+        if text is None or text in seen:
+            continue
+        seen.add(text)
+        refs.append(text)
+    return tuple(refs)
+
+
+def classify_replay_provenance(
+    *,
+    configured_actor_id: object,
+    run_act_id: object,
+    extra_ids: object = (),
+) -> ReplayProvenance:
+    """Classify replay Actor provenance without treating opaque IDs as names."""
+
+    run_ref = _actor_ref_text(run_act_id)
+    if run_ref is None:
+        return "unavailable"
+    aliases = _alias_refs(configured_actor_id, extra_ids)
+    named_aliases = tuple(alias for alias in aliases if _is_named_actor_ref(alias))
+    opaque_aliases = tuple(alias for alias in aliases if not _is_named_actor_ref(alias))
+    if _is_named_actor_ref(run_ref):
+        canonical = _named_actor_canonical(run_ref)
+        if any(_named_actor_canonical(alias) == canonical for alias in named_aliases):
+            return "match"
+        return "mismatch"
+    if run_ref in opaque_aliases:
+        return "match"
+    if opaque_aliases:
+        return "mismatch"
+    return "unavailable"
 
 
 def run_belongs_to_configured_search_actor(
@@ -151,25 +214,59 @@ def run_belongs_to_configured_search_actor(
 ) -> bool:
     """True when run actId matches the configured SEARCH Actor or a resolved alias."""
 
-    run_norm = normalize_actor_ref(run_act_id)
-    if run_norm is None:
-        return False
-    candidates: set[str] = set()
-    configured = normalize_actor_ref(configured_actor_id)
-    if configured is not None:
-        candidates.add(configured)
-    extra_items: Sequence[object]
-    if isinstance(extra_ids, (str, bytes)):
-        extra_items = (extra_ids,)
-    elif isinstance(extra_ids, Sequence):
-        extra_items = extra_ids
-    else:
-        extra_items = ()
-    for item in extra_items:
-        normalized = normalize_actor_ref(item)
-        if normalized is not None:
-            candidates.add(normalized)
-    return run_norm in candidates
+    return (
+        classify_replay_provenance(
+            configured_actor_id=configured_actor_id,
+            run_act_id=run_act_id,
+            extra_ids=extra_ids,
+        )
+        == "match"
+    )
+
+
+def find_exception_in_chain[T: BaseException](
+    exc: BaseException | None,
+    expected_type: type[T],
+    *,
+    max_depth: int = 32,
+) -> T | None:
+    """Return the first matching exception in ``__cause__`` / ``__context__``.
+
+    Cycle-safe: identities are tracked with a seen-id set. Does not print
+    chained exception messages or reprs.
+    """
+
+    pending: list[BaseException] = []
+    if exc is not None:
+        pending.append(exc)
+    seen: set[int] = set()
+    inspected = 0
+    while pending:
+        current = pending.pop()
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        inspected += 1
+        if inspected > max_depth:
+            return None
+        if isinstance(current, expected_type):
+            return current
+        cause = current.__cause__
+        context = current.__context__
+        if isinstance(cause, BaseException):
+            pending.append(cause)
+        if isinstance(context, BaseException) and context is not cause:
+            pending.append(context)
+    return None
+
+
+def replay_search_failure_kind(exc: BaseException) -> ReplaySearchFailureKind:
+    if find_exception_in_chain(exc, ReplayActorMismatch) is not None:
+        return "mismatch"
+    if find_exception_in_chain(exc, ReplayProvenanceUnavailable) is not None:
+        return "unavailable"
+    return "other"
 
 
 def extract_run_provenance(run: Mapping[str, object] | None) -> dict[str, object]:
@@ -208,6 +305,32 @@ def _display_provenance(value: object) -> str:
     if value is None:
         return "—"
     return str(value)
+
+
+def _print_run_record(record: Mapping[str, Any]) -> None:
+    print(f"Actor runs creados: {record.get('actor_calls_created', 0)}")
+    print(f"Actor configurado: {_display_provenance(record.get('configured_actor_id'))}")
+    print(f"Actor real del run (actId): {_display_provenance(record.get('run_act_id'))}")
+    print(f"buildId: {_display_provenance(record.get('run_build_id'))}")
+    print(f"buildNumber: {_display_provenance(record.get('run_build_number'))}")
+    print(f"status: {record.get('run_status')}")
+
+
+def emit_search_failure(exc: BaseException, record: Mapping[str, Any]) -> int:
+    """Print a sanitized search-failure diagnosis. Never dumps chained reprs."""
+
+    from bera_price_tracker.gui.services import sanitize_alibaba_error
+
+    _print_run_record(record)
+    kind = replay_search_failure_kind(exc)
+    if kind == "mismatch":
+        print("ERROR: el run reutilizado no pertenece al Actor SEARCH configurado")
+        return 1
+    if kind == "unavailable":
+        print("ERROR: no se pudo verificar el Actor del run reutilizado")
+        return 1
+    print(f"ERROR (sanitizado): {sanitize_alibaba_error(exc)}")
+    return 1
 
 
 def classify_observed_schema(observed: set[str]) -> tuple[list[str], list[str]]:
@@ -276,14 +399,17 @@ class ReplayActorClient:
         _apply_run_to_record(self._record, run)
         configured = self._record.get("configured_actor_id") or self._record.get("actor_id")
         aliases = self._record.get("configured_actor_aliases") or ()
-        if not run_belongs_to_configured_search_actor(
+        classification = classify_replay_provenance(
             configured_actor_id=configured,
             run_act_id=self._record.get("run_act_id"),
             extra_ids=aliases,
-        ):
+        )
+        if classification == "mismatch":
             raise ReplayActorMismatch(
                 "Replayed run does not belong to the configured Alibaba SEARCH Actor"
             )
+        if classification == "unavailable":
+            raise ReplayProvenanceUnavailable("Replayed run Actor provenance could not be verified")
         return run
 
 
@@ -490,7 +616,7 @@ def main() -> int:  # noqa: PLR0915
         showing_counter,
         top_result_cards,
     )
-    from bera_price_tracker.gui.services import run_alibaba_search, sanitize_alibaba_error
+    from bera_price_tracker.gui.services import run_alibaba_search
     from bera_price_tracker.infrastructure.providers.alibaba import (
         ApifyAlibabaClient,
         map_alibaba_item,
@@ -521,28 +647,13 @@ def main() -> int:  # noqa: PLR0915
     print(f"=== 1-2. RUN REAL — modo {mode} ===")
     try:
         payload = run_alibaba_search(QUERY, LIMIT, search_service=service)
-    except BaseException as exc:  # noqa: BLE001 - sanitized stop, no retry
-        print(f"Actor runs creados: {record['actor_calls_created']}")
-        print(f"Actor configurado: {_display_provenance(record.get('configured_actor_id'))}")
-        print(f"Actor real del run (actId): {_display_provenance(record.get('run_act_id'))}")
-        print(f"buildId: {_display_provenance(record.get('run_build_id'))}")
-        print(f"buildNumber: {_display_provenance(record.get('run_build_number'))}")
-        print(f"status: {record['run_status']}")
-        if isinstance(exc, ReplayActorMismatch):
-            print("ERROR: el run reutilizado no pertenece al Actor SEARCH configurado")
-            return 1
-        print(f"ERROR (sanitizado): {sanitize_alibaba_error(exc)}")
-        return 1
+    except Exception as exc:
+        return emit_search_failure(exc, record)
 
     products: list[Any] = service.products
     raw_items = [item for item in record["raw_items"] if isinstance(item, Mapping)]
     rows: list[dict[str, Any]] = payload["results"]
-    print(f"Actor runs creados: {record['actor_calls_created']}")
-    print(f"Actor configurado: {_display_provenance(record.get('configured_actor_id'))}")
-    print(f"Actor real del run (actId): {_display_provenance(record.get('run_act_id'))}")
-    print(f"buildId: {_display_provenance(record.get('run_build_id'))}")
-    print(f"buildNumber: {_display_provenance(record.get('run_build_number'))}")
-    print(f"status: {record['run_status']}")
+    _print_run_record(record)
     print(f"run reutilizable: {record['run_id']}")
     print(f"items en dataset (reutilizado): {len(raw_items)}")
     print(f"productos mapeados: {len(products)}")
