@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, Context, Decimal, localcontext
+from decimal import (
+    ROUND_CEILING,
+    ROUND_FLOOR,
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    InvalidOperation,
+    localcontext,
+)
 
 _MINIMUM_CALCULATION_PRECISION = 50
 _DISPLAY_CENTS = Decimal("0.01")
@@ -81,6 +89,22 @@ def _as_decimal(value: object) -> Decimal | None:
     return value
 
 
+def _quantize_cents(value: Decimal) -> Decimal | None:
+    """Quantize to display cents, or None if the coefficient cannot be represented."""
+
+    if not value.is_finite():
+        return None
+    exponent = value.as_tuple().exponent
+    if not isinstance(exponent, int):
+        return None
+    precision = max(_MINIMUM_CALCULATION_PRECISION, value.adjusted() + 3)
+    try:
+        with localcontext(Context(prec=precision, rounding=ROUND_HALF_EVEN)):
+            return value.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    except InvalidOperation:
+        return None
+
+
 def explicit_alibaba_currency(value: object) -> str | None:
     """Return a 3-letter ISO code. ``$`` and other symbols are not currency."""
 
@@ -115,6 +139,8 @@ def alibaba_price_bounds(product: object) -> tuple[Decimal, Decimal] | None:
     maximum = _as_decimal(getattr(product, "max_price", None))
     if maximum is None:
         maximum = minimum
+    if minimum > maximum:
+        return None
     return minimum, maximum
 
 
@@ -239,7 +265,9 @@ def format_alibaba_money(value: Decimal | None) -> str:
 
     if value is None:
         return UNAVAILABLE_DISPLAY
-    quantized = value.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    quantized = _quantize_cents(value)
+    if quantized is None:
+        return UNAVAILABLE_DISPLAY
     return f"${quantized}"
 
 
@@ -249,7 +277,9 @@ def format_alibaba_currency(value: Decimal | None, currency: object) -> str:
     explicit = explicit_alibaba_currency(currency)
     if value is None or explicit is None:
         return UNAVAILABLE_DISPLAY
-    quantized = value.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    quantized = _quantize_cents(value)
+    if quantized is None:
+        return UNAVAILABLE_DISPLAY
     if explicit == STATS_CURRENCY:
         return f"${quantized}"
     return f"{explicit} {quantized}"
@@ -266,8 +296,12 @@ def format_alibaba_listing_price(
     if low is None:
         return ""
     high = max_price if isinstance(max_price, Decimal) and max_price.is_finite() else low
-    quantized_low = low.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
-    quantized_high = high.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    if high < low:
+        return ""
+    quantized_low = _quantize_cents(low)
+    quantized_high = _quantize_cents(high)
+    if quantized_low is None or quantized_high is None:
+        return ""
     explicit = explicit_alibaba_currency(currency)
     if explicit is None:
         amount = (

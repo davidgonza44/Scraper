@@ -2000,6 +2000,127 @@ def test_negative_numeric_price_does_not_enter_statistics() -> None:
     assert stats.minimum is None
 
 
+def _assert_search_row_survives(product: AlibabaProduct) -> dict[str, Any]:
+    row = gui_services.alibaba_product_to_row(product)
+    payload = gui_services.run_alibaba_search(
+        "mouse",
+        10,
+        search_service=SearchAlibabaProducts(FakeAlibabaProvider([product])),
+    )
+    assert payload["ui_status"] == "SUCCESS"
+    assert payload["error_message"] == ""
+    assert len(payload["results"]) == 1
+    return row
+
+
+def test_extreme_provider_prices_do_not_crash_listing_rows() -> None:
+    documented = map_alibaba_item({"title": "Mouse", "price": "US $1.00-$9.00"})
+    assert documented is not None
+    documented_row = _assert_search_row_survives(documented)
+    assert documented.min_price == Decimal("1.00")
+    assert documented.max_price == Decimal("9.00")
+    assert documented_row["price"]
+
+    for raw in (1e20, 1e100, 1e-20, 1e-100, "1e20", "1e100", "1e500"):
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        row = _assert_search_row_survives(product)
+        assert isinstance(row["price"], str)
+        money = format_alibaba_money(product.min_price)
+        assert isinstance(money, str)
+        listing = format_alibaba_listing_price(
+            product.min_price, product.max_price, product.currency
+        )
+        assert isinstance(listing, str)
+
+    overflow = map_alibaba_item({"title": "Mouse", "price": 1e500})
+    assert overflow is not None
+    assert overflow.min_price is None
+    _assert_search_row_survives(overflow)
+
+
+def test_reversed_price_range_numeric_bounds_are_unavailable() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("US $1.00-$9.00")
+    assert display == "US $1.00-$9.00"
+    assert min_price == Decimal("1.00")
+    assert max_price == Decimal("9.00")
+    assert currency is None
+    assert min_price <= max_price
+
+    for raw, expected_display in (
+        ("US $9.00-$1.00", "US $9.00-$1.00"),
+        ("$9-$1", "$9-$1"),
+    ):
+        parsed = parse_alibaba_price(raw)
+        assert parsed[0] == expected_display
+        assert parsed[1] is None
+        assert parsed[2] is None
+        product = map_alibaba_item({"title": "Mouse", "price": raw, "currency": "USD"})
+        assert product is not None
+        assert product.price_display == expected_display
+        assert product.min_price is None
+        assert product.max_price is None
+        assert alibaba_price_bounds(product) is None
+        assert alibaba_representative_price(product) is None
+        row = _assert_search_row_survives(product)
+        assert "9.00–1.00" not in row["price"]
+        assert "9–1" not in row["price"]
+        stats = calculate_alibaba_price_statistics([product])
+        assert stats.priced_products == 0
+        assert stats.minimum is None
+        assert stats.maximum is None
+        assert stats.average is None
+
+    equal = parse_alibaba_price("$1-$1")
+    assert equal[1] == Decimal("1")
+    assert equal[2] == Decimal("1")
+    assert equal[1] <= equal[2]
+
+    hyphen = parse_alibaba_price("$1.30-1.60")
+    assert hyphen[1] == Decimal("1.30")
+    assert hyphen[2] == Decimal("1.60")
+    assert hyphen[1] <= hyphen[2]
+
+    mixed = [
+        map_alibaba_item({"title": "reversed", "price": "$9.00-$1.00", "currency": "USD"}),
+        map_alibaba_item({"title": "ok", "price": "$2.00", "currency": "USD"}),
+    ]
+    mapped = [item for item in mixed if item is not None]
+    stats = calculate_alibaba_price_statistics(mapped)
+    assert stats.priced_products == 1
+    assert stats.minimum == Decimal("2.00")
+    assert stats.maximum == Decimal("2.00")
+    assert stats.average == Decimal("2.00")
+
+    domain = AlibabaProduct(
+        title="Mouse",
+        price_display="US $9.00-$1.00",
+        min_price=Decimal("9.00"),
+        max_price=Decimal("1.00"),
+        currency="USD",
+    )
+    assert domain.price_display == "US $9.00-$1.00"
+    assert domain.min_price is None
+    assert domain.max_price is None
+    assert alibaba_price_bounds(domain) is None
+
+
+def test_successfully_parsed_ranges_keep_ordered_bounds() -> None:
+    for raw in ("US $1.00-$9.00", "$1.00-$9.00", "USD 1.00-9.00", "$1.30-1.60", "$1-$1"):
+        _display, minimum, maximum, _currency = parse_alibaba_price(raw)
+        assert minimum is not None
+        assert maximum is not None
+        assert minimum <= maximum
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        assert product.min_price is not None
+        assert product.max_price is not None
+        assert product.min_price <= product.max_price
+        bounds = alibaba_price_bounds(product)
+        assert bounds is not None
+        assert bounds[0] <= bounds[1]
+
+
 def test_mapper_keeps_missing_optional_identity_fields() -> None:
     product = map_alibaba_item({"title": "Mouse", "price": "USD 4.03", "moq": True})
     assert product is not None

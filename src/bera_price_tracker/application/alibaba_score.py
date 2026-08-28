@@ -38,6 +38,7 @@ LABEL_LOW = "Baja / poco comparable"
 OUTLIER_BADGE = "Precio atípico"
 
 _MOQ_NUMBER = re.compile(r"(\d[\d,]*(?:\.\d+)?)")
+_MOQ_SCIENTIFIC = re.compile(r"(?<![A-Za-z])[+-]?\d+(?:\.\d+)?[eE][+-]?\d+")
 _INFORMATION_FIELDS = ("title", "supplier_name", "product_url", "image_url", "supplier_country")
 _HALF = Decimal("0.5")
 _INTEGER = Decimal("1")
@@ -76,12 +77,16 @@ def _relative_fraction(value: Decimal, group: Sequence[Decimal]) -> Decimal:
 
 
 def extract_moq_quantity(moq: object) -> Decimal | None:
-    """First numeric quantity in a MOQ text, or None. Never invents a value."""
+    """First ordinary MOQ quantity, or None. Never invents a value."""
 
     if not isinstance(moq, str):
         return None
+    if _MOQ_SCIENTIFIC.search(moq.replace(" ", "")) is not None:
+        return None
     match = _MOQ_NUMBER.search(moq)
     if match is None:
+        return None
+    if match.start() > 0 and moq[match.start() - 1] == "-":
         return None
     try:
         quantity = Decimal(match.group(1).replace(",", ""))

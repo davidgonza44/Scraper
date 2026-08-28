@@ -190,6 +190,8 @@ def parse_alibaba_price(
     if len(numbers) == 2:
         between = compact[matches[0].end() : matches[1].start()]
         if "-" in between:
+            if numbers[0] > numbers[1]:
+                return display, None, None, currency
             return display, numbers[0], numbers[1], currency
         return display, None, None, currency
     return display, None, None, currency
