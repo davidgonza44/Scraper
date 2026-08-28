@@ -406,9 +406,10 @@ def format_alibaba_listing_price(
     if max_price is None:
         high = low
     else:
-        high = _as_decimal(max_price)
-        if high is None:
+        parsed_high = _as_decimal(max_price)
+        if parsed_high is None:
             return ""
+        high = parsed_high
     if high < low:
         return ""
     quantized_low = _quantize_cents(low)

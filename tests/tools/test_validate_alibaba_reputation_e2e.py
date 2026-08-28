@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -788,8 +789,8 @@ def _collecting_check(failures: list[str]) -> Any:
     return check
 
 
-def _search_live(items: list[object]) -> tuple[_LiveFakeApify, list[Any], dict[str, Any]]:
-    fake = _LiveFakeApify(items)
+def _search_live(items: Sequence[object]) -> tuple[_LiveFakeApify, list[Any], dict[str, Any]]:
+    fake = _LiveFakeApify(list(items))
     client = ApifyAlibabaClient(
         _api_token="token",
         actor_id=DEFAULT_APIFY_ALIBABA_ACTOR,
@@ -836,7 +837,7 @@ def test_succeeded_empty_dataset_fails_closed_without_indexing(
 def test_succeeded_titleless_rows_fail_closed_without_indexing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    raw_items = [
+    raw_items: list[dict[str, object]] = [
         {"productId": "1", "price": "US $1.00", "supplierName": "Ghost"},
         {"title": 4.5, "productId": "2", "price": "US $2.00"},
         {"title": 5, "productId": "3"},
