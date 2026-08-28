@@ -498,6 +498,114 @@ test('hook runtime has no npx or npm network fallback', () => {
   }
 });
 
+test('Windows .cmd discovery never reaches spawnSync as the command', (t) => {
+  const parent = tempDir(t, 'gitnexus-cmd-');
+  initGitRepo(parent);
+  fs.writeFileSync(path.join(parent, 'README'), 'main\n');
+  runGit(parent, ['add', 'README']);
+  runGit(parent, ['commit', '-q', '-m', 'init']);
+  writeRepoIndex(parent, { lastCommit: gitHead(parent) });
+
+  const shimDir = tempDir(t, 'gitnexus-shim-');
+  const jsDir = path.join(shimDir, 'node_modules', 'gitnexus', 'dist', 'cli');
+  fs.mkdirSync(jsDir, { recursive: true });
+  const cmdPath = path.join(shimDir, 'gitnexus.cmd');
+  const jsPath = path.join(jsDir, 'index.js');
+  fs.writeFileSync(cmdPath, '@echo off\r\necho pwned\r\n');
+  fs.writeFileSync(jsPath, "console.log('js-cli');\n");
+  const nodeDir = path.join(tempDir(t, 'gitnexus-node-dir-'), 'Program Files', 'nodejs');
+  fs.mkdirSync(nodeDir, { recursive: true });
+  const execPath = path.join(nodeDir, 'node.exe');
+  fs.writeFileSync(execPath, '');
+
+  const pattern = 'validateUser & dir | echo > %TEMP%\\pwned';
+  const spawns = [];
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    const result = hook.executeHook(
+      { cwd: parent, tool_name: 'Grep', tool_input: { pattern } },
+      {
+        env: {
+          ...process.env,
+          PATH: '/nonexistent',
+          GITNEXUS_CLI: cmdPath,
+        },
+        discoverOptions: {
+          execPath,
+          pathVar: '/nonexistent',
+          npmRootGlobal: '',
+          requireResolve() {
+            throw new Error('not local');
+          },
+        },
+        spawnSync(cmd, args, opts) {
+          spawns.push({ cmd, args, opts });
+          if (cmd === 'git') {
+            return spawnSync(cmd, args, { ...opts, timeout: 2000 });
+          }
+          return { status: 0, stdout: '[GitNexus] extra', stderr: '' };
+        },
+      },
+    );
+    assert.equal(result.status, 'ok', JSON.stringify({ result, spawns }));
+    const cli = spawns.filter((row) => row.cmd !== 'git' && row.cmd !== 'npm');
+    assert.equal(cli.length, 1, JSON.stringify(spawns));
+    assert.notEqual(cli[0].cmd, cmdPath);
+    assert.doesNotMatch(String(cli[0].cmd), /\.cmd$/i);
+    assert.equal(cli[0].cmd, execPath);
+    assert.equal(cli[0].args[0], jsPath);
+    assert.equal(cli[0].args[1], 'augment');
+    assert.equal(cli[0].args[2], '--');
+    assert.equal(cli[0].args[3], pattern);
+    assert.equal(cli[0].args.length, 4);
+    assert.equal(cli[0].opts.shell, false);
+    assert.ok(cli[0].opts.timeout > 0);
+    assert.ok(String(cli[0].cmd).includes('Program Files') || String(jsPath).includes('node_modules'));
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test('runGitNexusCli never spawns a .cmd path and keeps the pattern as one argv cell', () => {
+  const spawns = [];
+  const cmdPath = 'C:\\Users\\test\\AppData\\Roaming\\npm\\gitnexus.cmd';
+  const refused = hook.runGitNexusCli(cmdPath, ['augment', '--', 'x & y'], '/tmp', 1000, (cmd, args, opts) => {
+    spawns.push({ cmd, args, opts });
+    return { status: 0, stdout: '', stderr: '' };
+  });
+  assert.equal(refused.error.code, 'ENOENT');
+  assert.deepEqual(spawns, []);
+
+  const execPath = 'C:\\Program Files\\nodejs\\node.exe';
+  const jsPath = 'C:\\Program Files\\nodejs\\node_modules\\gitnexus\\dist\\cli\\index.js';
+  const pattern = 'foo & bar | baz > %TEMP%\\x < y';
+  const ran = hook.runGitNexusCli(
+    { kind: 'js', command: execPath, argsPrefix: [jsPath], path: jsPath, source: 'path' },
+    ['augment', '--', pattern],
+    '/tmp',
+    4321,
+    (cmd, args, opts) => {
+      spawns.push({ cmd, args, opts });
+      return { status: 0, stdout: '[GitNexus] extra', stderr: '' };
+    },
+  );
+  assert.equal(ran.status, 0);
+  assert.equal(spawns.length, 1);
+  assert.equal(spawns[0].cmd, execPath);
+  assert.deepEqual(spawns[0].args, [jsPath, 'augment', '--', pattern]);
+  assert.equal(spawns[0].opts.shell, false);
+  assert.equal(spawns[0].opts.timeout, 4321);
+});
+
+test('hook spawn paths never enable a shell for the Grep pattern', () => {
+  const files = fs.readdirSync(__dirname).filter((name) => name.endsWith('.cjs') && !name.endsWith('.test.cjs'));
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(__dirname, name), 'utf8');
+    assert.doesNotMatch(source, /shell:\s*true/);
+  }
+});
+
 test('executeHook spends remaining budget on the CLI after Git work', (t) => {
   const parent = tempDir(t, 'gitnexus-budget-');
   initGitRepo(parent);

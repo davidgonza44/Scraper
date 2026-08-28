@@ -1,5 +1,28 @@
 'use strict';
 
+/**
+ * Cross-process hook concurrency cap.
+ *
+ * Admission is a counting semaphore of HOOK_LOCK_MAX_INFLIGHT implemented
+ * with Node's bundled SQLite (`node:sqlite` DatabaseSync) and SQLite's
+ * writer lock.
+ *
+ * Linearization point:
+ *   The COMMIT of an INSERT INTO owners that ran inside a BEGIN IMMEDIATE
+ *   transaction. BEGIN IMMEDIATE acquires SQLite's RESERVED/PENDING/EXCLUSIVE
+ *   writer lock, so at most one process can be in the admission critical
+ *   section. A BEFORE INSERT trigger also aborts any INSERT that would make
+ *   COUNT(*) exceed HOOK_LOCK_MAX_INFLIGHT, so the engine itself refuses a
+ *   fourth owner even if application logic were wrong.
+ *
+ * Successful acquisition always goes through that one INSERT+COMMIT.
+ * Occupancy is the committed row, not a filesystem snapshot, ranking, or
+ * post-rename check. Release DELETEs only that row's nonce. Live rows are
+ * never deleted by another process. Stale/dead rows are removed only inside
+ * the same IMMEDIATE transaction that decides admission — never via a
+ * reusable shared-path stat-then-unlink.
+ */
+
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -7,7 +30,32 @@ const path = require('path');
 const HOOK_LOCK_SUBDIR = '.hook-locks';
 const HOOK_LOCK_MAX_INFLIGHT = 3;
 const HOOK_LOCK_STALE_MS = 30000;
+const OWNERS_DB_FILENAME = 'owners.sqlite';
 const OWNED_CLAIM_RE = /^owned-\d+-[0-9a-f]+\.(lock|pending)$/i;
+
+let DatabaseSyncCtor = undefined;
+
+function loadDatabaseSync() {
+  if (DatabaseSyncCtor !== undefined) return DatabaseSyncCtor;
+  const emitWarning = process.emitWarning;
+  process.emitWarning = function patchedEmitWarning(warning, type) {
+    const msg = typeof warning === 'string' ? warning : (warning && warning.message) || '';
+    const name = typeof type === 'string' ? type : (warning && warning.name) || '';
+    if (/sqlite/i.test(msg) && (/experimental/i.test(msg) || name === 'ExperimentalWarning')) {
+      return;
+    }
+    return emitWarning.apply(process, arguments);
+  };
+  try {
+    const sqlite = require('node:sqlite');
+    DatabaseSyncCtor = sqlite.DatabaseSync || null;
+  } catch {
+    DatabaseSyncCtor = null;
+  } finally {
+    process.emitWarning = emitWarning;
+  }
+  return DatabaseSyncCtor;
+}
 
 function pidIsLive(pid) {
   try {
@@ -23,8 +71,6 @@ function pidIsLive(pid) {
 function ownerLiveness(ownerStr, mtimeMs, now = Date.now()) {
   let isLive = false;
   if (ownerStr === '') {
-    // Owner created the file but hasn't written its PID yet. The wx
-    // open+write window is microseconds; treat as live unless stale.
     isLive = true;
   } else {
     const owner = Number.parseInt(ownerStr, 10);
@@ -32,11 +78,6 @@ function ownerLiveness(ownerStr, mtimeMs, now = Date.now()) {
       isLive = pidIsLive(owner);
     }
   }
-  // For files younger than HOOK_LOCK_STALE_MS, PID-liveness wins -- a
-  // slow-but-alive hook is never wrongly evicted. For older files, age is
-  // the final arbiter as a defense against PID reuse on long-abandoned
-  // claims. 30s >> the hook's internal budget, so a healthy run never
-  // crosses this threshold.
   if (isLive && now - mtimeMs > HOOK_LOCK_STALE_MS) {
     isLive = false;
   }
@@ -55,20 +96,6 @@ function readOwnerMetadata(fd) {
   };
 }
 
-function tryCreateExclusive(filePath, contents) {
-  try {
-    fs.writeFileSync(filePath, contents, { flag: 'wx' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function uniqueOwnedClaimPath(lockDir, suffix) {
-  const nonce = crypto.randomBytes(8).toString('hex');
-  return path.join(lockDir, `owned-${process.pid}-${nonce}${suffix}`);
-}
-
 function runBarrier(sync, stage, info) {
   if (sync && typeof sync.barrier === 'function') {
     sync.barrier(stage, info);
@@ -76,9 +103,8 @@ function runBarrier(sync, stage, info) {
 }
 
 function unlinkOwnedPath(ownedPath) {
-  // Unlink only a unique pathname this process exclusively created, or a
-  // unique owned claim proven dead. Never unlink a shared slot/.reclaim
-  // pathname based on an earlier inode, token, PID, or timestamp observation.
+  // Unlink only a unique owned-*.lock/.pending pathname. Never unlink a
+  // reusable shared slot/.reclaim pathname based on an earlier observation.
   try {
     fs.unlinkSync(ownedPath);
   } catch {
@@ -90,46 +116,11 @@ function isOwnedClaimName(name) {
   return OWNED_CLAIM_RE.test(name);
 }
 
-function isHeldLockName(name) {
-  return isOwnedClaimName(name) && name.toLowerCase().endsWith('.lock');
-}
-
-function isPendingName(name) {
-  return isOwnedClaimName(name) && name.toLowerCase().endsWith('.pending');
-}
-
-function isLiveLockPath(filePath) {
-  let fd;
-  try {
-    fd = fs.openSync(filePath, 'r');
-  } catch (err) {
-    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
-      return false;
-    }
-    // Exists but unreadable: count as live so admission fails closed
-    // rather than admitting a 4th owner.
-    return true;
-  }
-  try {
-    return readOwnerMetadata(fd).isLive;
-  } catch {
-    return true;
-  } finally {
-    try {
-      fs.closeSync(fd);
-    } catch {
-      /* already closed */
-    }
-  }
-}
-
 function isProvenDeadOwnedClaim(filePath) {
   let fd;
   try {
     fd = fs.openSync(filePath, 'r');
   } catch {
-    // Unreadable or missing: fail closed. Never delete a claim whose
-    // ownership cannot be proven dead.
     return false;
   }
   try {
@@ -143,26 +134,6 @@ function isProvenDeadOwnedClaim(filePath) {
       /* already closed */
     }
   }
-}
-
-function snapshotLiveClaims(lockDir) {
-  let names;
-  try {
-    names = fs.readdirSync(lockDir);
-  } catch {
-    return null;
-  }
-  const held = [];
-  const pending = [];
-  for (const name of names) {
-    if (!isOwnedClaimName(name)) continue;
-    if (!isLiveLockPath(path.join(lockDir, name))) continue;
-    if (isHeldLockName(name)) held.push(name);
-    else if (isPendingName(name)) pending.push(name);
-  }
-  held.sort();
-  pending.sort();
-  return { held, pending };
 }
 
 function reclaimStaleOwnedClaims(lockDir) {
@@ -179,10 +150,103 @@ function reclaimStaleOwnedClaims(lockDir) {
   }
 }
 
+function nonceFromSync(sync) {
+  if (sync && typeof sync.nonce === 'string' && sync.nonce) return sync.nonce;
+  if (sync && typeof sync.claimName === 'string' && sync.claimName) return sync.claimName;
+  return `${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+}
+
+function ownersDbPath(lockDir) {
+  return path.join(lockDir, OWNERS_DB_FILENAME);
+}
+
+function openOwnersDb(lockDir, options = {}) {
+  const DatabaseSync = loadDatabaseSync();
+  if (!DatabaseSync) return null;
+  const readOnly = Boolean(options.readOnly);
+  try {
+    const dbPath = ownersDbPath(lockDir);
+    const db = readOnly ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
+    if (!readOnly) {
+      db.exec(`
+        PRAGMA busy_timeout = 5000;
+        PRAGMA journal_mode = DELETE;
+        CREATE TABLE IF NOT EXISTS owners (
+          nonce TEXT PRIMARY KEY,
+          pid INTEGER NOT NULL,
+          created_ms INTEGER NOT NULL
+        );
+        CREATE TRIGGER IF NOT EXISTS owners_cap BEFORE INSERT ON owners
+        BEGIN
+          SELECT RAISE(ABORT, 'hook-lock-capacity')
+          WHERE (SELECT COUNT(*) FROM owners) >= ${HOOK_LOCK_MAX_INFLIGHT};
+        END;
+      `);
+    } else {
+      db.exec('PRAGMA busy_timeout = 1000;');
+    }
+    return db;
+  } catch {
+    return null;
+  }
+}
+
+function gcDeadOwnerRows(db, now = Date.now()) {
+  const rows = db.prepare('SELECT nonce, pid, created_ms FROM owners').all();
+  const del = db.prepare('DELETE FROM owners WHERE nonce = ?');
+  for (const row of rows) {
+    if (!ownerLiveness(String(row.pid), row.created_ms, now)) {
+      del.run(row.nonce);
+    }
+  }
+}
+
+function countOwnerRows(db) {
+  const row = db.prepare('SELECT COUNT(*) AS c FROM owners').get();
+  return row && Number.isFinite(row.c) ? row.c : 0;
+}
+
+function releaseOwner(lockDir, nonce) {
+  const db = openOwnersDb(lockDir);
+  if (!db) return;
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    db.prepare('DELETE FROM owners WHERE nonce = ?').run(nonce);
+    db.exec('COMMIT');
+  } catch {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* already rolled back or closed */
+    }
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
 function countLiveOwners(gitNexusDir) {
   const lockDir = path.join(gitNexusDir, HOOK_LOCK_SUBDIR);
-  const snapshot = snapshotLiveClaims(lockDir);
-  return snapshot ? snapshot.held.length : -1;
+  const dbPath = ownersDbPath(lockDir);
+  if (!fs.existsSync(dbPath)) return 0;
+  const db = openOwnersDb(lockDir, { readOnly: true });
+  if (!db) return -1;
+  try {
+    const now = Date.now();
+    const rows = db.prepare('SELECT pid, created_ms FROM owners').all();
+    return rows.filter((row) => ownerLiveness(String(row.pid), row.created_ms, now)).length;
+  } catch {
+    return -1;
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+  }
 }
 
 function acquireHookSlot(gitNexusDir, sync) {
@@ -190,10 +254,6 @@ function acquireHookSlot(gitNexusDir, sync) {
   try {
     fs.mkdirSync(lockDir, { recursive: true });
   } catch {
-    // Cannot create lock dir (read-only fs, cross-user perm denial, out of
-    // inodes, etc.) -- fail closed by returning null. Caller skips augment.
-    // Fail-open here would let N concurrent hooks all proceed unguarded and
-    // reintroduce the #1486 fan-out the guard exists to prevent.
     return null;
   }
 
@@ -201,65 +261,65 @@ function acquireHookSlot(gitNexusDir, sync) {
   reclaimStaleOwnedClaims(lockDir);
   runBarrier(sync, 'after-stale-gc', { lockDir });
 
-  const myPidStr = String(process.pid);
-  const pendingPath = uniqueOwnedClaimPath(lockDir, '.pending');
-  if (!tryCreateExclusive(pendingPath, myPidStr)) {
-    // Unique pathname collision or the directory became unwritable. Do not
-    // fall back to a shared slot/.reclaim pathname.
-    return null;
+  const nonce = nonceFromSync(sync);
+  runBarrier(sync, 'after-private-create', { lockDir, nonce });
+  runBarrier(sync, 'before-admission', { lockDir, nonce });
+  runBarrier(sync, 'before-promote', { lockDir, nonce });
+
+  const db = openOwnersDb(lockDir);
+  if (!db) return null;
+
+  let admitted = false;
+  let liveForBarrier = -1;
+  try {
+    // Linearization starts here: BEGIN IMMEDIATE is the mutex.
+    db.exec('BEGIN IMMEDIATE');
+    gcDeadOwnerRows(db);
+    const count = countOwnerRows(db);
+    liveForBarrier = count;
+    if (count >= HOOK_LOCK_MAX_INFLIGHT) {
+      db.exec('ROLLBACK');
+    } else {
+      db.prepare('INSERT INTO owners (nonce, pid, created_ms) VALUES (?, ?, ?)').run(
+        nonce,
+        process.pid,
+        Date.now(),
+      );
+      db.exec('COMMIT');
+      admitted = true;
+      liveForBarrier = countOwnerRows(db);
+    }
+  } catch {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* already rolled back */
+    }
+    admitted = false;
   }
-  const pendingName = path.basename(pendingPath);
-  const ownedPath = pendingPath.replace(/\.pending$/i, '.lock');
 
-  runBarrier(sync, 'after-private-create', { ownedPath: pendingPath, lockDir });
-
-  const snapshot = snapshotLiveClaims(lockDir);
-  const liveCount = snapshot ? snapshot.held.length + snapshot.pending.length : -1;
-  runBarrier(sync, 'after-count-live', {
-    ownedPath: pendingPath,
+  runBarrier(sync, 'after-admission', {
     lockDir,
-    live: liveCount,
-    held: snapshot ? snapshot.held.length : -1,
-    pending: snapshot ? snapshot.pending.length : -1,
+    nonce,
+    live: liveForBarrier,
+    held: liveForBarrier,
+    pending: 0,
+    admitted,
+  });
+  runBarrier(sync, 'after-count-live', {
+    lockDir,
+    live: liveForBarrier,
+    held: liveForBarrier,
+    pending: 0,
   });
 
-  if (!snapshot) {
-    runBarrier(sync, 'before-private-unlink', { ownedPath: pendingPath, lockDir, reason: 'cap' });
-    unlinkOwnedPath(pendingPath);
-    return null;
-  }
-
-  const capacity = HOOK_LOCK_MAX_INFLIGHT - snapshot.held.length;
-  const myRank = snapshot.pending.indexOf(pendingName);
-  if (capacity <= 0 || myRank < 0 || myRank >= capacity) {
-    runBarrier(sync, 'before-private-unlink', { ownedPath: pendingPath, lockDir, reason: 'cap' });
-    unlinkOwnedPath(pendingPath);
-    return null;
-  }
-
   try {
-    fs.renameSync(pendingPath, ownedPath);
+    db.close();
   } catch {
-    unlinkOwnedPath(pendingPath);
-    unlinkOwnedPath(ownedPath);
-    return null;
+    /* already closed */
   }
 
-  const heldAfter = snapshotLiveClaims(lockDir);
-  if (!heldAfter) {
-    unlinkOwnedPath(ownedPath);
-    return null;
-  }
-  const heldName = path.basename(ownedPath);
-  const heldRank = heldAfter.held.indexOf(heldName);
-  if (
-    heldAfter.held.length > HOOK_LOCK_MAX_INFLIGHT &&
-    (heldRank < 0 || heldRank >= HOOK_LOCK_MAX_INFLIGHT)
-  ) {
-    runBarrier(sync, 'before-private-unlink', { ownedPath, lockDir, reason: 'cap' });
-    unlinkOwnedPath(ownedPath);
-    return null;
-  }
+  if (!admitted) return null;
 
   let released = false;
   const onExit = () => {
@@ -269,8 +329,8 @@ function acquireHookSlot(gitNexusDir, sync) {
     if (released) return;
     released = true;
     process.removeListener('exit', onExit);
-    runBarrier(sync, 'before-private-unlink', { ownedPath, lockDir, reason: 'release' });
-    unlinkOwnedPath(ownedPath);
+    runBarrier(sync, 'before-private-unlink', { lockDir, nonce, reason: 'release' });
+    releaseOwner(lockDir, nonce);
   };
   process.on('exit', onExit);
   return release;
@@ -280,6 +340,7 @@ module.exports = {
   HOOK_LOCK_SUBDIR,
   HOOK_LOCK_MAX_INFLIGHT,
   HOOK_LOCK_STALE_MS,
+  OWNERS_DB_FILENAME,
   acquireHookSlot,
   pidIsLive,
   ownerLiveness,

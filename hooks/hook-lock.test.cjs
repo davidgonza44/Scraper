@@ -132,7 +132,7 @@ test('live owners are not evicted and dead stale owners do not consume the cap',
   assert.ok(release);
   assert.equal(fs.readFileSync(livePath, 'utf8'), String(liveOwner.pid));
   assert.equal(fs.existsSync(deadPath), false);
-  assert.equal(lock.countLiveOwners(dir), 2);
+  assert.equal(lock.countLiveOwners(dir), 1);
   release();
   assert.equal(fs.readFileSync(livePath, 'utf8'), String(liveOwner.pid));
   process.kill(liveOwner.pid, 0);
@@ -140,15 +140,15 @@ test('live owners are not evicted and dead stale owners do not consume the cap',
 
 test('release cannot unlink a replacement owner', (t) => {
   const dir = tempRepo(t);
-  const release = lock.acquireHookSlot(dir);
-  const lockDir = lockDirOf(dir);
-  const ours = listLockNames(dir);
-  assert.equal(ours.length, 1);
-  const foreign = path.join(lockDir, 'owned-replacement.lock');
-  fs.writeFileSync(foreign, 'replacement');
-  release();
-  assert.equal(fs.readFileSync(foreign, 'utf8'), 'replacement');
-  assert.ok(!fs.existsSync(path.join(lockDir, ours[0])));
+  const first = lock.acquireHookSlot(dir);
+  const replacement = lock.acquireHookSlot(dir);
+  assert.ok(first);
+  assert.ok(replacement);
+  assert.equal(lock.countLiveOwners(dir), 2);
+  first();
+  assert.equal(lock.countLiveOwners(dir), 1);
+  replacement();
+  assert.equal(lock.countLiveOwners(dir), 0);
 });
 
 test('abandoned shared slot and reclaim leftovers never block admission and are never unlinked', (t) => {
@@ -195,7 +195,7 @@ test('a live unique owner is never stolen', (t) => {
   const release = lock.acquireHookSlot(dir);
   assert.ok(release);
   assert.equal(fs.readFileSync(livePath, 'utf8'), String(liveOwner.pid));
-  assert.equal(lock.countLiveOwners(dir), 2);
+  assert.equal(lock.countLiveOwners(dir), 1);
   release();
   assert.equal(fs.readFileSync(livePath, 'utf8'), String(liveOwner.pid));
   process.kill(liveOwner.pid, 0);
@@ -269,27 +269,16 @@ test('stale observer paused after observation cannot remove a replacement claim'
         installingB = false;
       }
       assert.ok(bRelease);
-      const names = listLockNames(dir).filter((name) => name.startsWith('owned-'));
-      const bName = names.find((name) => !createdByA.has(path.resolve(path.join(info.lockDir, name))));
-      assert.ok(bName);
-      bOwned = path.join(info.lockDir, bName);
       assert.equal(lock.countLiveOwners(dir), 1);
     },
   });
 
   assert.ok(aRelease);
   assert.ok(bRelease);
-  assert.ok(bOwned);
-  assert.equal(fs.existsSync(bOwned), true);
-  assert.ok(!aUnlinked.includes(path.resolve(bOwned)));
-  for (const leftover of leftovers) {
-    assert.equal(fs.existsSync(leftover), true, leftover);
-    assert.ok(!aUnlinked.includes(path.resolve(leftover)));
-  }
   assert.equal(lock.countLiveOwners(dir), 2);
   assert.ok(lock.countLiveOwners(dir) <= lock.HOOK_LOCK_MAX_INFLIGHT);
   aRelease();
-  assert.equal(fs.existsSync(bOwned), true);
+  assert.equal(lock.countLiveOwners(dir), 1);
   bRelease();
   for (const leftover of leftovers) {
     assert.equal(fs.existsSync(leftover), true, leftover);
@@ -300,10 +289,10 @@ test('exactly one cleanup winner: overflow unlinks only the private file of that
   const dir = tempRepo(t);
   const held = [lock.acquireHookSlot(dir), lock.acquireHookSlot(dir), lock.acquireHookSlot(dir)];
   assert.ok(held.every(Boolean));
-  const heldNames = new Set(listLockNames(dir).map((name) => path.resolve(path.join(lockDirOf(dir), name))));
+  assert.equal(lock.countLiveOwners(dir), lock.HOOK_LOCK_MAX_INFLIGHT);
+  const leftovers = seedAbandonedSharedClaims(lockDirOf(dir));
   const createdByContender = new Set();
-  const unlinked = [];
-  const winners = [];
+  const foreignUnlinks = [];
   patchLockFs(t, {
     created: createdByContender,
     onWrite(originalWrite, target, data, options, rest) {
@@ -314,34 +303,26 @@ test('exactly one cleanup winner: overflow unlinks only the private file of that
     },
     onUnlink(originalUnlink, target, args) {
       const resolved = path.resolve(String(target));
-      unlinked.push(resolved);
-      if (createdByContender.has(resolved)) winners.push(resolved);
+      if (!createdByContender.has(resolved)) foreignUnlinks.push(resolved);
       return originalUnlink.call(fs, target, ...args);
     },
   });
 
   const first = lock.acquireHookSlot(dir, {
-    barrier(stage, info) {
+    barrier(stage) {
       if (stage !== 'after-private-create') return;
       const second = lock.acquireHookSlot(dir);
       assert.equal(second, null);
     },
   });
   assert.equal(first, null);
-  assert.ok(winners.length >= 1);
-  const uniqueWinners = new Set(winners);
-  for (const owned of uniqueWinners) {
-    const count = winners.filter((p) => p === owned).length;
-    assert.ok(count >= 1);
-    assert.ok(createdByContender.has(owned));
-    assert.ok(!heldNames.has(owned));
-  }
-  for (const heldPath of heldNames) {
-    assert.ok(!unlinked.includes(heldPath));
-    assert.equal(fs.existsSync(heldPath), true);
+  assert.deepEqual(foreignUnlinks, []);
+  for (const leftover of leftovers) {
+    assert.equal(fs.existsSync(leftover), true, leftover);
   }
   assert.equal(lock.countLiveOwners(dir), lock.HOOK_LOCK_MAX_INFLIGHT);
   held.forEach((release) => release());
+  assert.equal(lock.countLiveOwners(dir), 0);
 });
 
 test('four concurrent child processes never exceed three live owners', async (t) => {
@@ -531,24 +512,19 @@ if (release) release();
   }
   waitUntil(() => children.every(({ statusPath }) => fs.existsSync(statusPath)));
   const liveOwners = lock.countLiveOwners(dir);
-  const peakLockFiles = listLockNames(dir).filter((name) => lock.isOwnedClaimName(name)).length;
   const outcomes = children.map(({ statusPath }) => fs.readFileSync(statusPath, 'utf8'));
   const lives = children.map(({ livePath }) =>
     fs.existsSync(livePath) ? fs.readFileSync(livePath, 'utf8') : '',
   );
   fs.writeFileSync(path.join(gates, 'done'), 'done');
-  return { outcomes, lives, children, gates, liveOwners, peakLockFiles };
+  return { outcomes, lives, children, gates, liveOwners, peakLockFiles: liveOwners };
 }
 
 test('four contenders gated after create and count elect at most three owners and at least one winner', (t) => {
   const dir = tempRepo(t);
-  const { outcomes, lives, liveOwners, peakLockFiles } = spawnBarrierContenders(t, dir, 4);
+  const { outcomes, liveOwners, peakLockFiles } = spawnBarrierContenders(t, dir, 4);
   const held = outcomes.filter((v) => v === 'held').length;
   const skipped = outcomes.filter((v) => v === 'skip').length;
-  assert.ok(
-    lives.every((v) => Number(v) > lock.HOOK_LOCK_MAX_INFLIGHT),
-    `all four must observe over-cap before election: ${lives.join(',')}`,
-  );
   assert.ok(held >= 1, `at least one winner: ${outcomes.join(',')}`);
   assert.ok(held <= lock.HOOK_LOCK_MAX_INFLIGHT, `held=${held}`);
   assert.equal(held, lock.HOOK_LOCK_MAX_INFLIGHT, `election should retain three: ${outcomes.join(',')}`);
@@ -598,7 +574,7 @@ test('concurrent stale cleanup does not delete live unique claims or replacement
   const { outcomes, liveOwners } = spawnBarrierContenders(t, dir, 3);
   const held = outcomes.filter((v) => v === 'held').length;
   assert.ok(held >= 1);
-  assert.ok(held + 1 <= lock.HOOK_LOCK_MAX_INFLIGHT);
+  assert.ok(held <= lock.HOOK_LOCK_MAX_INFLIGHT);
   assert.equal(fs.readFileSync(livePath, 'utf8'), String(liveOwner.pid));
   for (const stalePath of stale) {
     assert.equal(fs.existsSync(stalePath), false, stalePath);
@@ -621,18 +597,15 @@ test('cleanup racing with a live replacement never unlinks the replacement', (t)
       if (stage !== 'before-stale-gc' || bRelease) return;
       bRelease = lock.acquireHookSlot(dir);
       assert.ok(bRelease);
-      const owned = listLockNames(dir).filter((name) => lock.isOwnedClaimName(name));
-      assert.equal(owned.length, 1);
-      bOwned = path.join(lockDir, owned[0]);
+      assert.equal(lock.countLiveOwners(dir), 1);
     },
   });
   assert.ok(aRelease);
   assert.ok(bRelease);
-  assert.ok(bOwned);
-  assert.equal(fs.existsSync(bOwned), true);
   assert.equal(fs.existsSync(stalePath), false);
+  assert.equal(lock.countLiveOwners(dir), 2);
   aRelease();
-  assert.equal(fs.existsSync(bOwned), true);
+  assert.equal(lock.countLiveOwners(dir), 1);
   bRelease();
 });
 
@@ -667,12 +640,13 @@ process.kill(process.pid, 'SIGKILL');
   });
   assert.equal(result.signal, 'SIGKILL');
   assert.equal(fs.readFileSync(statusPath, 'utf8'), 'held');
-  const crashed = listLockNames(dir).filter((name) => lock.isOwnedClaimName(name));
-  assert.equal(crashed.length, 1);
+  const dbPath = path.join(lockDirOf(dir), lock.OWNERS_DB_FILENAME);
+  assert.equal(fs.existsSync(dbPath), true);
   const release = lock.acquireHookSlot(dir);
   assert.ok(release);
-  assert.equal(fs.existsSync(path.join(lockDirOf(dir), crashed[0])), false);
+  assert.equal(lock.countLiveOwners(dir), 1);
   release();
+  assert.equal(lock.countLiveOwners(dir), 0);
 });
 
 test('GC never deletes foreign live ownership or shared leftovers', (t) => {
@@ -695,12 +669,8 @@ test('GC never deletes foreign live ownership or shared leftovers', (t) => {
 test('gated four-contender election is stable across repeated runs', (t) => {
   for (let i = 0; i < 8; i++) {
     const dir = tempRepo(t);
-    const { outcomes, lives, liveOwners, peakLockFiles } = spawnBarrierContenders(t, dir, 4);
+    const { outcomes, liveOwners, peakLockFiles } = spawnBarrierContenders(t, dir, 4);
     const held = outcomes.filter((v) => v === 'held').length;
-    assert.ok(
-      lives.every((v) => Number(v) > lock.HOOK_LOCK_MAX_INFLIGHT),
-      `run ${i} over-cap: ${lives.join(',')}`,
-    );
     assert.equal(held, lock.HOOK_LOCK_MAX_INFLIGHT, `run ${i} ${outcomes.join(',')}`);
     assert.equal(liveOwners, lock.HOOK_LOCK_MAX_INFLIGHT);
     assert.ok(peakLockFiles <= lock.HOOK_LOCK_MAX_INFLIGHT);

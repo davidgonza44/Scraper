@@ -29,7 +29,13 @@ test('explicit GITNEXUS_CLI override wins when the file exists', () => {
     execPath: '/usr/bin/node',
     platform: 'linux',
   });
-  assert.deepEqual(found, { kind: 'js', path: override, source: 'override' });
+  assert.deepEqual(found, {
+    kind: 'js',
+    command: '/usr/bin/node',
+    argsPrefix: [override],
+    path: override,
+    source: 'override',
+  });
 });
 
 test('PATH executable is discovered without downloading', () => {
@@ -45,7 +51,9 @@ test('PATH executable is discovered without downloading', () => {
     platform: 'linux',
   });
   assert.deepEqual(found, {
-    kind: 'bin',
+    kind: 'native',
+    command: '/home/test/.nvm/versions/node/v22.22.2/bin/gitnexus',
+    argsPrefix: [],
     path: '/home/test/.nvm/versions/node/v22.22.2/bin/gitnexus',
     source: 'path',
   });
@@ -65,7 +73,13 @@ test('local project installation is used when PATH has no gitnexus', () => {
     execPath: '/usr/bin/node',
     platform: 'linux',
   });
-  assert.deepEqual(found, { kind: 'js', path: local, source: 'local' });
+  assert.deepEqual(found, {
+    kind: 'js',
+    command: '/usr/bin/node',
+    argsPrefix: [local],
+    path: local,
+    source: 'local',
+  });
 });
 
 test('npm root -g is queried without installing anything', () => {
@@ -87,7 +101,13 @@ test('npm root -g is queried without installing anything', () => {
     platform: 'linux',
   });
   assert.deepEqual(commands, [['npm', 'root', '-g']]);
-  assert.deepEqual(found, { kind: 'js', path: cli, source: 'npm-root' });
+  assert.deepEqual(found, {
+    kind: 'js',
+    command: '/usr/bin/node',
+    argsPrefix: [cli],
+    path: cli,
+    source: 'npm-root',
+  });
 });
 
 test('NVM layout fallback resolves the versioned node_modules root', () => {
@@ -104,7 +124,13 @@ test('NVM layout fallback resolves the versioned node_modules root', () => {
     execPath,
     platform: 'linux',
   });
-  assert.deepEqual(found, { kind: 'js', path: cli, source: 'layout' });
+  assert.deepEqual(found, {
+    kind: 'js',
+    command: execPath,
+    argsPrefix: [cli],
+    path: cli,
+    source: 'layout',
+  });
 });
 
 test('Apple Silicon Homebrew Cellar uses the prefix global modules directory', () => {
@@ -121,7 +147,13 @@ test('Apple Silicon Homebrew Cellar uses the prefix global modules directory', (
     execPath,
     platform: 'darwin',
   });
-  assert.deepEqual(found, { kind: 'js', path: cli, source: 'layout' });
+  assert.deepEqual(found, {
+    kind: 'js',
+    command: execPath,
+    argsPrefix: [cli],
+    path: cli,
+    source: 'layout',
+  });
   assert.ok(
     discovery
       .npmGlobalNodeModules(execPath, 'darwin', {})
@@ -143,7 +175,13 @@ test('Intel Homebrew Cellar uses /usr/local/lib/node_modules', () => {
     execPath,
     platform: 'darwin',
   });
-  assert.deepEqual(found, { kind: 'js', path: cli, source: 'layout' });
+  assert.deepEqual(found, {
+    kind: 'js',
+    command: execPath,
+    argsPrefix: [cli],
+    path: cli,
+    source: 'layout',
+  });
 });
 
 test('Windows global npm APPDATA layout is discovered', () => {
@@ -160,7 +198,13 @@ test('Windows global npm APPDATA layout is discovered', () => {
     execPath,
     platform: 'win32',
   });
-  assert.deepEqual(found, { kind: 'js', path: cli, source: 'layout' });
+  assert.deepEqual(found, {
+    kind: 'js',
+    command: execPath,
+    argsPrefix: [cli],
+    path: cli,
+    source: 'layout',
+  });
 });
 
 test('standard Linux global npm layout is discovered', () => {
@@ -176,7 +220,13 @@ test('standard Linux global npm layout is discovered', () => {
     execPath: '/usr/bin/node',
     platform: 'linux',
   });
-  assert.deepEqual(found, { kind: 'js', path: cli, source: 'layout' });
+  assert.deepEqual(found, {
+    kind: 'js',
+    command: '/usr/bin/node',
+    argsPrefix: [cli],
+    path: cli,
+    source: 'layout',
+  });
 });
 
 test('missing GitNexus is a clean fail-open result', () => {
@@ -190,6 +240,68 @@ test('missing GitNexus is a clean fail-open result', () => {
     npmRootGlobal: '',
     execPath: '/usr/bin/node',
     platform: 'linux',
+  });
+  assert.equal(found, null);
+});
+
+test('Windows PATH gitnexus.cmd resolves to the JavaScript CLI invocation, not the shim', () => {
+  const execPath = 'C:\\Program Files\\nodejs\\node.exe';
+  const cmd = 'C:\\Users\\test\\AppData\\Roaming\\npm\\gitnexus.cmd';
+  const js = 'C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\gitnexus\\dist\\cli\\index.js';
+  const found = discovery.discoverGitNexusCli({
+    env: { APPDATA: 'C:\\Users\\test\\AppData\\Roaming', PATH: 'C:\\Users\\test\\AppData\\Roaming\\npm' },
+    pathVar: 'C:\\Users\\test\\AppData\\Roaming\\npm',
+    fs: memFs([cmd, js]),
+    requireResolve() {
+      throw new Error('not local');
+    },
+    npmRootGlobal: '',
+    execPath,
+    platform: 'win32',
+  });
+  assert.ok(found);
+  assert.notEqual(found.command, cmd);
+  assert.notEqual(found.path, cmd);
+  assert.equal(found.kind, 'js');
+  assert.equal(found.command, execPath);
+  assert.deepEqual(found.argsPrefix, [js]);
+  assert.equal(found.path, js);
+  assert.doesNotMatch(found.command, /\.cmd$/i);
+});
+
+test('Windows gitnexus.cmd with spaces still uses process.execPath and a JS entrypoint', () => {
+  const execPath = 'C:\\Program Files\\nodejs\\node.exe';
+  const cmd = 'C:\\Program Files\\nodejs\\gitnexus.cmd';
+  const js = 'C:\\Program Files\\nodejs\\node_modules\\gitnexus\\dist\\cli\\index.js';
+  const found = discovery.discoverGitNexusCli({
+    env: { PATH: 'C:\\Program Files\\nodejs' },
+    pathVar: 'C:\\Program Files\\nodejs',
+    fs: memFs([cmd, js]),
+    requireResolve() {
+      throw new Error('not local');
+    },
+    npmRootGlobal: '',
+    execPath,
+    platform: 'win32',
+  });
+  assert.equal(found.kind, 'js');
+  assert.equal(found.command, execPath);
+  assert.deepEqual(found.argsPrefix, [js]);
+  assert.match(found.path, /Program Files/);
+});
+
+test('unprovable Windows .cmd shim fails open instead of becoming a spawn target', () => {
+  const cmd = 'C:\\Users\\test\\AppData\\Roaming\\npm\\gitnexus.cmd';
+  const found = discovery.discoverGitNexusCli({
+    env: { APPDATA: 'C:\\Users\\test\\AppData\\Roaming', PATH: 'C:\\Users\\test\\AppData\\Roaming\\npm' },
+    pathVar: 'C:\\Users\\test\\AppData\\Roaming\\npm',
+    fs: memFs([cmd]),
+    requireResolve() {
+      throw new Error('not local');
+    },
+    npmRootGlobal: '',
+    execPath: 'C:\\Program Files\\nodejs\\node.exe',
+    platform: 'win32',
   });
   assert.equal(found, null);
 });

@@ -246,9 +246,39 @@ function resolveCliPath(options = {}) {
   return found ? found.path : '';
 }
 
-function runGitNexusCli(cliPath, args, cwd, timeout, spawnSyncFn = spawnSync) {
-  if (!cliPath) {
-    const error = new Error('gitnexus CLI JS entrypoint not found');
+function normalizeInvocation(invocation) {
+  if (!invocation) return null;
+  if (typeof invocation === 'string') {
+    const trimmed = invocation.trim();
+    if (!trimmed) return null;
+    if (/\.(cmd|bat)$/i.test(trimmed)) return null;
+    if (/\.c?js$/i.test(trimmed)) {
+      return {
+        kind: 'js',
+        command: process.execPath,
+        argsPrefix: [trimmed],
+        path: trimmed,
+        source: 'string',
+      };
+    }
+    return {
+      kind: 'native',
+      command: trimmed,
+      argsPrefix: [],
+      path: trimmed,
+      source: 'string',
+    };
+  }
+  if (typeof invocation !== 'object') return null;
+  if (!invocation.command) return null;
+  if (/\.(cmd|bat)$/i.test(String(invocation.command))) return null;
+  return invocation;
+}
+
+function runGitNexusCli(invocation, args, cwd, timeout, spawnSyncFn = spawnSync) {
+  const inv = normalizeInvocation(invocation);
+  if (!inv || !inv.command) {
+    const error = new Error('gitnexus CLI invocation not found');
     error.code = 'ENOENT';
     return { error, status: 1, stdout: '', stderr: '' };
   }
@@ -258,22 +288,14 @@ function runGitNexusCli(cliPath, args, cwd, timeout, spawnSyncFn = spawnSync) {
     return { error, status: null, stdout: '', stderr: '', skipped: true };
   }
 
-  const isJs = /\.c?js$/i.test(String(cliPath));
-  if (isJs) {
-    return spawnSyncFn(process.execPath, [cliPath, ...args], {
-      encoding: 'utf-8',
-      timeout,
-      cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-  }
-  return spawnSyncFn(cliPath, args, {
+  const argv = [...(Array.isArray(inv.argsPrefix) ? inv.argsPrefix : []), ...args];
+  return spawnSyncFn(inv.command, argv, {
     encoding: 'utf-8',
     timeout,
     cwd,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    shell: false,
   });
 }
 
@@ -336,7 +358,7 @@ function executeHook(input, deps = {}) {
     if (!discovered) return { status: 'skip' };
 
     const child = runGitNexusCli(
-      discovered.path,
+      discovered,
       ['augment', '--', pattern],
       cwd,
       deadline.spawnTimeoutMs(),
@@ -377,6 +399,7 @@ if (require.main === module) {
 module.exports = {
   resolveCliPath,
   runGitNexusCli,
+  normalizeInvocation,
   extractPattern,
   findGitNexusDir,
   findCanonicalRepoRoot,

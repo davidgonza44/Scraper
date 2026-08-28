@@ -94,6 +94,64 @@ function layoutFallbackRoots({ execPath, platform, env, realpathSync }) {
   return roots;
 }
 
+function isJsEntrypoint(filePath) {
+  return /\.c?js$/i.test(String(filePath));
+}
+
+function isCmdShim(filePath) {
+  return /\.(cmd|bat)$/i.test(String(filePath));
+}
+
+function jsInvocation(execPath, jsPath, source) {
+  return {
+    kind: 'js',
+    command: execPath,
+    argsPrefix: [jsPath],
+    path: jsPath,
+    source,
+  };
+}
+
+function nativeInvocation(binPath, source) {
+  return {
+    kind: 'native',
+    command: binPath,
+    argsPrefix: [],
+    path: binPath,
+    source,
+  };
+}
+
+function jsCandidatesFromCmdShim(cmdPath, env, platform) {
+  const p = pathFor(platform);
+  const dir = p.dirname(cmdPath);
+  const candidates = [p.join(dir, 'node_modules', 'gitnexus', 'dist', 'cli', 'index.js')];
+  if (env && env.APPDATA) {
+    candidates.push(p.join(env.APPDATA, 'npm', 'node_modules', 'gitnexus', 'dist', 'cli', 'index.js'));
+  }
+  return candidates;
+}
+
+function invocationFromPath(filePath, source, options) {
+  if (!filePath) return null;
+  const execPath = options.execPath;
+  const platform = options.platform;
+  const env = options.env;
+  const fsApi = options.fsApi;
+  if (isJsEntrypoint(filePath)) {
+    return jsInvocation(execPath, filePath, source);
+  }
+  if (isCmdShim(filePath)) {
+    for (const candidate of jsCandidatesFromCmdShim(filePath, env, platform)) {
+      if (fileExists(fsApi, candidate)) {
+        return jsInvocation(execPath, candidate, source);
+      }
+    }
+    return null;
+  }
+  return nativeInvocation(filePath, source);
+}
+
 function queryNpmRootGlobal(spawnSyncFn, deadline, cwd, env) {
   const result = spawnWithDeadline(deadline, spawnSyncFn, 'npm', ['root', '-g'], {
     encoding: 'utf-8',
@@ -121,25 +179,23 @@ function discoverGitNexusCli(options = {}) {
   const cwd = options.cwd;
   const p = pathFor(platform);
 
+  const invokeOpts = { execPath, platform, env, fsApi };
+
   const override = env.GITNEXUS_CLI != null ? String(env.GITNEXUS_CLI).trim() : '';
-  if (override) {
-    if (fileExists(fsApi, override)) {
-      return {
-        kind: /\.c?js$/i.test(override) ? 'js' : 'bin',
-        path: override,
-        source: 'override',
-      };
-    }
+  if (override && fileExists(fsApi, override)) {
+    const fromOverride = invocationFromPath(override, 'override', invokeOpts);
+    if (fromOverride) return fromOverride;
   }
 
   const onPath = findOnPath(pathVar, platform, fsApi);
   if (onPath) {
-    return { kind: 'bin', path: onPath, source: 'path' };
+    const fromPath = invocationFromPath(onPath, 'path', invokeOpts);
+    if (fromPath) return fromPath;
   }
 
   try {
     const resolved = requireResolve(CLI_ENTRY);
-    if (resolved) return { kind: 'js', path: resolved, source: 'local' };
+    if (resolved) return jsInvocation(execPath, resolved, 'local');
   } catch {
     /* not installed next to this hook */
   }
@@ -151,18 +207,18 @@ function discoverGitNexusCli(options = {}) {
   if (npmRoot) {
     const candidate = p.join(npmRoot, 'gitnexus', 'dist', 'cli', 'index.js');
     if (fileExists(fsApi, candidate)) {
-      return { kind: 'js', path: candidate, source: 'npm-root' };
+      return jsInvocation(execPath, candidate, 'npm-root');
     }
   }
 
   for (const root of layoutFallbackRoots({ execPath, platform, env, realpathSync })) {
     const candidate = p.join(root, 'gitnexus', 'dist', 'cli', 'index.js');
     if (fileExists(fsApi, candidate)) {
-      return { kind: 'js', path: candidate, source: 'layout' };
+      return jsInvocation(execPath, candidate, 'layout');
     }
     try {
       const resolved = requireResolve(CLI_ENTRY, { paths: [root] });
-      if (resolved) return { kind: 'js', path: resolved, source: 'layout' };
+      if (resolved) return jsInvocation(execPath, resolved, 'layout');
     } catch {
       /* continue */
     }
@@ -188,4 +244,7 @@ module.exports = {
   findOnPath,
   homebrewPrefixFromExecPath,
   queryNpmRootGlobal,
+  invocationFromPath,
+  isCmdShim,
+  isJsEntrypoint,
 };
