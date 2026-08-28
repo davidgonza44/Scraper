@@ -548,6 +548,11 @@ def test_refresh_actor_override_stays_independent_of_search_actor() -> None:
     assert len(fake.calls) == 1
 
 
+def test_process_settings_ignore_leftover_search_actor_env() -> None:
+    settings = Settings.from_env()
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+
+
 def memo23_actor_item(**overrides: object) -> dict[str, object]:
     """Representative memo23/alibaba-scraper dataset row. Offline fixture only."""
 
