@@ -860,10 +860,7 @@ def main() -> int:  # noqa: PLR0915
         observed_keys.update(str(key) for key in item)
     unknown_keys, absent_optional = classify_observed_schema(observed_keys)
     print(f"    claves nuevas (desconocidas): {unknown_keys or 'ninguna'}")
-    print(
-        "    claves conocidas opcionales ausentes en este run: "
-        f"{absent_optional or 'ninguna'}"
-    )
+    print(f"    claves conocidas opcionales ausentes en este run: {absent_optional or 'ninguna'}")
 
     print("\n=== EJEMPLOS SANITIZADOS (máx 5) ===")
     for index in picked[:5]:
