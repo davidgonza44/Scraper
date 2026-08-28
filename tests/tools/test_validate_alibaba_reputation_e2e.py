@@ -14,9 +14,13 @@ from bera_price_tracker.config import DEFAULT_APIFY_ALIBABA_ACTOR
 from bera_price_tracker.gui.services import run_alibaba_search
 from bera_price_tracker.infrastructure.providers.alibaba import (
     ApifyAlibabaClient,
-    _identity_text as production_identity_text,
-    _scalar_text as production_scalar_text,
     map_alibaba_item,
+)
+from bera_price_tracker.infrastructure.providers.alibaba import (
+    _identity_text as production_identity_text,
+)
+from bera_price_tracker.infrastructure.providers.alibaba import (
+    _scalar_text as production_scalar_text,
 )
 from tools.validate_alibaba_reputation_e2e import (
     HISTORICAL_SEARCH_ACTOR_KEYS,
