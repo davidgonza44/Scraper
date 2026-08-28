@@ -20,7 +20,7 @@ from bera_price_tracker.application.alibaba_statistics import (
 )
 from bera_price_tracker.application.services import SearchAlibabaProducts
 from bera_price_tracker.domain.alibaba import AlibabaProduct
-from bera_price_tracker.gui import services as gui_services
+from bera_price_tracker.gui.services import alibaba_product_to_row, run_alibaba_search
 from bera_price_tracker.infrastructure.providers.alibaba import map_alibaba_item
 
 _OVER_EXPONENT = MAX_PREC - 2
@@ -102,9 +102,9 @@ def test_textual_near_max_exponent_does_not_crash_rows() -> None:
     for raw in ("1e100", "1e500", f"1e{_OVER_EXPONENT}"):
         product = map_alibaba_item({"title": "Mouse", "price": raw, "currency": "USD"})
         assert product is not None
-        row = gui_services.alibaba_product_to_row(product)
+        row = alibaba_product_to_row(product)
         assert isinstance(row["price"], str)
-        payload = gui_services.run_alibaba_search(
+        payload = run_alibaba_search(
             "mouse",
             10,
             search_service=SearchAlibabaProducts(FakeAlibabaProvider([product])),
@@ -128,7 +128,7 @@ def test_unrepresentable_usd_price_does_not_contaminate_or_abort_siblings() -> N
         [low, extreme, high],
         [extreme, _usd_product("extreme-2", over)],
     ):
-        payload = gui_services.run_alibaba_search(
+        payload = run_alibaba_search(
             "mouse",
             10,
             search_service=SearchAlibabaProducts(FakeAlibabaProvider(products)),
@@ -140,9 +140,13 @@ def test_unrepresentable_usd_price_does_not_contaminate_or_abort_siblings() -> N
         assert len(scores) == len(products)
         if any(item.title.startswith("ok") for item in products):
             ok_products = [item for item in products if item.title.startswith("ok")]
+            ok_mins = [item.min_price for item in ok_products if item.min_price is not None]
+            ok_maxes = [item.max_price for item in ok_products if item.max_price is not None]
+            assert ok_mins
+            assert ok_maxes
             assert stats.priced_products == len(ok_products)
-            assert stats.minimum == min(item.min_price for item in ok_products)
-            assert stats.maximum == max(item.max_price for item in ok_products)
+            assert stats.minimum == min(ok_mins)
+            assert stats.maximum == max(ok_maxes)
             for index, item in enumerate(products):
                 if item.title.startswith("ok"):
                     assert payload["results"][index]["price"]
