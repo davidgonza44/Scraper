@@ -13,6 +13,7 @@ from bera_price_tracker.application.alibaba_statistics import (
     _calculation_context,
     _canonical_exponent,
     _decimal_context,
+    _eligible_for_group_statistics,
     _quantize_cents,
     alibaba_price_bounds,
     alibaba_representative_price,
@@ -586,3 +587,128 @@ def test_signed_unsafe_extremes_fail_closed_in_general_formatter() -> None:
     assert format_alibaba_listing_price(negative_over, negative_over, "USD") == ""
     assert _quantize_cents(over) is None
     assert _quantize_cents(negative_over) is None
+
+
+def _singleton_placements(
+    singleton: AlibabaProduct, crowd: list[AlibabaProduct]
+) -> tuple[list[AlibabaProduct], ...]:
+    middle = len(crowd) // 2
+    return (
+        [singleton, *crowd],
+        [*crowd, singleton],
+        [*crowd[:middle], singleton, *crowd[middle:]],
+    )
+
+
+def _assert_stats_cohort(
+    products: list[AlibabaProduct],
+    *,
+    priced: int,
+    minimum: Decimal,
+    maximum: Decimal,
+) -> None:
+    payload = run_alibaba_search(
+        "mouse",
+        max(len(products), 1),
+        search_service=SearchAlibabaProducts(FakeAlibabaProvider(products)),
+    )
+    assert payload["ui_status"] == "SUCCESS"
+    assert [row["title"] for row in payload["results"]] == [item.title for item in products]
+    stats = calculate_alibaba_price_statistics(products)
+    assert stats.priced_products == priced
+    assert stats.minimum == minimum
+    assert stats.maximum == maximum
+    assert stats.average is not None
+
+
+def test_majority_extreme_cluster_beats_ordinary_singleton() -> None:
+    ordinary = _usd_product("ordinary", Decimal("1"))
+    extreme_value = _huge(_AT_CAP_EXPONENT)
+    crowd = [_usd_product(f"extreme-{index}", extreme_value) for index in range(499)]
+    values = [Decimal("1"), *([extreme_value] * 499)]
+    assert _calculation_context([extreme_value] * 499) is not None
+    assert _calculation_context(values) is None
+    keep = _eligible_for_group_statistics(values)
+    assert sum(keep) == 499
+    for products in _singleton_placements(ordinary, crowd):
+        _assert_stats_cohort(products, priced=499, minimum=extreme_value, maximum=extreme_value)
+
+
+def test_majority_ordinary_cluster_excludes_group_threatening_extreme() -> None:
+    extreme = _usd_product("extreme", _huge(_AT_CAP_EXPONENT))
+    crowd = [_usd_product(f"n{index}", Decimal(index)) for index in range(1, 500)]
+    for products in _singleton_placements(extreme, crowd):
+        _assert_stats_cohort(products, priced=499, minimum=Decimal("1"), maximum=Decimal("499"))
+
+
+def test_all_extreme_mutually_compatible_values_remain_selected() -> None:
+    extreme_value = _huge(_AT_CAP_EXPONENT)
+    products = [_usd_product(f"extreme-{index}", extreme_value) for index in range(500)]
+    assert _calculation_context([extreme_value] * 500) is not None
+    _assert_stats_cohort(products, priced=500, minimum=extreme_value, maximum=extreme_value)
+
+
+def test_count_width_nine_to_ten_selects_larger_compatible_cluster() -> None:
+    tiny = Decimal("1E-9998")
+    ordinary = _usd_product("ordinary", Decimal("1"))
+    nine = [_usd_product(f"tiny-{index}", tiny) for index in range(9)]
+    assert _calculation_context([Decimal("1")] + [tiny] * 8) is not None
+    assert _calculation_context([Decimal("1")] + [tiny] * 9) is None
+    for products in _singleton_placements(ordinary, nine):
+        _assert_stats_cohort(products, priced=9, minimum=tiny, maximum=tiny)
+
+
+def test_count_width_nine_mixed_span_still_fits_all_nine() -> None:
+    tiny = Decimal("1E-9998")
+    products = [_usd_product("ordinary", Decimal("1"))] + [
+        _usd_product(f"tiny-{index}", tiny) for index in range(8)
+    ]
+    assert _calculation_context([item.min_price for item in products if item.min_price]) is not None
+    _assert_stats_cohort(products, priced=9, minimum=tiny, maximum=Decimal("1"))
+
+
+def test_count_width_ninety_nine_to_one_hundred_prefers_homogeneous_cluster() -> None:
+    extreme_value = _huge(_AT_CAP_EXPONENT)
+    ordinary = _usd_product("ordinary", Decimal("1"))
+    ninety_nine = [_usd_product(f"extreme-{index}", extreme_value) for index in range(99)]
+    assert _calculation_context([Decimal("1")] + [extreme_value] * 98) is not None
+    assert _calculation_context([Decimal("1")] + [extreme_value] * 99) is None
+    for products in _singleton_placements(ordinary, ninety_nine):
+        _assert_stats_cohort(products, priced=99, minimum=extreme_value, maximum=extreme_value)
+
+
+def test_count_width_ninety_eight_extremes_plus_ordinary_all_fit() -> None:
+    extreme_value = _huge(_AT_CAP_EXPONENT)
+    products = [_usd_product("ordinary", Decimal("1"))] + [
+        _usd_product(f"extreme-{index}", extreme_value) for index in range(98)
+    ]
+    assert _calculation_context([Decimal("1")] + [extreme_value] * 98) is not None
+    _assert_stats_cohort(products, priced=99, minimum=Decimal("1"), maximum=extreme_value)
+
+
+def test_equal_cardinality_clusters_prefer_ordinary_magnitude() -> None:
+    tiny = Decimal(f"1E{Context().Emin}")
+    ordinary_crowd = [_usd_product(f"one-{index}", Decimal("1")) for index in range(2)]
+    tiny_crowd = [_usd_product(f"tiny-{index}", tiny) for index in range(2)]
+    assert _calculation_context([Decimal("1")] * 2) is not None
+    assert _calculation_context([tiny] * 2) is not None
+    assert _calculation_context([Decimal("1"), Decimal("1"), tiny, tiny]) is None
+    placements = (
+        ordinary_crowd + tiny_crowd,
+        tiny_crowd + ordinary_crowd,
+        [ordinary_crowd[0], tiny_crowd[0], ordinary_crowd[1], tiny_crowd[1]],
+        [tiny_crowd[0], ordinary_crowd[0], tiny_crowd[1], ordinary_crowd[1]],
+    )
+    for products in placements:
+        _assert_stats_cohort(products, priced=2, minimum=Decimal("1"), maximum=Decimal("1"))
+
+
+def test_equal_large_clusters_are_not_beaten_by_mixed_digit_width_subset() -> None:
+    extreme_value = _huge(_AT_CAP_EXPONENT)
+    ones = [_usd_product(f"one-{index}", Decimal("1")) for index in range(100)]
+    extremes = [_usd_product(f"extreme-{index}", extreme_value) for index in range(100)]
+    assert _calculation_context([Decimal("1")] * 100) is not None
+    assert _calculation_context([extreme_value] * 100) is not None
+    assert _calculation_context([Decimal("1")] * 100 + [extreme_value] * 100) is None
+    for products in (ones + extremes, extremes + ones):
+        _assert_stats_cohort(products, priced=100, minimum=Decimal("1"), maximum=Decimal("1"))

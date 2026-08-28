@@ -154,8 +154,31 @@ def _calculation_context(prices: list[Decimal]) -> Context | None:
         exponents.append(_canonical_exponent(price))
     minimum_exponent = min(exponents)
     maximum_adjusted = max(price.adjusted() for price in prices)
-    exact_sum_digits = maximum_adjusted - minimum_exponent + 1 + len(str(len(prices)))
-    return _decimal_context(max(_MINIMUM_CALCULATION_PRECISION, exact_sum_digits))
+    precision = _required_group_precision(maximum_adjusted, minimum_exponent, len(prices))
+    if precision is None:
+        return None
+    return _decimal_context(precision)
+
+
+def _required_group_precision(max_adjusted: int, min_exponent: int, count: int) -> int | None:
+    if count < 1:
+        return None
+    exact_sum_digits = max_adjusted - min_exponent + 1 + len(str(count))
+    return _bounded_precision(max(_MINIMUM_CALCULATION_PRECISION, exact_sum_digits))
+
+
+def _max_compatible_count(max_adjusted: int, min_exponent: int, available: int) -> int:
+    low = 1
+    high = available
+    best = 0
+    while low <= high:
+        mid = (low + high) // 2
+        if _required_group_precision(max_adjusted, min_exponent, mid) is not None:
+            best = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best
 
 
 def _as_decimal(value: object) -> Decimal | None:
@@ -308,10 +331,8 @@ def _usable_representatives(
 def _eligible_for_group_statistics(values: list[Decimal]) -> list[bool]:
     """Keep the largest order-independent subset that shares one Context.
 
-    Individually representable prices can still be group-threatening when their
-    combined exponent span exceeds the technical work cap. Prefer ordinary
-    magnitudes: among equal per-value work, smaller ``abs(adjusted())`` ranks
-    first so an Emin-boundary tiny cannot starve usable siblings.
+    Cardinality is maximized first. Ordinary magnitude, narrower exponent span,
+    and smaller required precision are used only to break equal-size ties.
     """
 
     count = len(values)
@@ -319,22 +340,59 @@ def _eligible_for_group_statistics(values: list[Decimal]) -> list[bool]:
         return []
     if _calculation_context(values) is not None:
         return [True] * count
-    ranked = sorted(
-        range(count),
-        key=lambda index: (
-            _cents_precision(values[index]),
-            abs(values[index].adjusted()),
-            values[index],
-        ),
-    )
-    chosen: list[Decimal] = []
-    selected: set[int] = set()
-    for index in ranked:
-        trial = chosen + [values[index]]
-        if _calculation_context(trial) is not None:
-            chosen.append(values[index])
-            selected.add(index)
-    return [index in selected for index in range(count)]
+
+    exponents = [_canonical_exponent(value) for value in values]
+    adjusted = [value.adjusted() for value in values]
+    abs_adjusted = [abs(item) for item in adjusted]
+    best_key: tuple[object, ...] | None = None
+    best_selected: set[int] | None = None
+    for min_exponent_bound in sorted(set(exponents)):
+        members = [index for index in range(count) if exponents[index] >= min_exponent_bound]
+        members.sort(key=lambda index: (adjusted[index], index))
+        running_min_exponent: int | None = None
+        cursor = 0
+        while cursor < len(members):
+            max_adjusted = adjusted[members[cursor]]
+            while cursor < len(members) and adjusted[members[cursor]] == max_adjusted:
+                index = members[cursor]
+                if running_min_exponent is None:
+                    running_min_exponent = exponents[index]
+                else:
+                    running_min_exponent = min(running_min_exponent, exponents[index])
+                cursor += 1
+            if running_min_exponent is None:
+                continue
+            window = members[:cursor]
+            available = len(window)
+            if _required_group_precision(max_adjusted, running_min_exponent, available) is not None:
+                selected = window
+            else:
+                keep = _max_compatible_count(max_adjusted, running_min_exponent, available)
+                if keep < 1:
+                    continue
+                ranked = sorted(
+                    window,
+                    key=lambda index: (abs_adjusted[index], values[index], index),
+                )
+                selected = ranked[:keep]
+            selected_count = len(selected)
+            selected_min_exponent = min(exponents[index] for index in selected)
+            selected_max_adjusted = max(adjusted[index] for index in selected)
+            precision = _required_group_precision(
+                selected_max_adjusted, selected_min_exponent, selected_count
+            )
+            if precision is None:
+                continue
+            span = selected_max_adjusted - selected_min_exponent
+            ordinary = max(abs_adjusted[index] for index in selected)
+            cohort = tuple(sorted(values[index] for index in selected))
+            key = (-selected_count, precision, span, ordinary, cohort)
+            if best_key is None or key < best_key:
+                best_key = key
+                best_selected = set(selected)
+    if best_selected is None:
+        return [False] * count
+    return [index in best_selected for index in range(count)]
 
 
 def calculate_alibaba_price_statistics(products: Sequence[object]) -> AlibabaPriceStatistics:
