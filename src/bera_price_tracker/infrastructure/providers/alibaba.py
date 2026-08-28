@@ -13,7 +13,7 @@ from bera_price_tracker.application import MarketplaceSourceUnavailable
 from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
 from bera_price_tracker.application.provider_acquisition import ProviderAcquisitionMetrics
 from bera_price_tracker.application.services import validate_alibaba_search
-from bera_price_tracker.config import DEFAULT_APIFY_ALIBABA_ACTOR
+from bera_price_tracker.config import DEFAULT_APIFY_ALIBABA_ACTOR, normalize_alibaba_search_actor
 from bera_price_tracker.domain.alibaba import AlibabaProduct
 from bera_price_tracker.infrastructure.providers.apify import (
     ApifyClientConfiguration,
@@ -197,6 +197,10 @@ class ApifyAlibabaClient:
         actor = self.actor_id.strip() if isinstance(self.actor_id, str) else ""
         if not actor:
             raise ApifyConfigurationError("alibaba actor id must not be blank")
+        try:
+            actor = normalize_alibaba_search_actor(actor)
+        except ValueError as error:
+            raise ApifyConfigurationError(str(error)) from error
         object.__setattr__(self, "actor_id", actor)
         object.__setattr__(
             self, "_api_token", None if self._api_token is None else self._api_token.strip() or None

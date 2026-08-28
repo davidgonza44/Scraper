@@ -340,6 +340,22 @@ def normalize_brightdata_base_url(value: str) -> str:
     return f"https://{parsed.netloc}".rstrip("/")
 
 
+def normalize_alibaba_search_actor(value: str) -> str:
+    """Accept only the memo23 SEARCH Actor. Reject leftover or custom overrides."""
+
+    if not isinstance(value, str):
+        raise TypeError("apify_alibaba_actor must be a string")
+    actor = value.strip()
+    if not actor:
+        raise ValueError("apify_alibaba_actor must not be blank")
+    if actor != DEFAULT_APIFY_ALIBABA_ACTOR:
+        raise ValueError(
+            "Unsupported Alibaba SEARCH Actor "
+            f"{actor!r}; only {DEFAULT_APIFY_ALIBABA_ACTOR} is supported"
+        )
+    return actor
+
+
 def _positive_finite(value: float, field_name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{field_name} must be a number")
@@ -523,10 +539,11 @@ class Settings:
             raise ValueError("facebook_backend must be apify or brightdata")
         object.__setattr__(self, "facebook_backend", backend)
 
-        actor = self.apify_alibaba_actor.strip()
-        if not actor:
-            raise ValueError("apify_alibaba_actor must not be blank")
-        object.__setattr__(self, "apify_alibaba_actor", actor)
+        object.__setattr__(
+            self,
+            "apify_alibaba_actor",
+            normalize_alibaba_search_actor(self.apify_alibaba_actor),
+        )
         refresh_actor = self.apify_alibaba_refresh_actor.strip()
         if not refresh_actor:
             raise ValueError("apify_alibaba_refresh_actor must not be blank")

@@ -3,6 +3,7 @@
 import pytest
 
 from bera_price_tracker.config import (
+    DEFAULT_APIFY_ALIBABA_ACTOR,
     DEFAULT_APIFY_MERCADOLIBRE_ACTOR,
     DEFAULT_AZURE_TRANSLATOR_ENDPOINT,
     DEFAULT_AZURE_TRANSLATOR_TIMEOUT_SECONDS,
@@ -17,6 +18,7 @@ from bera_price_tracker.config import (
     DEFAULT_OLLAMA_TIMEOUT_SECONDS,
     Settings,
     is_valid_mercadolibre_site_id,
+    normalize_alibaba_search_actor,
 )
 
 
@@ -90,6 +92,7 @@ def test_settings_are_read_from_a_mapping_without_loading_files() -> None:
     assert settings.deepl_translator_configured() is True
     assert settings.resolved_translator_provider() == "deepl"
     assert settings.product_translator_configured() is True
+    assert settings.apify_alibaba_actor == DEFAULT_APIFY_ALIBABA_ACTOR
     assert settings.apify_alibaba_refresh_actor == "xtracto/alibaba-product-scraper"
     assert settings.apify_alibaba_refresh_retries == 1
     assert settings.apify_alibaba_refresh_concurrency == 3
@@ -291,3 +294,28 @@ def test_blank_deepl_key_is_not_configured() -> None:
     settings = Settings.from_env({"BERA_TRACKER_DEEPL_API_KEY": "  "})
     assert settings.deepl_api_key is None
     assert settings.deepl_translator_configured() is False
+
+
+def test_normalize_alibaba_search_actor_accepts_only_memo23() -> None:
+    assert (
+        normalize_alibaba_search_actor(f"  {DEFAULT_APIFY_ALIBABA_ACTOR}  ")
+        == DEFAULT_APIFY_ALIBABA_ACTOR
+    )
+    with pytest.raises(ValueError, match="apify_alibaba_actor must not be blank"):
+        normalize_alibaba_search_actor("  ")
+    with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
+        normalize_alibaba_search_actor("custom/incompatible-alibaba-actor")
+    with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
+        Settings.from_env({_alibaba_search_actor_env(): "custom/incompatible-alibaba-actor"})
+
+
+def test_alibaba_refresh_actor_override_does_not_change_search_actor() -> None:
+    settings = Settings.from_env(
+        {"BERA_TRACKER_APIFY_ALIBABA_REFRESH_ACTOR": "custom/alibaba-refresh-actor"}
+    )
+    assert settings.apify_alibaba_actor == DEFAULT_APIFY_ALIBABA_ACTOR
+    assert settings.apify_alibaba_refresh_actor == "custom/alibaba-refresh-actor"
+
+
+def _alibaba_search_actor_env() -> str:
+    return "_".join(("BERA_TRACKER", "APIFY", "ALIBABA", "ACTOR"))

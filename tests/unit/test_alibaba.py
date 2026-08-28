@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 
+from bera_price_tracker.application.alibaba_score import score_alibaba_listings
 from bera_price_tracker.application.alibaba_statistics import (
     MISSING_CURRENCY_DISPLAY,
     UNAVAILABLE_DISPLAY,
@@ -427,6 +428,14 @@ def test_client_uses_documented_input_and_default_actor() -> None:
     assert client.last_metrics.usable == 1
 
 
+def _alibaba_search_actor_env() -> str:
+    return "_".join(("BERA_TRACKER", "APIFY", "ALIBABA", "ACTOR"))
+
+
+def _legacy_alibaba_search_actor() -> str:
+    return "/".join(("scraper-engine", "alibaba-scraper"))
+
+
 def test_default_actor_config() -> None:
     settings = Settings.from_env({})
     assert DEFAULT_APIFY_ALIBABA_ACTOR == MEMO23_ALIBABA_SEARCH_ACTOR
@@ -434,6 +443,109 @@ def test_default_actor_config() -> None:
     assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
     assert settings.apify_alibaba_refresh_actor == DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR
     assert settings.apify_alibaba_refresh_actor != MEMO23_ALIBABA_SEARCH_ACTOR
+
+
+def test_unset_search_actor_uses_memo23_and_runs_once() -> None:
+    settings = Settings.from_env({})
+    fake = FakeApify([memo23_actor_item()])
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=settings.apify_alibaba_actor,
+        client_factory=lambda _token: fake,
+    )
+    products = client.search("Iphone 15", 5)
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert len(fake.calls) == 1
+    assert fake.calls[0] == build_alibaba_run_input(query="Iphone 15", limit=5)
+    assert products[0].title == "Iphone 15 Protective Case"
+
+
+def test_explicit_memo23_search_actor_uses_memo23_schema() -> None:
+    settings = Settings.from_env(
+        {_alibaba_search_actor_env(): f"  {MEMO23_ALIBABA_SEARCH_ACTOR}  "}
+    )
+    fake = FakeApify([memo23_actor_item()])
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=settings.apify_alibaba_actor,
+        client_factory=lambda _token: fake,
+    )
+    products = client.search("Iphone 15", 5)
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert len(fake.calls) == 1
+    assert fake.calls[0] == {
+        "searchTerms": ["Iphone 15"],
+        "maxPages": 1,
+        "maxItems": 5,
+    }
+    assert products[0].title == "Iphone 15 Protective Case"
+
+
+def test_legacy_search_actor_override_never_reaches_memo23_run_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[dict[str, object]] = []
+
+    def _capture_run_input(*, query: str, limit: int) -> dict[str, object]:
+        payload = {"searchTerms": [query], "maxPages": 1, "maxItems": limit}
+        built.append(payload)
+        return payload
+
+    monkeypatch.setattr(
+        "bera_price_tracker.infrastructure.providers.alibaba.build_alibaba_run_input",
+        _capture_run_input,
+    )
+    fake = FakeApify([memo23_actor_item()])
+    with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
+        Settings.from_env({_alibaba_search_actor_env(): _legacy_alibaba_search_actor()})
+    with pytest.raises(ApifyConfigurationError, match="Unsupported Alibaba SEARCH Actor"):
+        ApifyAlibabaClient(
+            _api_token="token",
+            actor_id=_legacy_alibaba_search_actor(),
+            client_factory=lambda _token: fake,
+        )
+    assert fake.calls == []
+    assert fake.actor_id == ""
+    assert built == []
+
+
+def test_incompatible_custom_search_actor_does_not_receive_memo23_schema() -> None:
+    custom_actor = "custom/incompatible-alibaba-actor"
+    fake = FakeApify([memo23_actor_item()])
+    with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
+        Settings.from_env({_alibaba_search_actor_env(): custom_actor})
+    with pytest.raises(ApifyConfigurationError, match="Unsupported Alibaba SEARCH Actor"):
+        ApifyAlibabaClient(
+            _api_token="token",
+            actor_id=custom_actor,
+            client_factory=lambda _token: fake,
+        )
+    assert fake.calls == []
+    assert fake.actor_id == ""
+
+
+def test_refresh_actor_override_stays_independent_of_search_actor() -> None:
+    custom_refresh = "custom/alibaba-refresh-actor"
+    settings = Settings.from_env(
+        {
+            _alibaba_search_actor_env(): MEMO23_ALIBABA_SEARCH_ACTOR,
+            "BERA_TRACKER_APIFY_ALIBABA_REFRESH_ACTOR": custom_refresh,
+        }
+    )
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert settings.apify_alibaba_refresh_actor == custom_refresh
+    assert settings.apify_alibaba_refresh_actor != settings.apify_alibaba_actor
+    fake = FakeApify([memo23_actor_item()])
+    ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=settings.apify_alibaba_actor,
+        client_factory=lambda _token: fake,
+    ).search("Iphone 15", 1)
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id != custom_refresh
+    assert len(fake.calls) == 1
 
 
 def memo23_actor_item(**overrides: object) -> dict[str, object]:
@@ -524,6 +636,44 @@ def test_dollar_price_range_does_not_invent_usd_currency() -> None:
     assert product.min_price == Decimal("1.00")
     assert product.max_price == Decimal("9.00")
     assert product.currency is None
+
+
+def test_memo23_documented_us_dollar_prefix_does_not_enter_usd_statistics() -> None:
+    product = map_alibaba_item(memo23_actor_item(price="US $0.71-$0.78"))
+    assert product is not None
+    assert product.price_display == "US $0.71-$0.78"
+    assert product.min_price == Decimal("0.71")
+    assert product.max_price == Decimal("0.78")
+    assert product.currency is None
+    assert infer_alibaba_currency(product) is None
+    stats = calculate_alibaba_price_statistics([product])
+    assert stats.priced_products == 0
+    assert stats.average is None
+    assert stats.median is None
+    assert stats.minimum is None
+    assert stats.maximum is None
+    assert stats.currency is None
+
+
+def test_memo23_documented_us_dollar_prefix_caps_opportunity_below_50() -> None:
+    product = map_alibaba_item(
+        memo23_actor_item(
+            price="US $0.71-$0.78",
+            minOrder="1 piece",
+        )
+    )
+    assert product is not None
+    scores = score_alibaba_listings([product])
+    assert len(scores) == 1
+    score = scores[0]
+    assert score.price_score == 0
+    assert score.information_score == 20
+    assert score.price_clarity_score == 4
+    assert score.moq_score > 0
+    assert score.total < 50
+    assert score.total == (
+        score.price_score + score.moq_score + score.information_score + score.price_clarity_score
+    )
 
 
 def test_single_price_and_missing_price_are_truthful() -> None:
