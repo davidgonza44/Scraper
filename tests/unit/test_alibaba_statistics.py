@@ -17,6 +17,7 @@ from bera_price_tracker.application.alibaba_statistics import (
     alibaba_price_bounds,
     alibaba_representative_price,
     calculate_alibaba_price_statistics,
+    format_alibaba_currency,
     format_alibaba_listing_price,
     format_alibaba_money,
 )
@@ -532,3 +533,56 @@ def test_padded_tiny_exponent_still_does_not_starve_ordinary_cluster() -> None:
         assert stats.minimum == Decimal("1")
         assert stats.maximum == Decimal("3")
         assert stats.average == Decimal("2")
+
+
+def test_general_currency_formatter_preserves_signed_and_zero_amounts() -> None:
+    assert format_alibaba_currency(Decimal("-3.20"), "USD") == "$-3.20"
+    assert format_alibaba_currency(Decimal("0"), "USD") == "$0.00"
+    assert format_alibaba_currency(Decimal("0.00"), "USD") == "$0.00"
+    assert format_alibaba_currency(Decimal("3.20"), "USD") == "$3.20"
+    assert format_alibaba_currency(Decimal("-3.20"), "EUR") == "EUR -3.20"
+    assert format_alibaba_money(Decimal("-3.20")) == "$-3.20"
+    assert format_alibaba_money(Decimal("0")) == "$0.00"
+    assert format_alibaba_money(Decimal("3.20")) == "$3.20"
+    assert format_alibaba_money(Decimal("-1.50")) == "$-1.50"
+
+
+def test_listing_prices_remain_strictly_positive() -> None:
+    assert format_alibaba_listing_price(Decimal("-3.20"), Decimal("-3.20"), "USD") == ""
+    assert format_alibaba_listing_price(Decimal("0"), Decimal("0"), "USD") == ""
+    assert format_alibaba_listing_price(Decimal("0.00"), Decimal("0.00"), "USD") == ""
+    assert format_alibaba_listing_price(Decimal("-3.20"), Decimal("3.20"), "USD") == ""
+    assert format_alibaba_listing_price(Decimal("5.00"), Decimal("3.00"), "USD") == ""
+    assert format_alibaba_listing_price(Decimal("3.20"), Decimal("-3.20"), "USD") == ""
+    product = SimpleNamespace(
+        min_price=Decimal("-3.20"), max_price=Decimal("-3.20"), currency="USD"
+    )
+    assert alibaba_price_bounds(product) is None
+    assert alibaba_representative_price(product) is None
+    zero = SimpleNamespace(min_price=Decimal("0"), max_price=Decimal("0"), currency="USD")
+    assert alibaba_price_bounds(zero) is None
+    nan = SimpleNamespace(min_price=Decimal("NaN"), max_price=Decimal("NaN"), currency="USD")
+    assert alibaba_price_bounds(nan) is None
+    assert format_alibaba_listing_price(Decimal("NaN"), Decimal("NaN"), "USD") == ""
+    assert format_alibaba_listing_price(Decimal("Infinity"), Decimal("Infinity"), "USD") == ""
+    assert format_alibaba_listing_price(Decimal("-Infinity"), Decimal("-Infinity"), "USD") == ""
+
+
+def test_signed_unsafe_extremes_fail_closed_in_general_formatter() -> None:
+    over = Decimal("1E+10001")
+    negative_over = Decimal("-1E+10001")
+    underflow = Decimal("1E-100000000")
+    negative_underflow = Decimal("-1E-100000000")
+    assert format_alibaba_currency(over, "USD") == UNAVAILABLE_DISPLAY
+    assert format_alibaba_currency(negative_over, "USD") == UNAVAILABLE_DISPLAY
+    assert format_alibaba_money(over) == UNAVAILABLE_DISPLAY
+    assert format_alibaba_money(negative_over) == UNAVAILABLE_DISPLAY
+    assert format_alibaba_currency(underflow, "USD") == UNAVAILABLE_DISPLAY
+    assert format_alibaba_currency(negative_underflow, "USD") == UNAVAILABLE_DISPLAY
+    assert format_alibaba_currency(Decimal("NaN"), "USD") == UNAVAILABLE_DISPLAY
+    assert format_alibaba_currency(Decimal("Infinity"), "USD") == UNAVAILABLE_DISPLAY
+    assert format_alibaba_currency(Decimal("-Infinity"), "USD") == UNAVAILABLE_DISPLAY
+    assert format_alibaba_listing_price(over, over, "USD") == ""
+    assert format_alibaba_listing_price(negative_over, negative_over, "USD") == ""
+    assert _quantize_cents(over) is None
+    assert _quantize_cents(negative_over) is None

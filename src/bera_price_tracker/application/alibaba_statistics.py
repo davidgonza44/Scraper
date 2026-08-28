@@ -128,10 +128,10 @@ def _decimal_in_context_range(value: Decimal, context: Context) -> bool:
     return context.Emin <= adjusted <= context.Emax
 
 
-def _representable_price(value: Decimal) -> bool:
-    """Technical representability: work cap, exponent range, and positivity."""
+def _representable_amount(value: Decimal) -> bool:
+    """Technical representability for cents formatting. Sign-neutral."""
 
-    if not value.is_finite() or value <= Decimal("0"):
+    if not value.is_finite():
         return False
     exponent = value.as_tuple().exponent
     if not isinstance(exponent, int):
@@ -140,6 +140,12 @@ def _representable_price(value: Decimal) -> bool:
     if context is None:
         return False
     return _decimal_in_context_range(value, context)
+
+
+def _representable_price(value: Decimal) -> bool:
+    """Published listing price: technically representable and strictly positive."""
+
+    return _representable_amount(value) and value > Decimal("0")
 
 
 def _calculation_context(prices: list[Decimal]) -> Context | None:
@@ -163,7 +169,7 @@ def _as_decimal(value: object) -> Decimal | None:
 def _quantize_cents(value: Decimal) -> Decimal | None:
     """Quantize to display cents, or None if the coefficient cannot be represented."""
 
-    if not _representable_price(value):
+    if not _representable_amount(value):
         return None
     context = _decimal_context(_cents_precision(value))
     if context is None:
