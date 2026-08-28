@@ -23,6 +23,7 @@ from bera_price_tracker.infrastructure.providers.apify import (
 DEFAULT_ALIBABA_ACTOR = DEFAULT_APIFY_ALIBABA_ACTOR
 _NUMBER = re.compile(r"(\d+(?:\.\d+)?)")
 _ISO_CURRENCY = re.compile(r"\b([A-Z]{3})\b")
+MEMO23_ALIBABA_MIN_PRODUCTS_PER_PAGE = 20
 
 
 class _ActorClient(Protocol):
@@ -46,12 +47,23 @@ class _ApifyClientLike(Protocol):
 ClientFactory = Callable[[str], _ApifyClientLike]
 
 
+def alibaba_actor_max_pages(limit: int) -> int:
+    """Conservative Actor-internal page budget for one search run.
+
+    memo23/alibaba-scraper documents about 20–48 products per page and defaults
+    ``maxPages`` to 1. Using the lower approximate page size lets one Actor run
+    paginate far enough to satisfy ``maxItems`` without a second BERA call.
+    """
+
+    return max(1, math.ceil(limit / MEMO23_ALIBABA_MIN_PRODUCTS_PER_PAGE))
+
+
 def build_alibaba_run_input(*, query: str, limit: int) -> dict[str, object]:
     """Actor input using only documented fields: searchTerms, maxPages, maxItems."""
 
     return {
         "searchTerms": [query],
-        "maxPages": 1,
+        "maxPages": alibaba_actor_max_pages(limit),
         "maxItems": limit,
     }
 

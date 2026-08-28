@@ -176,6 +176,65 @@ def test_memo23_run_input_does_not_construct_search_urls() -> None:
     assert payload["maxItems"] == 20
 
 
+@pytest.mark.parametrize(
+    ("limit", "expected_max_pages"),
+    [
+        (1, 1),
+        (5, 1),
+        (20, 1),
+        (21, 2),
+        (100, 5),
+        (500, 25),
+    ],
+)
+def test_memo23_max_pages_covers_requested_item_limit(limit: int, expected_max_pages: int) -> None:
+    payload = build_alibaba_run_input(query="solar panel 550w", limit=limit)
+    assert payload["searchTerms"] == ["solar panel 550w"]
+    assert payload["maxItems"] == limit
+    assert payload["maxPages"] == expected_max_pages
+    assert list(payload.keys()) == ["searchTerms", "maxPages", "maxItems"]
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected_max_pages"),
+    [
+        (21, 2),
+        (100, 5),
+        (500, 25),
+    ],
+)
+def test_memo23_multi_page_budget_is_still_one_actor_call(
+    limit: int, expected_max_pages: int
+) -> None:
+    client, fake, _products = _search_with_items(
+        [memo23_actor_item()], query="Iphone 15", limit=limit
+    )
+    assert len(fake.calls) == 1
+    payload = fake.calls[0]
+    assert payload["searchTerms"] == ["Iphone 15"]
+    assert payload["maxItems"] == limit
+    assert payload["maxPages"] == expected_max_pages
+    assert client.last_metrics is not None
+    assert client.last_metrics.requested == limit
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+
+
+def test_failed_high_limit_search_does_not_retry_or_switch_actors() -> None:
+    fake = FakeApify([], run={"status": "FAILED", "defaultDatasetId": "ds1"})
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=DEFAULT_APIFY_ALIBABA_ACTOR,
+        client_factory=lambda _token: fake,
+    )
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        client.search("Iphone 15", 500)
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["maxItems"] == 500
+    assert fake.calls[0]["maxPages"] == 25
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert client.last_metrics is None
+
+
 @pytest.mark.parametrize("limit", [1, 20, 500])
 def test_limits_accepted(limit: int) -> None:
     provider = FakeAlibabaProvider()
