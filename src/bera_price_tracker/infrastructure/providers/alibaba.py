@@ -21,7 +21,10 @@ from bera_price_tracker.infrastructure.providers.apify import (
 )
 
 DEFAULT_ALIBABA_ACTOR = DEFAULT_APIFY_ALIBABA_ACTOR
-_NUMBER = re.compile(r"(\d+(?:\.\d+)?)")
+_UNSIGNED_PRICE = re.compile(r"\d+(?:\.\d+)?")
+_SCI_TOKEN = re.compile(r"(?<![A-Za-z])[+-]?\d+(?:\.\d+)?[eE][+-]?\d+")
+_PLAIN_OR_SCI_NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+_CURRENCY_NOISE = re.compile(r"(?i)\$|\b(?:US|USD|EUR|CNY|GBP)\b")
 _ISO_CURRENCY = re.compile(r"\b([A-Z]{3})\b")
 MEMO23_ALIBABA_MIN_PRODUCTS_PER_PAGE = 20
 
@@ -107,25 +110,89 @@ def _decimal_from_text(value: str) -> Decimal | None:
     return price
 
 
+def _positive_decimal(value: Decimal) -> Decimal | None:
+    if not value.is_finite() or value <= Decimal("0"):
+        return None
+    return value
+
+
+def _decimal_from_numeric_scalar(raw: int | float) -> Decimal | None:
+    if isinstance(raw, float) and not math.isfinite(raw):
+        return None
+    try:
+        parsed = Decimal(str(raw))
+    except (InvalidOperation, ValueError):
+        return None
+    return _positive_decimal(parsed)
+
+
+def _explicit_display_currency(display: str) -> str | None:
+    currency_match = _ISO_CURRENCY.search(display)
+    if currency_match is None:
+        return None
+    return explicit_alibaba_currency(currency_match.group(1))
+
+
+def _parse_scientific_price_text(compact: str) -> Decimal | None:
+    candidate = re.sub(r"\s+", "", _CURRENCY_NOISE.sub("", compact))
+    if not _PLAIN_OR_SCI_NUMBER.fullmatch(candidate):
+        return None
+    try:
+        parsed = Decimal(candidate)
+    except (InvalidOperation, ValueError):
+        return None
+    return _positive_decimal(parsed)
+
+
+def _is_negative_price_prefix(compact: str, start: int) -> bool:
+    """True when '-' is a minus sign, not a range separator after another number."""
+
+    if start < 1 or compact[start - 1] != "-":
+        return False
+    if start == 1:
+        return True
+    previous = compact[start - 2]
+    return not (previous.isdigit() or previous == ".")
+
+
 def parse_alibaba_price(
     raw: object,
 ) -> tuple[str | None, Decimal | None, Decimal | None, str | None]:
+    if isinstance(raw, bool):
+        return None, None, None, None
+    if isinstance(raw, int) or isinstance(raw, float):
+        display = _scalar_text(raw)
+        amount = _decimal_from_numeric_scalar(raw)
+        if amount is None:
+            return display, None, None, None
+        return display, amount, amount, None
+
     display = _scalar_text(raw)
     if display is None:
         return None, None, None, None
     compact = display.replace(",", "")
+    currency = _explicit_display_currency(display)
+    if _SCI_TOKEN.search(compact) is not None:
+        amount = _parse_scientific_price_text(compact)
+        if amount is None:
+            return display, None, None, currency
+        return display, amount, amount, currency
+
+    matches = list(_UNSIGNED_PRICE.finditer(compact))
     numbers: list[Decimal] = []
-    for match in _NUMBER.finditer(compact):
-        parsed = _decimal_from_text(match.group(1))
-        if parsed is not None:
-            numbers.append(parsed)
-    min_price = numbers[0] if numbers else None
-    max_price = numbers[1] if len(numbers) >= 2 else min_price
-    currency = None
-    currency_match = _ISO_CURRENCY.search(display)
-    if currency_match is not None:
-        currency = explicit_alibaba_currency(currency_match.group(1))
-    return display, min_price, max_price, currency
+    for match in matches:
+        parsed = _decimal_from_text(match.group(0))
+        if parsed is None or _is_negative_price_prefix(compact, match.start()):
+            return display, None, None, currency
+        numbers.append(parsed)
+    if len(numbers) == 1:
+        return display, numbers[0], numbers[0], currency
+    if len(numbers) == 2:
+        between = compact[matches[0].end() : matches[1].start()]
+        if "-" in between:
+            return display, numbers[0], numbers[1], currency
+        return display, None, None, currency
+    return display, None, None, currency
 
 
 def map_alibaba_item(raw: object) -> AlibabaProduct | None:

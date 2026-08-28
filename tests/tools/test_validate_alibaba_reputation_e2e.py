@@ -21,6 +21,8 @@ from tools.validate_alibaba_reputation_e2e import (
     ReplayActorMismatch,
     ReplayProvenanceUnavailable,
     _configured_actor_aliases,
+    _display_provenance,
+    _print_run_record,
     classify_observed_schema,
     classify_replay_provenance,
     emit_search_failure,
@@ -209,6 +211,91 @@ def test_extract_run_provenance_reports_build_fields() -> None:
     assert provenance["build_id"] == "build-123"
     assert provenance["build_number"] == "0.1.4"
     assert provenance["status"] == "SUCCEEDED"
+
+
+def _secret_run_record() -> dict[str, Any]:
+    return {
+        "actor_calls_created": 0,
+        "configured_actor_id": {"token": "SECRET_CONFIG"},
+        "run_id": {"password": "SECRET_RUN"},
+        "run_act_id": {"token": "SECRET_ACT"},
+        "run_build_id": {"token": "SECRET_BUILD"},
+        "run_build_number": ["SECRET_NUMBER"],
+        "run_status": {"authorization": "SECRET_STATUS"},
+    }
+
+
+def _assert_no_run_metadata_secrets(text: str) -> None:
+    for secret in (
+        "SECRET_CONFIG",
+        "SECRET_RUN",
+        "SECRET_ACT",
+        "SECRET_BUILD",
+        "SECRET_NUMBER",
+        "SECRET_STATUS",
+    ):
+        assert secret not in text
+    assert "token" not in text
+    assert "password" not in text
+    assert "authorization" not in text
+
+
+def test_extract_run_provenance_drops_malformed_metadata_objects() -> None:
+    provenance = extract_run_provenance(
+        {
+            "id": {"password": "SECRET_RUN"},
+            "status": {"authorization": "SECRET_STATUS"},
+            "actId": {"token": "SECRET_ACT"},
+            "buildId": {"token": "SECRET_BUILD"},
+            "buildNumber": ["SECRET_NUMBER"],
+        }
+    )
+    assert provenance == {
+        "run_id": None,
+        "act_id": None,
+        "build_id": None,
+        "build_number": None,
+        "status": None,
+    }
+    dumped = repr(provenance)
+    _assert_no_run_metadata_secrets(dumped)
+
+
+def test_display_provenance_does_not_stringify_objects() -> None:
+    assert _display_provenance("  memo23/alibaba-scraper  ") == MEMO23_SEARCH_ACTOR
+    assert _display_provenance(None) == "—"
+    assert _display_provenance({"token": "SECRET_ACT"}) == "—"
+    assert _display_provenance(["SECRET_NUMBER"]) == "—"
+    assert _display_provenance({"authorization": "SECRET_STATUS"}) == "—"
+    assert "SECRET_ACT" not in _display_provenance({"token": "SECRET_ACT"})
+
+
+def test_malformed_run_metadata_is_redacted_on_failure_path(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = _secret_run_record()
+    assert (
+        emit_search_failure(MarketplaceSourceUnavailable("Alibaba source is unavailable"), record)
+        == 1
+    )
+    out = capsys.readouterr().out
+    _assert_no_run_metadata_secrets(out)
+    assert "Actor configurado: —" in out
+    assert "Actor real del run (actId): —" in out
+    assert "buildId: —" in out
+    assert "buildNumber: —" in out
+    assert "status: —" in out
+
+
+def test_malformed_run_metadata_is_redacted_on_success_report(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = _secret_run_record()
+    _print_run_record(record)
+    out = capsys.readouterr().out
+    _assert_no_run_metadata_secrets(out)
+    assert "run reutilizable: —" in out
+    assert "status: —" in out
 
 
 def test_healthy_memo23_keys_are_not_unknown_schema() -> None:

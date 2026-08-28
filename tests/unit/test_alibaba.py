@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
@@ -1890,6 +1891,113 @@ def test_mapper_rejects_malformed_and_non_positive_prices() -> None:
     assert garbage.min_price is None
     nan = parse_alibaba_price("NaN")
     assert nan == ("NaN", None, None, None)
+
+
+def test_numeric_price_scalars_are_not_regex_split() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price(4)
+    assert display == "4"
+    assert min_price == Decimal("4")
+    assert max_price == Decimal("4")
+    assert currency is None
+
+    display, min_price, max_price, currency = parse_alibaba_price(4.5)
+    assert display == "4.5"
+    assert min_price == Decimal("4.5")
+    assert max_price == Decimal("4.5")
+    assert currency is None
+
+    for raw in (0, 0.0, -4, -4.5, float("nan"), float("inf"), float("-inf"), True, False):
+        display, min_price, max_price, currency = parse_alibaba_price(raw)
+        assert min_price is None
+        assert max_price is None
+        assert currency is None
+        if raw is True or raw is False:
+            assert display is None
+        elif isinstance(raw, float) and not math.isfinite(raw):
+            assert display is None
+        else:
+            assert display == str(raw)
+
+    huge = 1e20
+    display, min_price, max_price, currency = parse_alibaba_price(huge)
+    assert display == str(huge)
+    assert min_price == Decimal(str(huge))
+    assert max_price == Decimal(str(huge))
+    assert min_price != Decimal("1")
+    assert max_price != Decimal("20")
+    assert currency is None
+
+    tiny = 1e-20
+    display, min_price, max_price, currency = parse_alibaba_price(tiny)
+    assert display == str(tiny)
+    assert min_price == Decimal(str(tiny))
+    assert max_price == Decimal(str(tiny))
+    assert (min_price, max_price) != (Decimal("1"), Decimal("20"))
+    assert currency is None
+
+
+def test_textual_prices_do_not_fabricate_from_sign_or_exponent() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("US $1.00-$9.00")
+    assert display == "US $1.00-$9.00"
+    assert min_price == Decimal("1.00")
+    assert max_price == Decimal("9.00")
+    assert currency is None
+
+    display, min_price, max_price, currency = parse_alibaba_price("US $4.50")
+    assert display == "US $4.50"
+    assert min_price == Decimal("4.50")
+    assert max_price == Decimal("4.50")
+    assert currency is None
+
+    display, min_price, max_price, currency = parse_alibaba_price("$1.00-$9.00")
+    assert display == "$1.00-$9.00"
+    assert min_price == Decimal("1.00")
+    assert max_price == Decimal("9.00")
+    assert currency is None
+
+    display, min_price, max_price, currency = parse_alibaba_price("USD 1.00-9.00")
+    assert display == "USD 1.00-9.00"
+    assert min_price == Decimal("1.00")
+    assert max_price == Decimal("9.00")
+    assert currency == "USD"
+
+    for raw in ("-4.5", "1e20", "1e-20", "", "n/a"):
+        parsed = parse_alibaba_price(raw)
+        if raw == "":
+            assert parsed == (None, None, None, None)
+            continue
+        display, min_price, max_price, currency = parsed
+        assert display == raw
+        assert min_price is None or (min_price, max_price) != (Decimal("1"), Decimal("20"))
+        if raw in ("-4.5", "n/a"):
+            assert min_price is None
+            assert max_price is None
+        if raw in ("1e20", "1e-20"):
+            assert (min_price, max_price) != (Decimal("1"), Decimal("20"))
+            if min_price is not None:
+                assert min_price == max_price == Decimal(raw)
+        assert currency is None
+
+    three = parse_alibaba_price("1.00 2.00 3.00")
+    assert three[0] == "1.00 2.00 3.00"
+    assert three[1] is None
+    assert three[2] is None
+
+    mixed = parse_alibaba_price("MOQ 10 US $1.00-$9.00")
+    assert mixed[1] is None
+    assert mixed[2] is None
+    assert mixed[0] == "MOQ 10 US $1.00-$9.00"
+
+
+def test_negative_numeric_price_does_not_enter_statistics() -> None:
+    product = map_alibaba_item({"title": "Mouse", "price": -4.5})
+    assert product is not None
+    assert product.price_display == "-4.5"
+    assert product.min_price is None
+    assert product.max_price is None
+    stats = calculate_alibaba_price_statistics([product])
+    assert stats.priced_products == 0
+    assert stats.minimum is None
 
 
 def test_mapper_keeps_missing_optional_identity_fields() -> None:

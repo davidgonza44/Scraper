@@ -269,6 +269,19 @@ def replay_search_failure_kind(exc: BaseException) -> ReplaySearchFailureKind:
     return "other"
 
 
+def _safe_run_metadata(value: object) -> str | None:
+    """Accept only scalar run metadata. Never stringify mappings/lists/objects."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, int):
+        return str(value)
+    return None
+
+
 def extract_run_provenance(run: Mapping[str, object] | None) -> dict[str, object]:
     if run is None:
         return {
@@ -282,11 +295,11 @@ def extract_run_provenance(run: Mapping[str, object] | None) -> dict[str, object
     if act_id is None:
         act_id = run.get("actorId")
     return {
-        "run_id": run.get("id"),
-        "act_id": act_id,
-        "build_id": run.get("buildId"),
-        "build_number": run.get("buildNumber"),
-        "status": run.get("status"),
+        "run_id": _safe_run_metadata(run.get("id")),
+        "act_id": _safe_run_metadata(act_id),
+        "build_id": _safe_run_metadata(run.get("buildId")),
+        "build_number": _safe_run_metadata(run.get("buildNumber")),
+        "status": _safe_run_metadata(run.get("status")),
     }
 
 
@@ -300,20 +313,26 @@ def _apply_run_to_record(record: dict[str, Any], run: object) -> None:
 
 
 def _display_provenance(value: object) -> str:
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    if value is None:
+    text = _safe_run_metadata(value)
+    if text is None:
+        return "—"
+    return text
+
+
+def _display_count(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, int):
         return "—"
     return str(value)
 
 
 def _print_run_record(record: Mapping[str, Any]) -> None:
-    print(f"Actor runs creados: {record.get('actor_calls_created', 0)}")
+    print(f"Actor runs creados: {_display_count(record.get('actor_calls_created', 0))}")
     print(f"Actor configurado: {_display_provenance(record.get('configured_actor_id'))}")
     print(f"Actor real del run (actId): {_display_provenance(record.get('run_act_id'))}")
     print(f"buildId: {_display_provenance(record.get('run_build_id'))}")
     print(f"buildNumber: {_display_provenance(record.get('run_build_number'))}")
-    print(f"status: {record.get('run_status')}")
+    print(f"status: {_display_provenance(record.get('run_status'))}")
+    print(f"run reutilizable: {_display_provenance(record.get('run_id'))}")
 
 
 def emit_search_failure(exc: BaseException, record: Mapping[str, Any]) -> int:
@@ -654,10 +673,9 @@ def main() -> int:  # noqa: PLR0915
     raw_items = [item for item in record["raw_items"] if isinstance(item, Mapping)]
     rows: list[dict[str, Any]] = payload["results"]
     _print_run_record(record)
-    print(f"run reutilizable: {record['run_id']}")
     print(f"items en dataset (reutilizado): {len(raw_items)}")
     print(f"productos mapeados: {len(products)}")
-    print(f"ui_status: {payload['ui_status']}")
+    print(f"ui_status: {_display_provenance(payload.get('ui_status'))}")
 
     failures: list[str] = []
 
@@ -741,7 +759,7 @@ def main() -> int:  # noqa: PLR0915
         )
         if not same:
             indep_ok = False
-        supplier_name = products[index].supplier_name or "—"
+        supplier_name = _display_provenance(products[index].supplier_name)
         print(
             f"    {supplier_name[:38]:38s} score app={rep.score} indep={indep['score']} "
             f"cov app={rep.evidence_coverage} indep={indep['coverage']} "
@@ -773,7 +791,8 @@ def main() -> int:  # noqa: PLR0915
         if same_signals and not same_scores:
             repeated_ok = False
         print(
-            f"    {name[:40]:40s} items={len(idxs)} señales_iguales={same_signals} "
+            f"    {_display_provenance(name)[:40]:40s} items={len(idxs)} "
+            f"señales_iguales={same_signals} "
             f"score_igual={same_scores}"
         )
     check("mismas señales => mismo score y cobertura", repeated_ok)
@@ -968,27 +987,31 @@ def main() -> int:  # noqa: PLR0915
     print("\n=== 17/22. SCHEMA OBSERVADO vs MEMO23 CONOCIDO ===")
     observed_keys: set[str] = set()
     for item in raw_items:
-        observed_keys.update(str(key) for key in item)
+        observed_keys.update(key for key in item if isinstance(key, str))
     unknown_keys, absent_optional = classify_observed_schema(observed_keys)
-    print(f"    claves nuevas (desconocidas): {unknown_keys or 'ninguna'}")
-    print(f"    claves conocidas opcionales ausentes en este run: {absent_optional or 'ninguna'}")
+    unknown_text = ", ".join(unknown_keys) if unknown_keys else "ninguna"
+    absent_text = ", ".join(absent_optional) if absent_optional else "ninguna"
+    print(f"    claves nuevas (desconocidas): {unknown_text}")
+    print(f"    claves conocidas opcionales ausentes en este run: {absent_text}")
 
     print("\n=== EJEMPLOS SANITIZADOS (máx 5) ===")
     for index in picked[:5]:
         product = products[index]
         rep = reputations[index]
         print(
-            f"    supplier={product.supplier_name or '—'} | "
+            f"    supplier={_display_provenance(product.supplier_name)} | "
             f"reputation={format_reputation_display(rep.score)} | "
             f"coverage={rep.evidence_coverage}% | "
-            f"years={product.gold_supplier_years or '—'} | "
-            f"service={product.supplier_service_score or '—'} | "
-            f"review_score={product.review_score or '—'} | "
-            f"review_count={product.review_count or '—'}"
+            f"years={_display_provenance(product.gold_supplier_years)} | "
+            f"service={_display_provenance(product.supplier_service_score)} | "
+            f"review_score={_display_provenance(product.review_score)} | "
+            f"review_count={_display_provenance(product.review_count)}"
         )
 
     print("\n=== RESULTADO ===")
-    print(f"Actor runs creados en esta ejecución: {record['actor_calls_created']}")
+    print(
+        f"Actor runs creados en esta ejecución: {_display_count(record.get('actor_calls_created'))}"
+    )
     if failures:
         print(f"FALLOS: {failures}")
         return 2
