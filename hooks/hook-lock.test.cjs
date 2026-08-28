@@ -54,10 +54,11 @@ function waitUntil(predicate, timeoutMs = 8000) {
   }
 }
 
-function patchLockFs(t, { onStat, onUnlink, onWrite }) {
+function patchLockFs(t, { onStat, onUnlink, onWrite, created }) {
   const originalStat = fs.statSync;
   const originalUnlink = fs.unlinkSync;
   const originalWrite = fs.writeFileSync;
+  const originalRename = fs.renameSync;
   if (onStat) {
     fs.statSync = function patchedStat(target, ...args) {
       return onStat(originalStat, target, args);
@@ -73,12 +74,20 @@ function patchLockFs(t, { onStat, onUnlink, onWrite }) {
       return onWrite(originalWrite, target, data, options, rest);
     };
   }
+  fs.renameSync = function patchedRename(src, dest, ...args) {
+    const result = originalRename.call(fs, src, dest, ...args);
+    if (created && created.has(path.resolve(String(src)))) {
+      created.add(path.resolve(String(dest)));
+    }
+    return result;
+  };
   t.after(() => {
     fs.statSync = originalStat;
     fs.unlinkSync = originalUnlink;
     fs.writeFileSync = originalWrite;
+    fs.renameSync = originalRename;
   });
-  return { originalStat, originalUnlink, originalWrite };
+  return { originalStat, originalUnlink, originalWrite, originalRename };
 }
 
 function seedAbandonedSharedClaims(lockDir) {
@@ -113,8 +122,8 @@ test('live owners are not evicted and dead stale owners do not consume the cap',
   const lockDir = lockDirOf(dir);
   fs.mkdirSync(lockDir);
   const liveOwner = spawnLiveOwner(t);
-  const livePath = path.join(lockDir, `owned-${liveOwner.pid}-live.lock`);
-  const deadPath = path.join(lockDir, 'owned-99999999-dead.lock');
+  const livePath = path.join(lockDir, `owned-${liveOwner.pid}-aaaaaaaaaaaaaaaa.lock`);
+  const deadPath = path.join(lockDir, 'owned-99999999-deaddeaddeaddead.lock');
   fs.writeFileSync(livePath, String(liveOwner.pid));
   fs.writeFileSync(deadPath, '99999999');
   stampStale(deadPath);
@@ -122,7 +131,7 @@ test('live owners are not evicted and dead stale owners do not consume the cap',
   const release = lock.acquireHookSlot(dir);
   assert.ok(release);
   assert.equal(fs.readFileSync(livePath, 'utf8'), String(liveOwner.pid));
-  assert.equal(fs.readFileSync(deadPath, 'utf8'), '99999999');
+  assert.equal(fs.existsSync(deadPath), false);
   assert.equal(lock.countLiveOwners(dir), 2);
   release();
   assert.equal(fs.readFileSync(livePath, 'utf8'), String(liveOwner.pid));
@@ -148,6 +157,7 @@ test('abandoned shared slot and reclaim leftovers never block admission and are 
   const createdByAcquire = new Set();
   const foreignUnlinks = [];
   patchLockFs(t, {
+    created: createdByAcquire,
     onWrite(originalWrite, target, data, options, rest) {
       const result = originalWrite.call(fs, target, data, options, ...rest);
       const opts = options && typeof options === 'object' ? options : {};
@@ -179,7 +189,7 @@ test('a live unique owner is never stolen', (t) => {
   const lockDir = lockDirOf(dir);
   fs.mkdirSync(lockDir);
   const liveOwner = spawnLiveOwner(t);
-  const livePath = path.join(lockDir, `owned-${liveOwner.pid}-held.lock`);
+  const livePath = path.join(lockDir, `owned-${liveOwner.pid}-bbbbbbbbbbbbbbbb.lock`);
   fs.writeFileSync(livePath, String(liveOwner.pid));
 
   const release = lock.acquireHookSlot(dir);
@@ -197,6 +207,7 @@ test('a process unlinks only lock files it exclusively created', (t) => {
   const createdByAcquire = new Set();
   const foreignUnlinks = [];
   patchLockFs(t, {
+    created: createdByAcquire,
     onWrite(originalWrite, target, data, options, rest) {
       const result = originalWrite.call(fs, target, data, options, ...rest);
       const opts = options && typeof options === 'object' ? options : {};
@@ -230,6 +241,7 @@ test('stale observer paused after observation cannot remove a replacement claim'
   const createdByA = new Set();
   const aUnlinked = [];
   patchLockFs(t, {
+    created: createdByA,
     onWrite(originalWrite, target, data, options, rest) {
       const result = originalWrite.call(fs, target, data, options, ...rest);
       const opts = options && typeof options === 'object' ? options : {};
@@ -261,7 +273,7 @@ test('stale observer paused after observation cannot remove a replacement claim'
       const bName = names.find((name) => !createdByA.has(path.resolve(path.join(info.lockDir, name))));
       assert.ok(bName);
       bOwned = path.join(info.lockDir, bName);
-      assert.equal(lock.countLiveOwners(dir), 2);
+      assert.equal(lock.countLiveOwners(dir), 1);
     },
   });
 
@@ -293,6 +305,7 @@ test('exactly one cleanup winner: overflow unlinks only the private file of that
   const unlinked = [];
   const winners = [];
   patchLockFs(t, {
+    created: createdByContender,
     onWrite(originalWrite, target, data, options, rest) {
       const result = originalWrite.call(fs, target, data, options, ...rest);
       const opts = options && typeof options === 'object' ? options : {};
@@ -420,3 +433,277 @@ test('mkdir failure fails closed without creating shared claims', (t) => {
   fs.writeFileSync(path.join(dir, lock.HOOK_LOCK_SUBDIR), 'not-a-dir');
   assert.equal(lock.acquireHookSlot(dir), null);
 });
+
+function spawnBarrierContenders(t, dir, n, { afterCreate, afterCount } = {}) {
+  const gates = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-lock-elect-'));
+  t.after(() => fs.rmSync(gates, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(gates, 'created'));
+  fs.mkdirSync(path.join(gates, 'counted'));
+  const childSrc = path.join(gates, 'child.cjs');
+  fs.writeFileSync(
+    childSrc,
+    `'use strict';
+const fs = require('fs');
+const path = require('path');
+const readyPath = process.argv[2];
+const startGate = process.argv[3];
+const createdDir = process.argv[4];
+const allCreated = process.argv[5];
+const countedDir = process.argv[6];
+const allCounted = process.argv[7];
+const doneGate = process.argv[8];
+const statusPath = process.argv[9];
+const livePath = process.argv[10];
+const gitNexusDir = process.argv[11];
+const lock = require(${JSON.stringify(require.resolve('./hook-lock.cjs'))});
+fs.writeFileSync(readyPath, 'ready');
+while (!fs.existsSync(startGate)) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+}
+const release = lock.acquireHookSlot(gitNexusDir, {
+  barrier(stage, info) {
+    if (stage === 'after-private-create') {
+      fs.writeFileSync(path.join(createdDir, String(process.pid)), 'created');
+      while (!fs.existsSync(allCreated)) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+    if (stage === 'after-count-live') {
+      fs.writeFileSync(livePath, String(info.live));
+      fs.writeFileSync(path.join(countedDir, String(process.pid)), 'counted');
+      while (!fs.existsSync(allCounted)) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+  }
+});
+fs.writeFileSync(statusPath, release ? 'held' : 'skip');
+while (!fs.existsSync(doneGate)) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+}
+if (release) release();
+`,
+  );
+  const children = [];
+  for (let i = 0; i < n; i++) {
+    const statusPath = path.join(gates, `status-${i}`);
+    const readyPath = path.join(gates, `ready-${i}`);
+    const livePath = path.join(gates, `live-${i}`);
+    const childEnv = { ...process.env };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const child = spawn(
+      process.execPath,
+      [
+        childSrc,
+        readyPath,
+        path.join(gates, 'start'),
+        path.join(gates, 'created'),
+        path.join(gates, 'all-created'),
+        path.join(gates, 'counted'),
+        path.join(gates, 'all-counted'),
+        path.join(gates, 'done'),
+        statusPath,
+        livePath,
+        dir,
+      ],
+      { stdio: 'ignore', env: childEnv },
+    );
+    children.push({ child, statusPath, readyPath, livePath });
+  }
+  t.after(() => {
+    for (const { child } of children) {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+  });
+  waitUntil(() => children.every(({ readyPath }) => fs.existsSync(readyPath)));
+  fs.writeFileSync(path.join(gates, 'start'), 'go');
+  if (afterCreate !== false) {
+    waitUntil(() => fs.readdirSync(path.join(gates, 'created')).length === n);
+    fs.writeFileSync(path.join(gates, 'all-created'), 'go');
+  }
+  if (afterCount !== false) {
+    waitUntil(() => fs.readdirSync(path.join(gates, 'counted')).length === n);
+    fs.writeFileSync(path.join(gates, 'all-counted'), 'go');
+  }
+  waitUntil(() => children.every(({ statusPath }) => fs.existsSync(statusPath)));
+  const liveOwners = lock.countLiveOwners(dir);
+  const peakLockFiles = listLockNames(dir).filter((name) => lock.isOwnedClaimName(name)).length;
+  const outcomes = children.map(({ statusPath }) => fs.readFileSync(statusPath, 'utf8'));
+  const lives = children.map(({ livePath }) =>
+    fs.existsSync(livePath) ? fs.readFileSync(livePath, 'utf8') : '',
+  );
+  fs.writeFileSync(path.join(gates, 'done'), 'done');
+  return { outcomes, lives, children, gates, liveOwners, peakLockFiles };
+}
+
+test('four contenders gated after create and count elect at most three owners and at least one winner', (t) => {
+  const dir = tempRepo(t);
+  const { outcomes, lives, liveOwners, peakLockFiles } = spawnBarrierContenders(t, dir, 4);
+  const held = outcomes.filter((v) => v === 'held').length;
+  const skipped = outcomes.filter((v) => v === 'skip').length;
+  assert.ok(
+    lives.every((v) => Number(v) > lock.HOOK_LOCK_MAX_INFLIGHT),
+    `all four must observe over-cap before election: ${lives.join(',')}`,
+  );
+  assert.ok(held >= 1, `at least one winner: ${outcomes.join(',')}`);
+  assert.ok(held <= lock.HOOK_LOCK_MAX_INFLIGHT, `held=${held}`);
+  assert.equal(held, lock.HOOK_LOCK_MAX_INFLIGHT, `election should retain three: ${outcomes.join(',')}`);
+  assert.equal(skipped, 1);
+  assert.equal(liveOwners, lock.HOOK_LOCK_MAX_INFLIGHT);
+  assert.ok(peakLockFiles <= lock.HOOK_LOCK_MAX_INFLIGHT);
+  assert.ok(lock.countLiveOwners(dir) <= lock.HOOK_LOCK_MAX_INFLIGHT);
+});
+
+test('abandoned unique owned files do not accumulate across acquires', (t) => {
+  const dir = tempRepo(t);
+  const lockDir = lockDirOf(dir);
+  fs.mkdirSync(lockDir);
+  const stale = [];
+  for (let i = 0; i < 12; i++) {
+    const hex = i.toString(16).padStart(16, '0');
+    const stalePath = path.join(lockDir, `owned-99999999-${hex}.lock`);
+    fs.writeFileSync(stalePath, '99999999');
+    stampStale(stalePath);
+    stale.push(stalePath);
+  }
+  const release = lock.acquireHookSlot(dir);
+  assert.ok(release);
+  for (const stalePath of stale) {
+    assert.equal(fs.existsSync(stalePath), false, stalePath);
+  }
+  assert.equal(lock.countLiveOwners(dir), 1);
+  release();
+  assert.equal(listLockNames(dir).filter((name) => /^owned-\d+-[0-9a-f]+\.lock$/i.test(name)).length, 0);
+});
+
+test('concurrent stale cleanup does not delete live unique claims or replacements', (t) => {
+  const dir = tempRepo(t);
+  const lockDir = lockDirOf(dir);
+  fs.mkdirSync(lockDir);
+  const liveOwner = spawnLiveOwner(t);
+  const livePath = path.join(lockDir, `owned-${liveOwner.pid}-dddddddddddddddd.lock`);
+  fs.writeFileSync(livePath, String(liveOwner.pid));
+  const stale = [];
+  for (let i = 0; i < 8; i++) {
+    const hex = (i + 16).toString(16).padStart(16, '0');
+    const stalePath = path.join(lockDir, `owned-99999999-${hex}.lock`);
+    fs.writeFileSync(stalePath, '99999999');
+    stampStale(stalePath);
+    stale.push(stalePath);
+  }
+  const { outcomes, liveOwners } = spawnBarrierContenders(t, dir, 3);
+  const held = outcomes.filter((v) => v === 'held').length;
+  assert.ok(held >= 1);
+  assert.ok(held + 1 <= lock.HOOK_LOCK_MAX_INFLIGHT);
+  assert.equal(fs.readFileSync(livePath, 'utf8'), String(liveOwner.pid));
+  for (const stalePath of stale) {
+    assert.equal(fs.existsSync(stalePath), false, stalePath);
+  }
+  assert.ok(liveOwners <= lock.HOOK_LOCK_MAX_INFLIGHT);
+  process.kill(liveOwner.pid, 0);
+});
+
+test('cleanup racing with a live replacement never unlinks the replacement', (t) => {
+  const dir = tempRepo(t);
+  const lockDir = lockDirOf(dir);
+  fs.mkdirSync(lockDir);
+  const stalePath = path.join(lockDir, 'owned-99999999-eeeeeeeeeeeeeeee.lock');
+  fs.writeFileSync(stalePath, '99999999');
+  stampStale(stalePath);
+  let bRelease = null;
+  let bOwned = null;
+  const aRelease = lock.acquireHookSlot(dir, {
+    barrier(stage) {
+      if (stage !== 'before-stale-gc' || bRelease) return;
+      bRelease = lock.acquireHookSlot(dir);
+      assert.ok(bRelease);
+      const owned = listLockNames(dir).filter((name) => lock.isOwnedClaimName(name));
+      assert.equal(owned.length, 1);
+      bOwned = path.join(lockDir, owned[0]);
+    },
+  });
+  assert.ok(aRelease);
+  assert.ok(bRelease);
+  assert.ok(bOwned);
+  assert.equal(fs.existsSync(bOwned), true);
+  assert.equal(fs.existsSync(stalePath), false);
+  aRelease();
+  assert.equal(fs.existsSync(bOwned), true);
+  bRelease();
+});
+
+test('crash before release is reclaimed by ownership-safe GC', (t) => {
+  const dir = tempRepo(t);
+  const childSrc = path.join(os.tmpdir(), `hook-lock-crash-${process.pid}.cjs`);
+  fs.writeFileSync(
+    childSrc,
+    `'use strict';
+const fs = require('fs');
+const lock = require(${JSON.stringify(require.resolve('./hook-lock.cjs'))});
+const dir = process.argv[2];
+const statusPath = process.argv[3];
+const release = lock.acquireHookSlot(dir);
+fs.writeFileSync(statusPath, release ? 'held' : 'skip');
+process.kill(process.pid, 'SIGKILL');
+`,
+  );
+  t.after(() => {
+    try {
+      fs.unlinkSync(childSrc);
+    } catch {
+      /* already gone */
+    }
+  });
+  const statusPath = path.join(dir, 'crash-status');
+  const childEnv = { ...process.env };
+  delete childEnv.NODE_TEST_CONTEXT;
+  const result = spawnSync(process.execPath, [childSrc, dir, statusPath], {
+    stdio: 'ignore',
+    env: childEnv,
+  });
+  assert.equal(result.signal, 'SIGKILL');
+  assert.equal(fs.readFileSync(statusPath, 'utf8'), 'held');
+  const crashed = listLockNames(dir).filter((name) => lock.isOwnedClaimName(name));
+  assert.equal(crashed.length, 1);
+  const release = lock.acquireHookSlot(dir);
+  assert.ok(release);
+  assert.equal(fs.existsSync(path.join(lockDirOf(dir), crashed[0])), false);
+  release();
+});
+
+test('GC never deletes foreign live ownership or shared leftovers', (t) => {
+  const dir = tempRepo(t);
+  const leftovers = seedAbandonedSharedClaims(lockDirOf(dir));
+  const liveOwner = spawnLiveOwner(t);
+  const livePath = path.join(lockDirOf(dir), `owned-${liveOwner.pid}-ffffffffffffffff.lock`);
+  const replacement = path.join(lockDirOf(dir), 'owned-replacement.lock');
+  fs.writeFileSync(livePath, String(liveOwner.pid));
+  fs.writeFileSync(replacement, 'replacement');
+  lock.reclaimStaleOwnedClaims(lockDirOf(dir));
+  assert.equal(fs.readFileSync(livePath, 'utf8'), String(liveOwner.pid));
+  assert.equal(fs.readFileSync(replacement, 'utf8'), 'replacement');
+  for (const leftover of leftovers) {
+    assert.equal(fs.existsSync(leftover), true, leftover);
+  }
+  process.kill(liveOwner.pid, 0);
+});
+
+test('gated four-contender election is stable across repeated runs', (t) => {
+  for (let i = 0; i < 8; i++) {
+    const dir = tempRepo(t);
+    const { outcomes, lives, liveOwners, peakLockFiles } = spawnBarrierContenders(t, dir, 4);
+    const held = outcomes.filter((v) => v === 'held').length;
+    assert.ok(
+      lives.every((v) => Number(v) > lock.HOOK_LOCK_MAX_INFLIGHT),
+      `run ${i} over-cap: ${lives.join(',')}`,
+    );
+    assert.equal(held, lock.HOOK_LOCK_MAX_INFLIGHT, `run ${i} ${outcomes.join(',')}`);
+    assert.equal(liveOwners, lock.HOOK_LOCK_MAX_INFLIGHT);
+    assert.ok(peakLockFiles <= lock.HOOK_LOCK_MAX_INFLIGHT);
+  }
+});
+

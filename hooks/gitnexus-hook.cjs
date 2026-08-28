@@ -22,6 +22,15 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { acquireHookSlot } = require('./hook-lock.cjs');
+const { pathsEqual, pathContains } = require('./path-identity.cjs');
+const { discoverGitNexusCli, npmGlobalNodeModules } = require('./gitnexus-cli-discovery.cjs');
+const {
+  createDeadline,
+  spawnWithDeadline,
+  CURSOR_HOOK_TIMEOUT_MS,
+  HOOK_INTERNAL_BUDGET_MS,
+  HOOK_TIMEOUT_SAFETY_MARGIN_MS,
+} = require('./hook-deadline.cjs');
 
 function readInput() {
   try {
@@ -45,31 +54,27 @@ function isGlobalRegistryDir(candidate) {
   );
 }
 
-function gitCommand(cwd, args) {
-  try {
-    const result = spawnSync('git', args, {
-      encoding: 'utf-8',
-      timeout: 2000,
-      cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    if (result.error || result.status !== 0) return null;
-    return result.stdout == null ? '' : String(result.stdout);
-  } catch {
-    return null;
-  }
+function gitCommand(cwd, args, deadline, spawnSyncFn = spawnSync) {
+  const result = spawnWithDeadline(deadline, spawnSyncFn, 'git', args, {
+    encoding: 'utf-8',
+    cwd,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+    timeout: deadline ? undefined : 2000,
+  });
+  if (!result || result.skipped || result.error || result.status !== 0) return null;
+  return result.stdout == null ? '' : String(result.stdout);
 }
 
-function gitStdout(cwd, args) {
-  const out = gitCommand(cwd, args);
+function gitStdout(cwd, args, deadline, spawnSyncFn) {
+  const out = gitCommand(cwd, args, deadline, spawnSyncFn);
   if (out == null) return null;
   const trimmed = out.trim();
   return trimmed || null;
 }
 
-function isReviewedWorktreeDirty(cwd) {
-  const out = gitCommand(cwd, ['status', '--porcelain']);
+function isReviewedWorktreeDirty(cwd, deadline, spawnSyncFn) {
+  const out = gitCommand(cwd, ['status', '--porcelain'], deadline, spawnSyncFn);
   if (out == null) return true;
   return out.trim().length > 0;
 }
@@ -109,22 +114,27 @@ function indexedCommitIdentity(meta) {
   return commit || null;
 }
 
-function canonicalIndexMatchesReviewedWorktree(gitNexusDir, workTreeRoot) {
+function canonicalIndexMatchesReviewedWorktree(gitNexusDir, workTreeRoot, deadline, spawnSyncFn) {
   const indexed = indexedCommitIdentity(loadGitNexusMeta(gitNexusDir));
   if (!indexed) return false;
-  const head = gitStdout(workTreeRoot, ['rev-parse', 'HEAD']);
+  const head = gitStdout(workTreeRoot, ['rev-parse', 'HEAD'], deadline, spawnSyncFn);
   if (!head || indexed !== head) return false;
-  if (isReviewedWorktreeDirty(workTreeRoot)) return false;
+  if (isReviewedWorktreeDirty(workTreeRoot, deadline, spawnSyncFn)) return false;
   return true;
 }
 
-function findWorkingTreeRoot(cwd) {
-  const toplevel = gitStdout(cwd, ['rev-parse', '--show-toplevel']);
+function findWorkingTreeRoot(cwd, deadline, spawnSyncFn) {
+  const toplevel = gitStdout(cwd, ['rev-parse', '--show-toplevel'], deadline, spawnSyncFn);
   return toplevel ? path.resolve(toplevel) : null;
 }
 
-function findCanonicalRepoRoot(cwd) {
-  const commonDir = gitStdout(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+function findCanonicalRepoRoot(cwd, deadline, spawnSyncFn) {
+  const commonDir = gitStdout(
+    cwd,
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    deadline,
+    spawnSyncFn,
+  );
   if (!commonDir) return null;
   const resolved = path.resolve(commonDir.replace(/[/\\]+$/, ''));
   // Worktrees share the main repo's `.git`. Submodules use `.git/modules/<name>`,
@@ -135,17 +145,15 @@ function findCanonicalRepoRoot(cwd) {
 
 function walkForGitNexusDir(startDir, stopDir) {
   const stop = path.resolve(stopDir);
-  const stopPrefix = stop.endsWith(path.sep) ? stop : stop + path.sep;
   let dir = path.resolve(startDir);
   for (let i = 0; i < 64; i++) {
-    const inBounds = dir === stop || dir.startsWith(stopPrefix);
-    if (inBounds) {
+    if (pathContains(stop, dir)) {
       const candidate = path.join(dir, '.gitnexus');
       if (fs.existsSync(candidate) && !isGlobalRegistryDir(candidate)) {
         return candidate;
       }
     }
-    if (dir === stop) break;
+    if (pathsEqual(dir, stop)) break;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -153,16 +161,16 @@ function walkForGitNexusDir(startDir, stopDir) {
   return null;
 }
 
-function findGitNexusDir(startDir) {
+function findGitNexusDir(startDir, deadline, spawnSyncFn) {
   const cwd = path.resolve(startDir || process.cwd());
-  const workTreeRoot = findWorkingTreeRoot(cwd);
+  const workTreeRoot = findWorkingTreeRoot(cwd, deadline, spawnSyncFn);
   if (!workTreeRoot) return null;
   const fromWorkTree = walkForGitNexusDir(cwd, workTreeRoot);
   if (fromWorkTree) return fromWorkTree;
-  const canonicalRoot = findCanonicalRepoRoot(cwd);
-  if (canonicalRoot && path.resolve(canonicalRoot) !== workTreeRoot) {
+  const canonicalRoot = findCanonicalRepoRoot(cwd, deadline, spawnSyncFn);
+  if (canonicalRoot && !pathsEqual(path.resolve(canonicalRoot), workTreeRoot)) {
     const fromCanonical = walkForGitNexusDir(canonicalRoot, canonicalRoot);
-    if (fromCanonical && canonicalIndexMatchesReviewedWorktree(fromCanonical, workTreeRoot)) {
+    if (fromCanonical && canonicalIndexMatchesReviewedWorktree(fromCanonical, workTreeRoot, deadline, spawnSyncFn)) {
       return fromCanonical;
     }
   }
@@ -233,69 +241,34 @@ function extractPattern(toolName, toolInput) {
   return null;
 }
 
-function npmGlobalNodeModules(
-  executable = process.execPath,
-  platform = process.platform,
-  env = process.env,
-) {
-  const roots = [];
-  if (env.NODE_PATH) {
-    for (const part of env.NODE_PATH.split(path.delimiter)) {
-      if (part) roots.push(part);
-    }
-  }
-  if (platform === 'win32') {
-    if (env.APPDATA) {
-      roots.push(path.join(env.APPDATA, 'npm', 'node_modules'));
-    }
-  } else {
-    const home = env.HOME || '';
-    if (home) {
-      roots.push(path.join(home, '.npm-global', 'lib', 'node_modules'));
-      roots.push(path.join(home, '.local', 'lib', 'node_modules'));
-    }
-    roots.push('/usr/local/lib/node_modules');
-    roots.push('/usr/lib/node_modules');
-  }
-  const execDir = path.dirname(executable);
-  roots.push(path.join(execDir, 'node_modules'));
-  roots.push(path.join(execDir, 'lib', 'node_modules'));
-  if (platform !== 'win32' && path.basename(execDir) === 'bin') {
-    roots.push(path.join(path.dirname(execDir), 'lib', 'node_modules'));
-  }
-  return roots;
+function resolveCliPath(options = {}) {
+  const found = discoverGitNexusCli(options);
+  return found ? found.path : '';
 }
 
-function resolveCliPath() {
-  const entry = 'gitnexus/dist/cli/index.js';
-  try {
-    return require.resolve(entry);
-  } catch {
-    /* not installed next to this hook */
-  }
-  for (const root of npmGlobalNodeModules()) {
-    try {
-      return require.resolve(entry, { paths: [root] });
-    } catch {
-      const candidate = path.join(root, 'gitnexus', 'dist', 'cli', 'index.js');
-      try {
-        if (fs.existsSync(candidate)) return candidate;
-      } catch {
-        /* ignore unreadable roots */
-      }
-    }
-  }
-  return '';
-}
-
-function runGitNexusCli(cliPath, args, cwd, timeout) {
+function runGitNexusCli(cliPath, args, cwd, timeout, spawnSyncFn = spawnSync) {
   if (!cliPath) {
     const error = new Error('gitnexus CLI JS entrypoint not found');
     error.code = 'ENOENT';
     return { error, status: 1, stdout: '', stderr: '' };
   }
+  if (timeout !== undefined && timeout <= 0) {
+    const error = new Error('hook deadline exhausted');
+    error.code = 'ETIMEDOUT';
+    return { error, status: null, stdout: '', stderr: '', skipped: true };
+  }
 
-  return spawnSync(process.execPath, [cliPath, ...args], {
+  const isJs = /\.c?js$/i.test(String(cliPath));
+  if (isJs) {
+    return spawnSyncFn(process.execPath, [cliPath, ...args], {
+      encoding: 'utf-8',
+      timeout,
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+  }
+  return spawnSyncFn(cliPath, args, {
     encoding: 'utf-8',
     timeout,
     cwd,
@@ -304,70 +277,92 @@ function runGitNexusCli(cliPath, args, cwd, timeout) {
   });
 }
 
+function emitContext(result) {
+  const text = result && String(result).trim();
+  if (!text) return false;
+  console.log(JSON.stringify({ additional_context: text }));
+  return true;
+}
+
+function executeHook(input, deps = {}) {
+  const spawnSyncFn = deps.spawnSync || spawnSync;
+  const nowFn = deps.nowFn || Date.now;
+  const env = deps.env || process.env;
+  const deadline = deps.deadline || createDeadline({ nowFn, budgetMs: HOOK_INTERNAL_BUDGET_MS });
+  const discoverOptions = deps.discoverOptions || {};
+
+  if (env.GITNEXUS_DEBUG) {
+    try {
+      process.stderr.write(`GitNexus Cursor hook stdin: ${JSON.stringify(input).slice(0, 500)}\n`);
+    } catch {
+      /* never let debug logging break the hook */
+    }
+  }
+
+  const cwd = input.cwd || process.cwd();
+  if (!path.isAbsolute(cwd)) return { status: 'skip' };
+  if (deadline.expired()) return { status: 'timeout' };
+
+  const gitNexusDir = findGitNexusDir(cwd, deadline, spawnSyncFn);
+  if (deadline.expired()) return { status: 'timeout' };
+  if (!gitNexusDir) return { status: 'skip' };
+
+  const toolName = input.tool_name || '';
+  const toolInput = input.tool_input || {};
+  const pattern = extractPattern(toolName, toolInput);
+  if (!pattern || pattern.length < 3) return { status: 'skip' };
+
+  const release = acquireHookSlot(gitNexusDir);
+  if (!release) {
+    if (env.GITNEXUS_DEBUG) {
+      process.stderr.write('[GitNexus] augment skipped: hook slots saturated\n');
+    }
+    return { status: 'saturated' };
+  }
+
+  try {
+    if (!deadline.canSpawn()) return { status: 'timeout' };
+    const discovered = discoverGitNexusCli({
+      env,
+      deadline,
+      cwd,
+      spawnSync: spawnSyncFn,
+      ...discoverOptions,
+    });
+    if (env.GITNEXUS_DEBUG) {
+      process.stderr.write(`GitNexus Cursor hook cliPath: ${(discovered && discovered.path) || '(empty)'}\n`);
+    }
+    if (!deadline.canSpawn()) return { status: 'timeout' };
+    if (!discovered) return { status: 'skip' };
+
+    const child = runGitNexusCli(
+      discovered.path,
+      ['augment', '--', pattern],
+      cwd,
+      deadline.spawnTimeoutMs(),
+      spawnSyncFn,
+    );
+    if (env.GITNEXUS_DEBUG && child.error) {
+      process.stderr.write(
+        `GitNexus Cursor hook spawn error: ${child.error.code || ''} ${child.error.message || ''}\n`,
+      );
+    }
+    if (deadline.expired() || child.skipped || child.error || child.status !== 0) {
+      return { status: deadline.expired() || child.skipped ? 'timeout' : 'fail-open' };
+    }
+    const result = child.stdout || child.stderr || '';
+    if (deadline.expired()) return { status: 'timeout' };
+    if (emitContext(result)) return { status: 'ok' };
+    return { status: 'fail-open' };
+  } finally {
+    release();
+  }
+}
+
 function main() {
   try {
     const input = readInput();
-    if (process.env.GITNEXUS_DEBUG) {
-      // Echo the payload so users can capture Cursor's actual contract when
-      // diagnosing why augmentation isn't firing. Stderr only -- stdout is
-      // reserved for the JSON response Cursor consumes.
-      try {
-        process.stderr.write(
-          `GitNexus Cursor hook stdin: ${JSON.stringify(input).slice(0, 500)}\n`,
-        );
-      } catch {
-        /* never let debug logging break the hook */
-      }
-    }
-    const cwd = input.cwd || process.cwd();
-    if (!path.isAbsolute(cwd)) return;
-    const gitNexusDir = findGitNexusDir(cwd);
-    if (!gitNexusDir) return;
-
-    const toolName = input.tool_name || '';
-    const toolInput = input.tool_input || {};
-
-    const pattern = extractPattern(toolName, toolInput);
-    if (!pattern || pattern.length < 3) return;
-
-    const release = acquireHookSlot(gitNexusDir);
-    if (!release) {
-      // Normal skip path: all per-repo hook slots are held by concurrent
-      // sessions. Stays silent by default; surfaced only under the cursor
-      // hook's own GITNEXUS_DEBUG (truthy) convention. NOTE: unlike the
-      // claude/plugin/antigravity adapters this integration does not install
-      // hook-db-lock-probe.cjs, so its augment child is not guard-wrapped
-      // yet -- tracked on the #2163 follow-up list ("cursor probe").
-      if (process.env.GITNEXUS_DEBUG) {
-        process.stderr.write('[GitNexus] augment skipped: hook slots saturated\n');
-      }
-      return;
-    }
-
-    const cliPath = resolveCliPath();
-    if (process.env.GITNEXUS_DEBUG) {
-      process.stderr.write(`GitNexus Cursor hook cliPath: ${cliPath || '(empty)'}\n`);
-    }
-    let result = '';
-    try {
-      const child = runGitNexusCli(cliPath, ['augment', '--', pattern], cwd, 7000);
-      if (process.env.GITNEXUS_DEBUG && child.error) {
-        process.stderr.write(
-          `GitNexus Cursor hook spawn error: ${child.error.code || ''} ${child.error.message || ''}\n`,
-        );
-      }
-      if (!child.error && child.status === 0) {
-        result = child.stdout || child.stderr || '';
-      }
-    } catch {
-      /* graceful failure */
-    } finally {
-      release();
-    }
-
-    if (result && result.trim()) {
-      console.log(JSON.stringify({ additional_context: result.trim() }));
-    }
+    executeHook(input);
   } catch (err) {
     if (process.env.GITNEXUS_DEBUG) {
       console.error('GitNexus Cursor hook error:', (err.message || '').slice(0, 200));
@@ -389,4 +384,10 @@ module.exports = {
   loadGitNexusMeta,
   canonicalIndexMatchesReviewedWorktree,
   npmGlobalNodeModules,
+  gitCommand,
+  executeHook,
+  createDeadline,
+  CURSOR_HOOK_TIMEOUT_MS,
+  HOOK_INTERNAL_BUDGET_MS,
+  HOOK_TIMEOUT_SAFETY_MARGIN_MS,
 };

@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -5,7 +7,7 @@ const path = require('path');
 const HOOK_LOCK_SUBDIR = '.hook-locks';
 const HOOK_LOCK_MAX_INFLIGHT = 3;
 const HOOK_LOCK_STALE_MS = 30000;
-const OWNED_LOCK_SUFFIX = '.lock';
+const OWNED_CLAIM_RE = /^owned-\d+-[0-9a-f]+\.(lock|pending)$/i;
 
 function pidIsLive(pid) {
   try {
@@ -33,8 +35,8 @@ function ownerLiveness(ownerStr, mtimeMs, now = Date.now()) {
   // For files younger than HOOK_LOCK_STALE_MS, PID-liveness wins -- a
   // slow-but-alive hook is never wrongly evicted. For older files, age is
   // the final arbiter as a defense against PID reuse on long-abandoned
-  // claims. 30s >> the 7s augment timeout, so a healthy run never crosses
-  // this threshold.
+  // claims. 30s >> the hook's internal budget, so a healthy run never
+  // crosses this threshold.
   if (isLive && now - mtimeMs > HOOK_LOCK_STALE_MS) {
     isLive = false;
   }
@@ -62,9 +64,9 @@ function tryCreateExclusive(filePath, contents) {
   }
 }
 
-function uniqueOwnedLockPath(lockDir) {
+function uniqueOwnedClaimPath(lockDir, suffix) {
   const nonce = crypto.randomBytes(8).toString('hex');
-  return path.join(lockDir, `owned-${process.pid}-${nonce}${OWNED_LOCK_SUFFIX}`);
+  return path.join(lockDir, `owned-${process.pid}-${nonce}${suffix}`);
 }
 
 function runBarrier(sync, stage, info) {
@@ -74,9 +76,9 @@ function runBarrier(sync, stage, info) {
 }
 
 function unlinkOwnedPath(ownedPath) {
-  // Unlink only the unique pathname this process exclusively created.
-  // Never unlink a shared slot/.reclaim pathname based on an earlier
-  // inode, token, PID, or timestamp observation.
+  // Unlink only a unique pathname this process exclusively created, or a
+  // unique owned claim proven dead. Never unlink a shared slot/.reclaim
+  // pathname based on an earlier inode, token, PID, or timestamp observation.
   try {
     fs.unlinkSync(ownedPath);
   } catch {
@@ -84,8 +86,16 @@ function unlinkOwnedPath(ownedPath) {
   }
 }
 
-function isLockFileName(name) {
-  return name.endsWith(OWNED_LOCK_SUFFIX) && !name.endsWith('.reclaim');
+function isOwnedClaimName(name) {
+  return OWNED_CLAIM_RE.test(name);
+}
+
+function isHeldLockName(name) {
+  return isOwnedClaimName(name) && name.toLowerCase().endsWith('.lock');
+}
+
+function isPendingName(name) {
+  return isOwnedClaimName(name) && name.toLowerCase().endsWith('.pending');
 }
 
 function isLiveLockPath(filePath) {
@@ -113,20 +123,66 @@ function isLiveLockPath(filePath) {
   }
 }
 
-function countLiveOwners(gitNexusDir) {
-  const lockDir = path.join(gitNexusDir, HOOK_LOCK_SUBDIR);
+function isProvenDeadOwnedClaim(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+  } catch {
+    // Unreadable or missing: fail closed. Never delete a claim whose
+    // ownership cannot be proven dead.
+    return false;
+  }
+  try {
+    return !readOwnerMetadata(fd).isLive;
+  } catch {
+    return false;
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
+function snapshotLiveClaims(lockDir) {
   let names;
   try {
     names = fs.readdirSync(lockDir);
   } catch {
-    return -1;
+    return null;
   }
-  let live = 0;
+  const held = [];
+  const pending = [];
   for (const name of names) {
-    if (!isLockFileName(name)) continue;
-    if (isLiveLockPath(path.join(lockDir, name))) live += 1;
+    if (!isOwnedClaimName(name)) continue;
+    if (!isLiveLockPath(path.join(lockDir, name))) continue;
+    if (isHeldLockName(name)) held.push(name);
+    else if (isPendingName(name)) pending.push(name);
   }
-  return live;
+  held.sort();
+  pending.sort();
+  return { held, pending };
+}
+
+function reclaimStaleOwnedClaims(lockDir) {
+  let names;
+  try {
+    names = fs.readdirSync(lockDir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!isOwnedClaimName(name)) continue;
+    const filePath = path.join(lockDir, name);
+    if (isProvenDeadOwnedClaim(filePath)) unlinkOwnedPath(filePath);
+  }
+}
+
+function countLiveOwners(gitNexusDir) {
+  const lockDir = path.join(gitNexusDir, HOOK_LOCK_SUBDIR);
+  const snapshot = snapshotLiveClaims(lockDir);
+  return snapshot ? snapshot.held.length : -1;
 }
 
 function acquireHookSlot(gitNexusDir, sync) {
@@ -141,19 +197,65 @@ function acquireHookSlot(gitNexusDir, sync) {
     return null;
   }
 
+  runBarrier(sync, 'before-stale-gc', { lockDir });
+  reclaimStaleOwnedClaims(lockDir);
+  runBarrier(sync, 'after-stale-gc', { lockDir });
+
   const myPidStr = String(process.pid);
-  const ownedPath = uniqueOwnedLockPath(lockDir);
-  if (!tryCreateExclusive(ownedPath, myPidStr)) {
+  const pendingPath = uniqueOwnedClaimPath(lockDir, '.pending');
+  if (!tryCreateExclusive(pendingPath, myPidStr)) {
     // Unique pathname collision or the directory became unwritable. Do not
     // fall back to a shared slot/.reclaim pathname.
     return null;
   }
+  const pendingName = path.basename(pendingPath);
+  const ownedPath = pendingPath.replace(/\.pending$/i, '.lock');
 
-  runBarrier(sync, 'after-private-create', { ownedPath, lockDir });
+  runBarrier(sync, 'after-private-create', { ownedPath: pendingPath, lockDir });
 
-  const live = countLiveOwners(gitNexusDir);
-  runBarrier(sync, 'after-count-live', { ownedPath, lockDir, live });
-  if (live < 0 || live > HOOK_LOCK_MAX_INFLIGHT) {
+  const snapshot = snapshotLiveClaims(lockDir);
+  const liveCount = snapshot ? snapshot.held.length + snapshot.pending.length : -1;
+  runBarrier(sync, 'after-count-live', {
+    ownedPath: pendingPath,
+    lockDir,
+    live: liveCount,
+    held: snapshot ? snapshot.held.length : -1,
+    pending: snapshot ? snapshot.pending.length : -1,
+  });
+
+  if (!snapshot) {
+    runBarrier(sync, 'before-private-unlink', { ownedPath: pendingPath, lockDir, reason: 'cap' });
+    unlinkOwnedPath(pendingPath);
+    return null;
+  }
+
+  const capacity = HOOK_LOCK_MAX_INFLIGHT - snapshot.held.length;
+  const myRank = snapshot.pending.indexOf(pendingName);
+  if (capacity <= 0 || myRank < 0 || myRank >= capacity) {
+    runBarrier(sync, 'before-private-unlink', { ownedPath: pendingPath, lockDir, reason: 'cap' });
+    unlinkOwnedPath(pendingPath);
+    return null;
+  }
+
+  try {
+    fs.renameSync(pendingPath, ownedPath);
+  } catch {
+    unlinkOwnedPath(pendingPath);
+    unlinkOwnedPath(ownedPath);
+    return null;
+  }
+
+  const heldAfter = snapshotLiveClaims(lockDir);
+  if (!heldAfter) {
+    unlinkOwnedPath(ownedPath);
+    return null;
+  }
+  const heldName = path.basename(ownedPath);
+  const heldRank = heldAfter.held.indexOf(heldName);
+  if (
+    heldAfter.held.length > HOOK_LOCK_MAX_INFLIGHT &&
+    (heldRank < 0 || heldRank >= HOOK_LOCK_MAX_INFLIGHT)
+  ) {
     runBarrier(sync, 'before-private-unlink', { ownedPath, lockDir, reason: 'cap' });
     unlinkOwnedPath(ownedPath);
     return null;
@@ -182,4 +284,6 @@ module.exports = {
   pidIsLive,
   ownerLiveness,
   countLiveOwners,
+  isOwnedClaimName,
+  reclaimStaleOwnedClaims,
 };

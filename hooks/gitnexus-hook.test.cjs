@@ -77,7 +77,31 @@ test('Windows APPDATA global root is preserved', () => {
   const roots = hook.npmGlobalNodeModules('C:\\node\\node.exe', 'win32', {
     APPDATA: 'C:\\Users\\test\\AppData\\Roaming',
   });
-  assert.ok(roots.includes(path.join('C:\\Users\\test\\AppData\\Roaming', 'npm', 'node_modules')));
+  assert.ok(roots.includes(path.win32.join('C:\\Users\\test\\AppData\\Roaming', 'npm', 'node_modules')));
+});
+
+test('Homebrew Cellar node prefixes resolve the prefix global node_modules root', () => {
+  const apple = '/opt/homebrew/Cellar/node/23.11.0/bin/node';
+  const intel = '/usr/local/Cellar/node/22.14.0/bin/node';
+  const appleRoots = hook.npmGlobalNodeModules(apple, 'darwin', {});
+  const intelRoots = hook.npmGlobalNodeModules(intel, 'darwin', {});
+  assert.ok(appleRoots.includes('/opt/homebrew/lib/node_modules'));
+  assert.ok(intelRoots.includes('/usr/local/lib/node_modules'));
+});
+
+test('sequential subprocess timeouts must fit inside the Cursor hook budget', () => {
+  const hooksJson = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', '.cursor', 'hooks.json'), 'utf8'),
+  );
+  const outerMs = Number(hooksJson.hooks.postToolUse[0].timeout) * 1000;
+  const source = fs.readFileSync(path.join(__dirname, 'gitnexus-hook.cjs'), 'utf8');
+  const deadline = require('./hook-deadline.cjs');
+  assert.match(source, /createDeadline/);
+  assert.match(source, /spawnTimeoutMs|remainingMs/);
+  assert.doesNotMatch(source, /timeout:\s*7000/);
+  assert.equal(hooksJson.hooks.postToolUse[0].matcher, 'Read|Grep');
+  assert.ok(deadline.HOOK_INTERNAL_BUDGET_MS + deadline.HOOK_TIMEOUT_SAFETY_MARGIN_MS <= outerMs);
+  assert.ok(deadline.HOOK_TIMEOUT_SAFETY_MARGIN_MS >= 500);
 });
 
 test('project hook matcher is exactly Read|Grep', () => {
@@ -148,14 +172,15 @@ test('Shell commands are not parsed, including compound boundaries and Windows e
 });
 
 test('hook implementation does not import or touch product application files', () => {
-  const hookSource = fs.readFileSync(path.join(__dirname, 'gitnexus-hook.cjs'), 'utf8');
-  const lockSource = fs.readFileSync(path.join(__dirname, 'hook-lock.cjs'), 'utf8');
-  for (const source of [hookSource, lockSource]) {
+  const files = fs.readdirSync(__dirname).filter((name) => name.endsWith('.cjs') && !name.endsWith('.test.cjs'));
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(__dirname, name), 'utf8');
     assert.doesNotMatch(source, /require\(['"]\.\.\/src/);
     assert.doesNotMatch(source, /from ['"]src\//);
     assert.doesNotMatch(source, /openspec/);
     assert.doesNotMatch(source, /docs\/architecture/);
   }
+  const hookSource = fs.readFileSync(path.join(__dirname, 'gitnexus-hook.cjs'), 'utf8');
   assert.doesNotMatch(hookSource, /parseRgGrepPattern/);
   assert.doesNotMatch(hookSource, /detectSearchTool/);
   assert.doesNotMatch(hookSource, /t === 'shell'/);
@@ -209,7 +234,7 @@ test('Quality Gate runs both hook suites with the repository Node version', () =
   );
   assert.match(workflow, /uses:\s*actions\/setup-node@v4/);
   assert.match(workflow, /node-version-file:\s*"\.nvmrc"/);
-  assert.match(workflow, /node --test hooks\/gitnexus-hook\.test\.cjs hooks\/hook-lock\.test\.cjs/);
+  assert.match(workflow, /node --test hooks\/\*\.test\.cjs/);
   assert.doesNotMatch(workflow, /\bnpx\b/);
   assert.doesNotMatch(workflow, /npm install/);
 });
@@ -376,7 +401,7 @@ test('hook stdin: matching identity can emit additional_context without npx', (t
       tool_name: 'Grep',
       tool_input: { pattern: 'ApifyAlibabaClient' },
     },
-    { NODE_PATH: fakeRoot },
+    { NODE_PATH: fakeRoot, GITNEXUS_CLI: path.join(cliDir, 'index.js') },
   );
   assert.equal(result.status, 0, result.stderr);
   const payload = JSON.parse(result.stdout.trim());
@@ -389,7 +414,7 @@ test('hook stdin: matching identity can emit additional_context without npx', (t
       tool_name: 'Read',
       tool_input: { target_file: 'src/ApifyAlibabaClient.py' },
     },
-    { NODE_PATH: fakeRoot },
+    { NODE_PATH: fakeRoot, GITNEXUS_CLI: path.join(cliDir, 'index.js') },
   );
   assert.equal(readResult.status, 0, readResult.stderr);
   const readPayload = JSON.parse(readResult.stdout.trim());
@@ -424,7 +449,7 @@ test('hook stdin: Shell, unusable Grep, mismatched worktree, and missing GitNexu
     path.join(cliDir, 'index.js'),
     "console.log('[GitNexus] should-not-run');\n",
   );
-  const env = { NODE_PATH: fakeRoot };
+  const env = { NODE_PATH: fakeRoot, GITNEXUS_CLI: path.join(cliDir, 'index.js') };
 
   const shellIgnored = runHook(
     { cwd: parent, tool_name: 'Shell', tool_input: { command: 'rg.exe validateUser src/ || grep -e secondary file' } },
@@ -464,8 +489,56 @@ test('hook stdin: Shell, unusable Grep, mismatched worktree, and missing GitNexu
 });
 
 test('hook runtime has no npx or npm network fallback', () => {
-  const source = fs.readFileSync(path.join(__dirname, 'gitnexus-hook.cjs'), 'utf8');
-  assert.doesNotMatch(source, /\bnpx\b/);
-  assert.doesNotMatch(source, /npm install/);
-  assert.doesNotMatch(source, /npm exec/);
+  const files = fs.readdirSync(__dirname).filter((name) => name.endsWith('.cjs') && !name.endsWith('.test.cjs'));
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(__dirname, name), 'utf8');
+    assert.doesNotMatch(source, /\bnpx\b/);
+    assert.doesNotMatch(source, /npm install/);
+    assert.doesNotMatch(source, /npm exec/);
+  }
+});
+
+test('executeHook spends remaining budget on the CLI after Git work', (t) => {
+  const parent = tempDir(t, 'gitnexus-budget-');
+  initGitRepo(parent);
+  fs.writeFileSync(path.join(parent, 'README'), 'main\n');
+  runGit(parent, ['add', 'README']);
+  runGit(parent, ['commit', '-q', '-m', 'init']);
+  writeRepoIndex(parent, { lastCommit: gitHead(parent) });
+  const fakeRoot = tempDir(t, 'gitnexus-budget-cli-');
+  const cliPath = path.join(fakeRoot, 'index.js');
+  fs.writeFileSync(cliPath, "console.log('[GitNexus] extra');\n");
+  let now = 0;
+  const clock = hook.createDeadline({ budgetMs: 9000, nowFn: () => now, startedAt: 0 });
+  const timeouts = [];
+  const originalLog = console.log;
+  const logs = [];
+  console.log = (...args) => {
+    logs.push(args.join(' '));
+  };
+  try {
+    const result = hook.executeHook(
+      { cwd: parent, tool_name: 'Grep', tool_input: { pattern: 'validateUser' } },
+      {
+        deadline: clock,
+        env: { ...process.env, GITNEXUS_CLI: cliPath, PATH: '/nonexistent' },
+        spawnSync(cmd, args, opts) {
+          timeouts.push({ cmd, timeout: opts.timeout });
+          if (cmd === 'git') {
+            now += 400;
+            return spawnSync(cmd, args, { ...opts, timeout: 2000 });
+          }
+          return { status: 0, stdout: '[GitNexus] extra for validateUser', stderr: '' };
+        },
+      },
+    );
+    assert.equal(result.status, 'ok');
+    const cli = timeouts.filter((row) => row.cmd !== 'git' && row.cmd !== 'npm');
+    assert.ok(cli.length >= 1, JSON.stringify(timeouts));
+    assert.ok(cli[0].timeout < 9000, `cli timeout should shrink after git: ${cli[0].timeout}`);
+    assert.ok(cli[0].timeout >= 7000, `cli should still have a reasonable budget: ${cli[0].timeout}`);
+    assert.match(logs.join('\n'), /additional_context/);
+  } finally {
+    console.log = originalLog;
+  }
 });
