@@ -21,7 +21,7 @@ _ALIBABA_SEARCH_ACTOR_ENV = "_".join(("BERA_TRACKER", "APIFY", "ALIBABA", "ACTOR
 def isolate_local_dotenv(
     monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    """Keep tests off the developer ``.env`` and inherited translator secrets."""
+    """Keep tests off developer ``.env``, leftover SEARCH Actor overrides, and translator secrets."""
 
     missing = tmp_path_factory.mktemp("dotenv-isolation") / "absent.env"
     monkeypatch.setenv("BERA_TRACKER_DOTENV_PATH", str(missing))
