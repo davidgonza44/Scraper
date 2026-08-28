@@ -42,7 +42,7 @@ function isGlobalRegistryDir(candidate) {
   );
 }
 
-function gitStdout(cwd, args) {
+function gitCommand(cwd, args) {
   try {
     const result = spawnSync('git', args, {
       encoding: 'utf-8',
@@ -52,11 +52,67 @@ function gitStdout(cwd, args) {
       windowsHide: true,
     });
     if (result.error || result.status !== 0) return null;
-    const out = (result.stdout || '').trim();
-    return out || null;
+    return result.stdout == null ? '' : String(result.stdout);
   } catch {
     return null;
   }
+}
+
+function gitStdout(cwd, args) {
+  const out = gitCommand(cwd, args);
+  if (out == null) return null;
+  const trimmed = out.trim();
+  return trimmed || null;
+}
+
+function isReviewedWorktreeDirty(cwd) {
+  const out = gitCommand(cwd, ['status', '--porcelain']);
+  if (out == null) return true;
+  return out.trim().length > 0;
+}
+
+function readGitNexusMetaFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { ok: false };
+      }
+      return { ok: true, value: parsed };
+    } catch {
+      return { ok: false };
+    }
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
+      return { missing: true };
+    }
+    return { ok: false };
+  }
+}
+
+function loadGitNexusMeta(gitNexusDir) {
+  const primary = readGitNexusMetaFile(path.join(gitNexusDir, 'gitnexus.json'));
+  if (primary.ok) return primary.value;
+  if (!primary.missing) return null;
+  const legacy = readGitNexusMetaFile(path.join(gitNexusDir, 'meta.json'));
+  if (legacy.ok) return legacy.value;
+  return null;
+}
+
+function indexedCommitIdentity(meta) {
+  if (!meta || typeof meta.lastCommit !== 'string') return null;
+  const commit = meta.lastCommit.trim();
+  return commit || null;
+}
+
+function canonicalIndexMatchesReviewedWorktree(gitNexusDir, workTreeRoot) {
+  const indexed = indexedCommitIdentity(loadGitNexusMeta(gitNexusDir));
+  if (!indexed) return false;
+  const head = gitStdout(workTreeRoot, ['rev-parse', 'HEAD']);
+  if (!head || indexed !== head) return false;
+  if (isReviewedWorktreeDirty(workTreeRoot)) return false;
+  return true;
 }
 
 function findWorkingTreeRoot(cwd) {
@@ -102,7 +158,10 @@ function findGitNexusDir(startDir) {
   if (fromWorkTree) return fromWorkTree;
   const canonicalRoot = findCanonicalRepoRoot(cwd);
   if (canonicalRoot && path.resolve(canonicalRoot) !== workTreeRoot) {
-    return walkForGitNexusDir(canonicalRoot, canonicalRoot);
+    const fromCanonical = walkForGitNexusDir(canonicalRoot, canonicalRoot);
+    if (fromCanonical && canonicalIndexMatchesReviewedWorktree(fromCanonical, workTreeRoot)) {
+      return fromCanonical;
+    }
   }
   return null;
 }
@@ -125,7 +184,6 @@ const RG_VALUE_LONG = new Set([
   'engine',
   'field-context-separator',
   'field-match-separator',
-  'file',
   'generate',
   'glob',
   'hostname-bin',
@@ -159,19 +217,21 @@ const GREP_VALUE_LONG = new Set([
   'exclude',
   'exclude-dir',
   'exclude-from',
-  'file',
   'group-separator',
   'include',
   'label',
   'max-count',
 ]);
-// Optional values (`--color[=WHEN]`): consume `--opt=value`, or a following
-// token only when it is a recognized WHEN value. Bare `--color` must not
-// swallow the search pattern.
-const OPTIONAL_VALUE_LONG = new Set(['color', 'colour']);
-const OPTIONAL_VALUE_TOKENS = new Set(['always', 'never', 'auto', 'ansi']);
-const RG_VALUE_SHORT = new Set(['f', 'E', 'm', 'j', 'g', 'd', 't', 'T', 'A', 'B', 'C', 'M', 'r']);
-const GREP_VALUE_SHORT = new Set(['f', 'm', 'd', 'D', 'A', 'B', 'C']);
+// Optional values (`--color[=WHEN]`): ripgrep accepts a separate WHEN token.
+// GNU grep's bare `--color`/`--colour` is equivalent to `--color=auto` and
+// must not consume the next operand.
+const OPTIONAL_COLOR_VALUES = new Set(['always', 'never', 'auto', 'ansi']);
+const PATTERN_FILE_LONG = new Set(['file']);
+const PATTERN_FILE_SHORT = new Set(['f']);
+const RG_NO_PATTERN_LONG = new Set(['files', 'type-list', 'pcre2-version']);
+const RG_NO_PATTERN_VALUE_LONG = new Set(['generate']);
+const RG_VALUE_SHORT = new Set(['E', 'm', 'j', 'g', 'd', 't', 'T', 'A', 'B', 'C', 'M', 'r']);
+const GREP_VALUE_SHORT = new Set(['m', 'd', 'D', 'A', 'B', 'C']);
 
 function detectSearchTool(token) {
   if (/\brg$/.test(token)) return 'rg';
@@ -196,19 +256,38 @@ function parseRgGrepPattern(cmd) {
   const tokens = cmd.split(/\s+/);
   let foundCmd = false;
   let tool = 'rg';
-  let skipNext = false;
+  // Explicit parser states instead of scattered skip flags:
+  //   pattern        -> next token is -e/--regexp PATTERN
+  //   pattern-file   -> next token is -f/--file PATH (not an augmentation pattern)
+  //   value          -> next token is a non-pattern option argument
+  //   optional-color -> ripgrep --color WHEN, only when WHEN is a known value
+  let pending = null;
+  let explicitPattern = null;
+  let positionalPattern = null;
+  let patternFile = false;
+  let noPatternMode = false;
+
+  const takeExplicit = (raw) => {
+    if (!explicitPattern) explicitPattern = cleanPatternToken(raw);
+  };
 
   for (const token of tokens) {
-    if (skipNext === 'pattern') {
-      return cleanPatternToken(token);
+    if (pending === 'pattern') {
+      takeExplicit(token);
+      pending = null;
+      continue;
     }
-    if (skipNext === 'optional') {
-      skipNext = false;
+    if (pending === 'pattern-file') {
+      patternFile = true;
+      pending = null;
+      continue;
+    }
+    if (pending === 'optional-color') {
+      pending = null;
       const lowered = token.toLowerCase().replace(/['"]/g, '');
-      if (OPTIONAL_VALUE_TOKENS.has(lowered)) continue;
-      // Fall through and parse this token as a flag or pattern.
-    } else if (skipNext) {
-      skipNext = false;
+      if (OPTIONAL_COLOR_VALUES.has(lowered)) continue;
+    } else if (pending === 'value') {
+      pending = null;
       continue;
     }
     if (!foundCmd) {
@@ -220,52 +299,83 @@ function parseRgGrepPattern(cmd) {
       continue;
     }
     if (token === '--') {
-      skipNext = 'pattern';
+      if (noPatternMode || explicitPattern || patternFile || positionalPattern) break;
+      pending = 'pattern';
       continue;
     }
     if (token === '-e' || token === '--regexp') {
-      skipNext = 'pattern';
+      pending = 'pattern';
       continue;
     }
     if (token.startsWith('--regexp=')) {
-      return cleanPatternToken(token.slice('--regexp='.length));
+      takeExplicit(token.slice('--regexp='.length));
+      continue;
     }
     if (token.startsWith('-e') && token.length > 2 && !token.startsWith('--')) {
-      return cleanPatternToken(token.slice(2));
+      takeExplicit(token.slice(2));
+      continue;
     }
     if (token.startsWith('--')) {
       const eq = token.indexOf('=');
       const name = (eq === -1 ? token.slice(2) : token.slice(2, eq)).toLowerCase();
       if (PATTERN_LONG.has(name)) {
-        if (eq === -1) skipNext = 'pattern';
-        else return cleanPatternToken(token.slice(eq + 1));
+        if (eq === -1) pending = 'pattern';
+        else takeExplicit(token.slice(eq + 1));
+        continue;
+      }
+      if (PATTERN_FILE_LONG.has(name)) {
+        patternFile = true;
+        if (eq === -1) pending = 'pattern-file';
+        continue;
+      }
+      if (tool === 'rg' && RG_NO_PATTERN_LONG.has(name)) {
+        noPatternMode = true;
+        continue;
+      }
+      if (tool === 'rg' && RG_NO_PATTERN_VALUE_LONG.has(name)) {
+        noPatternMode = true;
+        if (eq === -1) pending = 'value';
         continue;
       }
       if (eq !== -1) continue;
-      if (OPTIONAL_VALUE_LONG.has(name)) {
-        skipNext = 'optional';
+      if (tool === 'rg' && name === 'color') {
+        pending = 'optional-color';
         continue;
       }
-      if (valueLongSet(tool).has(name)) skipNext = true;
+      if (valueLongSet(tool).has(name)) pending = 'value';
       continue;
     }
     if (token.startsWith('-') && token.length > 1) {
       if (/^-\d+$/.test(token)) continue;
       const body = token.slice(1);
       const shorts = valueShortSet(tool);
-      if (PATTERN_SHORT.has(body[0]) && body.length > 1) {
-        return cleanPatternToken(body.slice(1));
+      for (let i = 0; i < body.length; i++) {
+        const ch = body[i];
+        const rest = body.slice(i + 1);
+        if (PATTERN_SHORT.has(ch)) {
+          if (rest) takeExplicit(rest);
+          else pending = 'pattern';
+          break;
+        }
+        if (PATTERN_FILE_SHORT.has(ch)) {
+          patternFile = true;
+          if (!rest) pending = 'pattern-file';
+          break;
+        }
+        if (shorts.has(ch)) {
+          if (!rest) pending = 'value';
+          break;
+        }
       }
-      if (body.length === 1 && shorts.has(body)) {
-        skipNext = true;
-        continue;
-      }
-      if (body.length > 1 && shorts.has(body[0])) continue;
       continue;
     }
-    return cleanPatternToken(token);
+    if (!positionalPattern) positionalPattern = cleanPatternToken(token);
   }
-  return null;
+
+  if (noPatternMode) return null;
+  if (explicitPattern) return explicitPattern;
+  if (patternFile) return null;
+  return positionalPattern;
 }
 
 /**
@@ -486,8 +596,11 @@ module.exports = {
   resolveCliPath,
   runGitNexusCli,
   extractPattern,
+  parseRgGrepPattern,
   findGitNexusDir,
   findCanonicalRepoRoot,
   walkForGitNexusDir,
+  loadGitNexusMeta,
+  canonicalIndexMatchesReviewedWorktree,
   npmGlobalNodeModules,
 };
