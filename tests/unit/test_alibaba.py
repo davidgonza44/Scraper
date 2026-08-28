@@ -762,6 +762,68 @@ def test_title_less_memo23_row_is_skipped() -> None:
     assert map_alibaba_item(memo23_actor_item(title=None)) is None
 
 
+def test_non_string_title_is_not_coerced_into_a_listing() -> None:
+    for title in (4.5, 5, True, False, 0):
+        assert map_alibaba_item(memo23_actor_item(title=title)) is None
+
+
+def test_non_string_identity_fields_do_not_fabricate_metadata() -> None:
+    product = map_alibaba_item(
+        memo23_actor_item(
+            title="Wireless mouse",
+            productId=4.5,
+            productUrl=4.5,
+            supplierName=4.5,
+            supplierCountry=4.5,
+            supplierCountryCode=4.5,
+            countryCode=4.5,
+            companyName=4.5,
+            mainImage=4.5,
+            reviewScore=4.5,
+            supplierServiceScore=4.5,
+            reviewCount=5,
+        )
+    )
+    assert product is not None
+    assert product.title == "Wireless mouse"
+    assert product.product_id is None
+    assert product.product_url is None
+    assert product.supplier_name is None
+    assert product.supplier_country is None
+    assert product.image_url is None
+    assert product.review_score == "4.5"
+    assert product.supplier_service_score == "4.5"
+    assert product.review_count == "5"
+    sibling_name = map_alibaba_item(
+        memo23_actor_item(title="Named mouse", supplierName=4.5, companyName="Acme Trading")
+    )
+    assert sibling_name is not None
+    assert sibling_name.supplier_name == "Acme Trading"
+    scores = score_alibaba_listings([product, sibling_name])
+    assert scores[0].information_score < scores[1].information_score
+
+
+def test_bool_is_not_numeric_or_identity_metadata() -> None:
+    product = map_alibaba_item(
+        {
+            "title": "Wireless mouse",
+            "productId": True,
+            "supplierName": False,
+            "reviewScore": True,
+            "reviewCount": False,
+            "supplierServiceScore": True,
+            "minOrder": True,
+        }
+    )
+    assert product is not None
+    assert product.product_id is None
+    assert product.supplier_name is None
+    assert product.review_score is None
+    assert product.review_count is None
+    assert product.supplier_service_score is None
+    assert product.moq is None
+
+
 def test_search_maps_five_memo23_results_in_actor_order() -> None:
     items = [
         memo23_actor_item(title="First", productId="p-1", price="US $9.00"),

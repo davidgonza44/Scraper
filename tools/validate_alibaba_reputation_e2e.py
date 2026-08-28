@@ -21,7 +21,7 @@ import math
 import re
 import statistics
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -128,6 +128,57 @@ MEMO23_DOCUMENTED_ACTOR_KEYS = frozenset(
         "verifiedSupplierPro",
     }
 )
+
+
+EXCLUDED_ALIBABA_PRODUCT_ATTRS = (
+    "display_star_level",
+    "product_score",
+    "shipping_score",
+    "sold_order",
+    "badges",
+    "certifications",
+    "show_crown",
+)
+
+
+def has_mapped_products(products: Sequence[object]) -> bool:
+    return bool(products)
+
+
+def alibaba_product_excludes_transport_fields(
+    products: Sequence[object],
+    excluded_attrs: Sequence[str] = EXCLUDED_ALIBABA_PRODUCT_ATTRS,
+) -> bool:
+    """True when the first mapped product omits excluded transport fields.
+
+    An empty product list is a failed mapping outcome, not a model that
+    silently has those fields. Never indexes ``products[0]``.
+    """
+
+    first = next(iter(products), None)
+    if first is None:
+        return False
+    return all(not hasattr(first, attr) for attr in excluded_attrs)
+
+
+def report_mapped_products(
+    products: Sequence[object],
+    check: Callable[[str, bool, str], None],
+) -> None:
+    """Record empty-mapping failures without indexing ``products[0]``."""
+
+    mapped = has_mapped_products(products)
+    check(
+        "SUCCEEDED produjo al menos un producto mapeable",
+        mapped,
+        "0 productos mapeados" if not mapped else "",
+    )
+    if mapped:
+        check(
+            "AlibabaProduct no transporta campos excluidos",
+            alibaba_product_excludes_transport_fields(products),
+            "",
+        )
 
 
 class ReplayActorMismatch(ValueError):
@@ -490,6 +541,15 @@ def scalar_text(value: object) -> str | None:
     return None
 
 
+def identity_text(value: object) -> str | None:
+    """Require a real non-empty string. Numbers and bools are not identity."""
+
+    if isinstance(value, bool) or not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def row_field(row: object, name: str) -> object:
     if isinstance(row, Mapping):
         return cast(Mapping[str, object], row).get(name)
@@ -704,7 +764,7 @@ def main() -> int:  # noqa: PLR0915
         ("reviewCount", "review_count"),
     )
     mapping_ok = True
-    mapped_raw = [item for item in raw_items if scalar_text(item.get("title")) is not None]
+    mapped_raw = [item for item in raw_items if identity_text(item.get("title")) is not None]
     for raw_item, product in zip(mapped_raw, products, strict=True):
         for raw_key, attr in mapping_pairs:
             if scalar_text(raw_item.get(raw_key)) != getattr(product, attr):
@@ -798,19 +858,7 @@ def main() -> int:  # noqa: PLR0915
     check("mismas señales => mismo score y cobertura", repeated_ok)
 
     print("\n=== 10. CAMPOS QUE NO DEBEN AFECTAR ===")
-    excluded_attrs = (
-        "display_star_level",
-        "product_score",
-        "shipping_score",
-        "sold_order",
-        "badges",
-        "certifications",
-        "show_crown",
-    )
-    check(
-        "AlibabaProduct no transporta campos excluidos",
-        all(not hasattr(products[0], attr) for attr in excluded_attrs),
-    )
+    report_mapped_products(products, check)
     sample = next((p for i, p in enumerate(products) if reputations[i].score is not None), None)
     if sample is not None:
         only_four = {

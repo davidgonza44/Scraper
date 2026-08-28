@@ -106,9 +106,26 @@ def _scalar_text(value: object) -> str | None:
     return None
 
 
+def _identity_text(value: object) -> str | None:
+    """Require a real non-empty string. Numbers and bools are not identity."""
+
+    if isinstance(value, bool) or not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def _first_scalar(record: Mapping[str, object], *keys: str) -> str | None:
     for key in keys:
         text = _scalar_text(record.get(key))
+        if text is not None:
+            return text
+    return None
+
+
+def _first_identity(record: Mapping[str, object], *keys: str) -> str | None:
+    for key in keys:
+        text = _identity_text(record.get(key))
         if text is not None:
             return text
     return None
@@ -213,7 +230,7 @@ def map_alibaba_item(raw: object) -> AlibabaProduct | None:
     if not isinstance(raw, Mapping):
         return None
     record = cast(Mapping[str, object], raw)
-    title = _scalar_text(record.get("title"))
+    title = _identity_text(record.get("title"))
     if title is None:
         return None
     price_display, min_price, max_price, currency = parse_alibaba_price(record.get("price"))
@@ -222,18 +239,18 @@ def map_alibaba_item(raw: object) -> AlibabaProduct | None:
         currency = explicit
     return AlibabaProduct(
         title=title,
-        product_id=_scalar_text(record.get("productId")),
-        product_url=_scalar_text(record.get("productUrl")),
+        product_id=_identity_text(record.get("productId")),
+        product_url=_identity_text(record.get("productUrl")),
         price_display=price_display,
         min_price=min_price,
         max_price=max_price,
         currency=currency,
         moq=_first_scalar(record, "minOrder", "moq"),
-        supplier_name=_first_scalar(record, "supplierName", "companyName"),
-        supplier_country=_first_scalar(
+        supplier_name=_first_identity(record, "supplierName", "companyName"),
+        supplier_country=_first_identity(
             record, "supplierCountryCode", "supplierCountry", "countryCode"
         ),
-        image_url=_scalar_text(record.get("mainImage")),
+        image_url=_identity_text(record.get("mainImage")),
         gold_supplier_years=_scalar_text(record.get("goldSupplierYears")),
         supplier_service_score=_scalar_text(record.get("supplierServiceScore")),
         review_count=_scalar_text(record.get("reviewCount")),

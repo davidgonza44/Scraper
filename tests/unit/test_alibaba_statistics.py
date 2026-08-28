@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from decimal import MAX_PREC, Decimal
+from decimal import MAX_PREC, Context, Decimal
 from types import SimpleNamespace
 
 from bera_price_tracker.application.alibaba_score import score_alibaba_listings
@@ -204,3 +204,111 @@ def test_namespace_unrepresentable_price_is_excluded_from_bounds() -> None:
     assert alibaba_representative_price(product) is None
     stats = calculate_alibaba_price_statistics([product])
     assert stats.priced_products == 0
+
+
+def test_group_threatening_at_cap_price_does_not_erase_sibling_statistics() -> None:
+    extreme_value = _huge(_AT_CAP_EXPONENT)
+    assert _quantize_cents(Decimal("0.01")) is not None
+    assert _quantize_cents(extreme_value) is not None
+    assert _calculation_context([Decimal("0.01"), extreme_value]) is None
+
+    low = _usd_product("ok-low", Decimal("0.01"))
+    high = _usd_product("ok-high", Decimal("0.03"))
+    extreme = _usd_product("extreme", extreme_value)
+    for products in (
+        [low, extreme],
+        [extreme, low],
+        [low, extreme, low],
+        [low, extreme, high],
+    ):
+        payload = run_alibaba_search(
+            "mouse",
+            10,
+            search_service=SearchAlibabaProducts(FakeAlibabaProvider(products)),
+        )
+        assert payload["ui_status"] == "SUCCESS"
+        assert [row["title"] for row in payload["results"]] == [item.title for item in products]
+        stats = calculate_alibaba_price_statistics(products)
+        ok_products = [item for item in products if item.title.startswith("ok")]
+        ok_mins = [item.min_price for item in ok_products if item.min_price is not None]
+        assert stats.priced_products == len(ok_products)
+        assert stats.minimum == min(ok_mins)
+        assert stats.maximum == max(ok_mins)
+        assert stats.average is not None
+        assert stats.median is not None
+        scores = score_alibaba_listings(products)
+        for index, item in enumerate(products):
+            if item.title.startswith("ok"):
+                assert payload["results"][index]["price"]
+                assert scores[index].price_score >= 0
+            else:
+                assert scores[index].price_score == 0
+
+
+def test_unrepresentable_max_bound_does_not_collapse_to_min_only() -> None:
+    product = SimpleNamespace(
+        min_price=Decimal("0.01"),
+        max_price=_huge(_AT_CAP_EXPONENT),
+        currency="USD",
+    )
+    assert _quantize_cents(Decimal("0.01")) is not None
+    assert alibaba_price_bounds(product) is None
+    assert alibaba_representative_price(product) is None
+    assert format_alibaba_listing_price(product.min_price, product.max_price, "USD") == ""
+
+
+def test_negative_exponent_outside_context_range_is_unavailable() -> None:
+    underflow = Decimal("1E-100000000")
+    assert _quantize_cents(underflow) is None
+    assert format_alibaba_listing_price(underflow, underflow, "USD") == ""
+    assert format_alibaba_money(underflow) == UNAVAILABLE_DISPLAY
+
+    product = map_alibaba_item({"title": "tiny", "price": "1e-100000000", "currency": "USD"})
+    sibling = map_alibaba_item({"title": "ok", "price": "$0.01", "currency": "USD"})
+    assert product is not None
+    assert sibling is not None
+    assert product.price_display == "1e-100000000"
+    assert alibaba_price_bounds(product) is None
+    assert alibaba_representative_price(product) is None
+    row = alibaba_product_to_row(product)
+    assert row["price"] == ""
+    assert "$0.00" not in row["price"]
+
+    payload = run_alibaba_search(
+        "mouse",
+        10,
+        search_service=SearchAlibabaProducts(FakeAlibabaProvider([product, sibling])),
+    )
+    assert payload["ui_status"] == "SUCCESS"
+    assert [row["title"] for row in payload["results"]] == ["tiny", "ok"]
+    assert payload["results"][0]["price"] == ""
+    assert payload["results"][1]["price"]
+    stats = calculate_alibaba_price_statistics([product, sibling])
+    assert stats.priced_products == 1
+    assert stats.minimum == Decimal("0.01")
+    assert stats.average == Decimal("0.01")
+    scores = score_alibaba_listings([product, sibling])
+    assert scores[0].price_score == 0
+    assert scores[0].price_clarity_score == 0
+    assert scores[1].price_score >= 0
+
+    emin = Context().Emin
+    at_floor = Decimal(f"1E{emin}")
+    below_floor = Decimal(f"1E{emin - 1}")
+    assert _quantize_cents(at_floor) is not None
+    assert _quantize_cents(below_floor) is None
+    for raw, expected_usable in (
+        ("0.01", True),
+        ("0.001", True),
+        ("1", True),
+        ("1e-20", True),
+    ):
+        mapped = map_alibaba_item({"title": raw, "price": raw, "currency": "USD"})
+        assert mapped is not None
+        bounds = alibaba_price_bounds(mapped)
+        assert (bounds is not None) is expected_usable
+        if expected_usable:
+            listing = format_alibaba_listing_price(mapped.min_price, mapped.max_price, "USD")
+            assert listing
+            if raw == "1e-20":
+                assert listing == "$0.00"

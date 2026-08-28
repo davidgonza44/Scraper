@@ -3,33 +3,42 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
 from bera_price_tracker.application.ports import MarketplaceSourceUnavailable
+from bera_price_tracker.application.services import SearchAlibabaProducts
+from bera_price_tracker.config import DEFAULT_APIFY_ALIBABA_ACTOR
+from bera_price_tracker.gui.services import run_alibaba_search
 from bera_price_tracker.infrastructure.providers.alibaba import (
     ApifyAlibabaClient,
-)
-from bera_price_tracker.infrastructure.providers.alibaba import (
+    _identity_text as production_identity_text,
     _scalar_text as production_scalar_text,
+    map_alibaba_item,
 )
 from tools.validate_alibaba_reputation_e2e import (
     HISTORICAL_SEARCH_ACTOR_KEYS,
     MEMO23_DOCUMENTED_ACTOR_KEYS,
+    RecordingSearchService,
     ReplayActorClient,
     ReplayActorMismatch,
     ReplayProvenanceUnavailable,
     _configured_actor_aliases,
     _display_provenance,
     _print_run_record,
+    alibaba_product_excludes_transport_fields,
     classify_observed_schema,
     classify_replay_provenance,
     emit_search_failure,
     extract_run_provenance,
     find_exception_in_chain,
+    has_mapped_products,
+    identity_text,
     indep_rating,
     replay_search_failure_kind,
+    report_mapped_products,
     run_belongs_to_configured_search_actor,
     scalar_text,
 )
@@ -700,3 +709,231 @@ def test_validator_search_handler_does_not_catch_baseexception() -> None:
     source = VALIDATOR_PATH.read_text(encoding="utf-8")
     assert "except BaseException as exc" not in source
     assert "except Exception as exc" in source
+
+
+def test_validator_never_indexes_first_product_without_a_presence_check() -> None:
+    source = VALIDATOR_PATH.read_text(encoding="utf-8")
+    assert "products[0]" not in source
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Mouse", "Mouse"),
+        ("  Mouse  ", "Mouse"),
+        ("", None),
+        ("  ", None),
+        (4.5, None),
+        (5, None),
+        (True, None),
+        (False, None),
+        (None, None),
+    ],
+)
+def test_validator_identity_text_matches_production_boundary(
+    raw: object, expected: str | None
+) -> None:
+    assert identity_text(raw) == expected
+    assert production_identity_text(raw) == expected
+    assert identity_text(raw) == production_identity_text(raw)
+
+
+class _FakeDataset:
+    def __init__(self, owner: _LiveFakeApify) -> None:
+        self.owner = owner
+
+    def list_items(self, *, limit: int) -> Any:
+        del limit
+        if self.owner.dataset_error is not None:
+            raise self.owner.dataset_error
+        return SimpleNamespace(items=list(self.owner.items))
+
+
+class _FakeActor:
+    def __init__(self, owner: _LiveFakeApify) -> None:
+        self.owner = owner
+
+    def call(self, *, run_input: dict[str, object]) -> Any:
+        self.owner.calls.append(run_input)
+        return self.owner.run
+
+
+class _LiveFakeApify:
+    def __init__(self, items: list[object]) -> None:
+        self.items = items
+        self.calls: list[dict[str, object]] = []
+        self.run: object = {"status": "SUCCEEDED", "defaultDatasetId": "ds1"}
+        self.dataset_error: Exception | None = None
+        self.actor_id = ""
+
+    def actor(self, actor_id: str) -> _FakeActor:
+        self.actor_id = actor_id
+        return _FakeActor(self)
+
+    def dataset(self, dataset_id: str) -> _FakeDataset:
+        del dataset_id
+        return _FakeDataset(self)
+
+
+def _collecting_check(failures: list[str]) -> Any:
+    def check(name: str, condition: bool, detail: str = "") -> None:
+        del detail
+        if not condition:
+            failures.append(name)
+
+    return check
+
+
+def _search_live(items: list[object]) -> tuple[_LiveFakeApify, list[Any], dict[str, Any]]:
+    fake = _LiveFakeApify(items)
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=DEFAULT_APIFY_ALIBABA_ACTOR,
+        client_factory=lambda _token: fake,
+    )
+    service = RecordingSearchService(SearchAlibabaProducts(provider=client))
+    payload = run_alibaba_search("wireless mouse", 20, search_service=service)
+    return fake, service.products, payload
+
+
+def test_succeeded_empty_dataset_fails_closed_without_indexing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake, products, payload = _search_live([])
+    assert products == []
+    assert payload["ui_status"] == "SUCCESS"
+    assert payload["results"] == []
+    assert len(fake.calls) == 1
+    assert has_mapped_products(products) is False
+    assert alibaba_product_excludes_transport_fields(products) is False
+
+    failures: list[str] = []
+    record = {
+        "actor_calls_created": len(fake.calls),
+        "configured_actor_id": MEMO23_SEARCH_ACTOR,
+        "run_act_id": MEMO23_SEARCH_ACTOR,
+        "run_build_id": "build-empty",
+        "run_build_number": "1.0.0",
+        "run_status": "SUCCEEDED",
+        "run_id": "run-empty",
+    }
+    _print_run_record(record)
+    report_mapped_products(products, _collecting_check(failures))
+    out = capsys.readouterr().out
+    assert "Actor runs creados: 1" in out
+    assert "status: SUCCEEDED" in out
+    assert "run reutilizable: run-empty" in out
+    assert failures == ["SUCCEEDED produjo al menos un producto mapeable"]
+    raw_items: list[dict[str, object]] = []
+    mapped_raw = [item for item in raw_items if identity_text(item.get("title")) is not None]
+    assert list(zip(mapped_raw, products, strict=True)) == []
+
+
+def test_succeeded_titleless_rows_fail_closed_without_indexing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    raw_items = [
+        {"productId": "1", "price": "US $1.00", "supplierName": "Ghost"},
+        {"title": 4.5, "productId": "2", "price": "US $2.00"},
+        {"title": 5, "productId": "3"},
+        {"title": True, "productId": "4"},
+        {"title": "  "},
+    ]
+    fake, products, payload = _search_live(raw_items)
+    assert products == []
+    assert all(map_alibaba_item(item) is None for item in raw_items)
+    assert payload["ui_status"] == "SUCCESS"
+    assert len(fake.calls) == 1
+    assert has_mapped_products(products) is False
+
+    failures: list[str] = []
+    record = {
+        "actor_calls_created": 1,
+        "configured_actor_id": MEMO23_SEARCH_ACTOR,
+        "run_act_id": MEMO23_SEARCH_ACTOR,
+        "run_status": "SUCCEEDED",
+        "run_id": "run-titleless",
+    }
+    _print_run_record(record)
+    report_mapped_products(products, _collecting_check(failures))
+    out = capsys.readouterr().out
+    assert "status: SUCCEEDED" in out
+    assert failures == ["SUCCEEDED produjo al menos un producto mapeable"]
+    mapped_raw = [item for item in raw_items if identity_text(item.get("title")) is not None]
+    assert mapped_raw == []
+    assert list(zip(mapped_raw, products, strict=True)) == []
+
+
+def test_succeeded_nonempty_run_keeps_first_product_field_assertions() -> None:
+    item = {
+        "title": "Wireless mouse",
+        "productId": "1601111111111",
+        "productUrl": "https://www.alibaba.com/product-detail/mouse.html",
+        "price": "US $1.00-$9.00",
+        "supplierName": "Example Co.",
+        "reviewScore": 4.8,
+        "reviewCount": 12,
+        "supplierServiceScore": 4.9,
+    }
+    fake, products, payload = _search_live([item])
+    assert len(products) == 1
+    assert products[0].title == "Wireless mouse"
+    assert payload["ui_status"] == "SUCCESS"
+    assert payload["results"][0]["title"] == "Wireless mouse"
+    assert len(fake.calls) == 1
+    assert has_mapped_products(products) is True
+    assert alibaba_product_excludes_transport_fields(products) is True
+    failures: list[str] = []
+    report_mapped_products(products, _collecting_check(failures))
+    assert failures == []
+    mapped_raw = [item]
+    assert list(zip(mapped_raw, products, strict=True))[0][1].title == "Wireless mouse"
+
+
+def test_replay_empty_dataset_creates_zero_actor_runs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record: dict[str, Any] = {
+        "actor_calls_created": 0,
+        "actor_id": MEMO23_SEARCH_ACTOR,
+        "configured_actor_id": MEMO23_SEARCH_ACTOR,
+        "configured_actor_aliases": [MEMO23_SEARCH_ACTOR],
+    }
+    client = ReplayActorClient(
+        _FakeRunClient(
+            {
+                "id": "run-replay-empty",
+                "status": "SUCCEEDED",
+                "actId": MEMO23_SEARCH_ACTOR,
+                "buildId": "build-replay",
+                "buildNumber": "1.0.0",
+                "defaultDatasetId": "ds-empty",
+            }
+        ),
+        record,
+    )
+    run = client.call(run_input={"searchTerms": ["wireless mouse"], "maxItems": 20})
+    assert record["actor_calls_created"] == 0
+    assert record["run_status"] == "SUCCEEDED"
+    assert record["run_id"] == "run-replay-empty"
+    assert isinstance(run, dict)
+    _print_run_record(record)
+    failures: list[str] = []
+    report_mapped_products([], _collecting_check(failures))
+    out = capsys.readouterr().out
+    assert "Actor runs creados: 0" in out
+    assert "status: SUCCEEDED" in out
+    assert failures == ["SUCCEEDED produjo al menos un producto mapeable"]
+
+
+def test_float_title_does_not_join_mapped_raw_with_valid_siblings() -> None:
+    raw_items: list[dict[str, object]] = [
+        {"title": 4.5, "reviewScore": 4.8},
+        {"title": "Wireless mouse", "reviewScore": 4.9},
+    ]
+    products = [item for item in (map_alibaba_item(raw) for raw in raw_items) if item is not None]
+    mapped_raw = [item for item in raw_items if identity_text(item.get("title")) is not None]
+    paired = list(zip(mapped_raw, products, strict=True))
+    assert len(paired) == 1
+    assert paired[0][0]["title"] == "Wireless mouse"
+    assert paired[0][1].title == "Wireless mouse"

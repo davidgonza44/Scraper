@@ -96,6 +96,34 @@ def _cents_precision(value: Decimal) -> int:
     return max(_MINIMUM_CALCULATION_PRECISION, value.adjusted() + 3)
 
 
+def _decimal_in_context_range(value: Decimal, context: Context) -> bool:
+    """True when ``value`` is a normal in ``context`` (Emin..Emax).
+
+    ``Etiny`` is the subnormal floor. Values below ``Emin`` underflow this
+    pipeline rather than participating as a usable price.
+    """
+
+    try:
+        adjusted = value.adjusted()
+    except (ArithmeticError, InvalidOperation, OverflowError, ValueError):
+        return False
+    return context.Emin <= adjusted <= context.Emax
+
+
+def _representable_price(value: Decimal) -> bool:
+    """Technical representability: work cap, exponent range, and positivity."""
+
+    if not value.is_finite() or value <= Decimal("0"):
+        return False
+    exponent = value.as_tuple().exponent
+    if not isinstance(exponent, int):
+        return False
+    context = _decimal_context(_cents_precision(value))
+    if context is None:
+        return False
+    return _decimal_in_context_range(value, context)
+
+
 def _calculation_context(prices: list[Decimal]) -> Context | None:
     exponents: list[int] = []
     for price in prices:
@@ -112,12 +140,7 @@ def _calculation_context(prices: list[Decimal]) -> Context | None:
 def _as_decimal(value: object) -> Decimal | None:
     if isinstance(value, bool) or not isinstance(value, Decimal):
         return None
-    if not value.is_finite() or value <= Decimal("0"):
-        return None
-    exponent = value.as_tuple().exponent
-    if not isinstance(exponent, int):
-        return None
-    if _decimal_context(_cents_precision(value)) is None:
+    if not _representable_price(value):
         return None
     return value
 
@@ -125,10 +148,7 @@ def _as_decimal(value: object) -> Decimal | None:
 def _quantize_cents(value: Decimal) -> Decimal | None:
     """Quantize to display cents, or None if the coefficient cannot be represented."""
 
-    if not value.is_finite():
-        return None
-    exponent = value.as_tuple().exponent
-    if not isinstance(exponent, int):
+    if not _representable_price(value):
         return None
     context = _decimal_context(_cents_precision(value))
     if context is None:
@@ -171,9 +191,12 @@ def alibaba_price_bounds(product: object) -> tuple[Decimal, Decimal] | None:
     minimum = _as_decimal(getattr(product, "min_price", None))
     if minimum is None:
         return None
-    maximum = _as_decimal(getattr(product, "max_price", None))
+    raw_maximum = getattr(product, "max_price", None)
+    if raw_maximum is None:
+        return minimum, minimum
+    maximum = _as_decimal(raw_maximum)
     if maximum is None:
-        maximum = minimum
+        return None
     if minimum > maximum:
         return None
     return minimum, maximum
@@ -261,11 +284,49 @@ def _usable_representatives(
     return mins, maxes, values
 
 
+def _eligible_for_group_statistics(values: list[Decimal]) -> list[bool]:
+    """Keep the largest order-independent subset that shares one Context.
+
+    Individually representable prices can still be group-threatening when their
+    combined exponent span exceeds the technical work cap. Prefer ordinary
+    magnitudes (smaller per-value cents precision) so a single extreme cannot
+    erase valid sibling statistics.
+    """
+
+    count = len(values)
+    if count == 0:
+        return []
+    if _calculation_context(values) is not None:
+        return [True] * count
+    ranked = sorted(
+        range(count),
+        key=lambda index: (
+            _cents_precision(values[index]),
+            values[index].adjusted(),
+            values[index],
+        ),
+    )
+    chosen: list[Decimal] = []
+    selected: set[int] = set()
+    for index in ranked:
+        trial = chosen + [values[index]]
+        if _calculation_context(trial) is not None:
+            chosen.append(values[index])
+            selected.add(index)
+    return [index in selected for index in range(count)]
+
+
 def calculate_alibaba_price_statistics(products: Sequence[object]) -> AlibabaPriceStatistics:
     """Aggregate published USD search prices. Other currencies are excluded."""
 
     total = len(products)
     mins, maxes, values = _usable_representatives(products)
+    if not values:
+        return _empty_statistics(total)
+    keep = _eligible_for_group_statistics(values)
+    mins = [price for price, eligible in zip(mins, keep, strict=True) if eligible]
+    maxes = [price for price, eligible in zip(maxes, keep, strict=True) if eligible]
+    values = [price for price, eligible in zip(values, keep, strict=True) if eligible]
     if not values:
         return _empty_statistics(total)
 
@@ -339,10 +400,15 @@ def format_alibaba_listing_price(
 ) -> str:
     """GUI listing price. ``min``/``max``/ISO are authority; never raw ``$`` text."""
 
-    low = min_price if isinstance(min_price, Decimal) and min_price.is_finite() else None
+    low = _as_decimal(min_price)
     if low is None:
         return ""
-    high = max_price if isinstance(max_price, Decimal) and max_price.is_finite() else low
+    if max_price is None:
+        high = low
+    else:
+        high = _as_decimal(max_price)
+        if high is None:
+            return ""
     if high < low:
         return ""
     quantized_low = _quantize_cents(low)
