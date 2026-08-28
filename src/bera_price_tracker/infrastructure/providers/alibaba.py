@@ -24,7 +24,7 @@ DEFAULT_ALIBABA_ACTOR = DEFAULT_APIFY_ALIBABA_ACTOR
 _UNSIGNED_PRICE = re.compile(r"\d+(?:\.\d+)?")
 _SCI_TOKEN = re.compile(r"(?<![A-Za-z])[+-]?\d+(?:\.\d+)?[eE][+-]?\d+")
 _PLAIN_OR_SCI_NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
-_CURRENCY_NOISE = re.compile(r"(?i)\$|\b(?:US|USD|EUR|CNY|GBP)\b")
+_CURRENCY_NOISE = re.compile(r"(?i)\$|\bUS\b|\b[A-Z]{3}\b")
 _ISO_CURRENCY = re.compile(r"\b([A-Z]{3})\b")
 MEMO23_ALIBABA_MIN_PRODUCTS_PER_PAGE = 20
 
@@ -133,8 +133,14 @@ def _explicit_display_currency(display: str) -> str | None:
     return explicit_alibaba_currency(currency_match.group(1))
 
 
+def _strip_currency_noise(text: str) -> str:
+    """Remove currency tokens and whitespace; keep digits, dots, and range hyphens."""
+
+    return re.sub(r"\s+", "", _CURRENCY_NOISE.sub("", text))
+
+
 def _parse_scientific_price_text(compact: str) -> Decimal | None:
-    candidate = re.sub(r"\s+", "", _CURRENCY_NOISE.sub("", compact))
+    candidate = _strip_currency_noise(compact)
     if not _PLAIN_OR_SCI_NUMBER.fullmatch(candidate):
         return None
     try:
@@ -172,23 +178,24 @@ def parse_alibaba_price(
         return None, None, None, None
     compact = display.replace(",", "")
     currency = _explicit_display_currency(display)
-    if _SCI_TOKEN.search(compact) is not None:
+    expression = _strip_currency_noise(compact)
+    if _SCI_TOKEN.search(compact) is not None or _SCI_TOKEN.search(expression) is not None:
         amount = _parse_scientific_price_text(compact)
         if amount is None:
             return display, None, None, currency
         return display, amount, amount, currency
 
-    matches = list(_UNSIGNED_PRICE.finditer(compact))
+    matches = list(_UNSIGNED_PRICE.finditer(expression))
     numbers: list[Decimal] = []
     for match in matches:
         parsed = _decimal_from_text(match.group(0))
-        if parsed is None or _is_negative_price_prefix(compact, match.start()):
+        if parsed is None or _is_negative_price_prefix(expression, match.start()):
             return display, None, None, currency
         numbers.append(parsed)
     if len(numbers) == 1:
         return display, numbers[0], numbers[0], currency
     if len(numbers) == 2:
-        between = compact[matches[0].end() : matches[1].start()]
+        between = expression[matches[0].end() : matches[1].start()]
         if "-" in between:
             if numbers[0] > numbers[1]:
                 return display, None, None, currency

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import (
+    MAX_PREC,
     ROUND_CEILING,
     ROUND_FLOOR,
     ROUND_HALF_EVEN,
@@ -65,7 +66,29 @@ def _empty_statistics(total: int) -> AlibabaPriceStatistics:
     )
 
 
-def _calculation_context(prices: list[Decimal]) -> Context:
+def _bounded_precision(required: int) -> int | None:
+    """Return ``required`` only when it is a legal ``Context.prec`` value."""
+
+    if required < 1 or required > MAX_PREC:
+        return None
+    return required
+
+
+def _decimal_context(precision: int) -> Context | None:
+    bounded = _bounded_precision(precision)
+    if bounded is None:
+        return None
+    try:
+        return Context(prec=bounded, rounding=ROUND_HALF_EVEN)
+    except (ValueError, InvalidOperation, OverflowError):
+        return None
+
+
+def _cents_precision(value: Decimal) -> int:
+    return max(_MINIMUM_CALCULATION_PRECISION, value.adjusted() + 3)
+
+
+def _calculation_context(prices: list[Decimal]) -> Context | None:
     exponents: list[int] = []
     for price in prices:
         exponent = price.as_tuple().exponent
@@ -75,16 +98,18 @@ def _calculation_context(prices: list[Decimal]) -> Context:
     minimum_exponent = min(exponents)
     maximum_adjusted = max(price.adjusted() for price in prices)
     exact_sum_digits = maximum_adjusted - minimum_exponent + 1 + len(str(len(prices)))
-    return Context(
-        prec=max(_MINIMUM_CALCULATION_PRECISION, exact_sum_digits),
-        rounding=ROUND_HALF_EVEN,
-    )
+    return _decimal_context(max(_MINIMUM_CALCULATION_PRECISION, exact_sum_digits))
 
 
 def _as_decimal(value: object) -> Decimal | None:
     if isinstance(value, bool) or not isinstance(value, Decimal):
         return None
     if not value.is_finite() or value <= Decimal("0"):
+        return None
+    exponent = value.as_tuple().exponent
+    if not isinstance(exponent, int):
+        return None
+    if _decimal_context(_cents_precision(value)) is None:
         return None
     return value
 
@@ -97,11 +122,13 @@ def _quantize_cents(value: Decimal) -> Decimal | None:
     exponent = value.as_tuple().exponent
     if not isinstance(exponent, int):
         return None
-    precision = max(_MINIMUM_CALCULATION_PRECISION, value.adjusted() + 3)
+    context = _decimal_context(_cents_precision(value))
+    if context is None:
+        return None
     try:
-        with localcontext(Context(prec=precision, rounding=ROUND_HALF_EVEN)):
+        with localcontext(context):
             return value.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
-    except InvalidOperation:
+    except (InvalidOperation, ValueError, OverflowError):
         return None
 
 
@@ -153,7 +180,10 @@ def alibaba_representative_price(product: object) -> Decimal | None:
     minimum, maximum = bounds
     if minimum == maximum:
         return minimum
-    with localcontext(_calculation_context([minimum, maximum])):
+    context = _calculation_context([minimum, maximum])
+    if context is None:
+        return None
+    with localcontext(context):
         return (minimum + maximum) / _TWO
 
 
@@ -172,7 +202,10 @@ def alibaba_percentile(ordered: Sequence[Decimal], percentile: Decimal) -> Decim
         raise ValueError("percentile requires at least one value")
     if count == 1:
         return values[0]
-    with localcontext(_calculation_context(values)):
+    context = _calculation_context(values)
+    if context is None:
+        raise ValueError("percentile requires representable prices")
+    with localcontext(context):
         position = Decimal(count - 1) * percentile
         integral = position.to_integral_value(rounding=ROUND_FLOOR)
         if position == integral:
@@ -190,7 +223,10 @@ def alibaba_trimmed_mean(ordered: Sequence[Decimal]) -> Decimal:
     count = len(values)
     if count == 0:
         raise ValueError("trimmed mean requires at least one value")
-    with localcontext(_calculation_context(values)):
+    context = _calculation_context(values)
+    if context is None:
+        raise ValueError("trimmed mean requires representable prices")
+    with localcontext(context):
         trim = (Decimal(count) * _TRIM_FRACTION).to_integral_value(rounding=ROUND_FLOOR)
         start = int(trim)
         stop = count - start
@@ -228,7 +264,10 @@ def calculate_alibaba_price_statistics(products: Sequence[object]) -> AlibabaPri
     ordered = sorted(values)
     count = len(values)
     middle = count // 2
-    with localcontext(_calculation_context(values)):
+    context = _calculation_context(values)
+    if context is None:
+        return _empty_statistics(total)
+    with localcontext(context):
         average = sum(values, Decimal("0")) / Decimal(count)
         if count % 2:
             median = ordered[middle]

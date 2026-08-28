@@ -2121,6 +2121,83 @@ def test_successfully_parsed_ranges_keep_ordered_bounds() -> None:
         assert bounds[0] <= bounds[1]
 
 
+def _assert_no_usable_positive_price(raw: str) -> AlibabaProduct:
+    display, min_price, max_price, _currency = parse_alibaba_price(raw)
+    assert display == raw
+    assert min_price is None
+    assert max_price is None
+    product = map_alibaba_item({"title": "Mouse", "price": raw, "currency": "USD"})
+    assert product is not None
+    assert product.price_display == raw
+    assert product.min_price is None
+    assert product.max_price is None
+    assert alibaba_price_bounds(product) is None
+    assert alibaba_representative_price(product) is None
+    row = _assert_search_row_survives(product)
+    assert row["price_min"] == ""
+    assert row["price_max"] == ""
+    stats = calculate_alibaba_price_statistics([product])
+    assert stats.priced_products == 0
+    assert stats.minimum is None
+    scores = score_alibaba_listings([product])
+    assert scores[0].price_score == 0
+    return product
+
+
+def test_minus_before_currency_does_not_fabricate_a_positive_price() -> None:
+    for raw in (
+        "-4.50",
+        "-$4.50",
+        "$-4.50",
+        "USD -4.50",
+        "USD -$4.50",
+        "USD - $4.50",
+        "USD $-4.50",
+        "EUR -$4.50",
+        "CAD -$4.50",
+        "US -$4.50",
+        "USD-$4.50",
+        "-$ 4.50",
+        "- $4.50",
+        "USD -$ 4.50",
+    ):
+        _assert_no_usable_positive_price(raw)
+
+
+def test_valid_signed_currency_and_range_forms_remain_usable() -> None:
+    for raw, expected_min, expected_max in (
+        ("$4.50", Decimal("4.50"), Decimal("4.50")),
+        ("USD $4.50", Decimal("4.50"), Decimal("4.50")),
+        ("USD 4.50", Decimal("4.50"), Decimal("4.50")),
+        ("$1.30-$1.60", Decimal("1.30"), Decimal("1.60")),
+        ("USD $1.30-$1.60", Decimal("1.30"), Decimal("1.60")),
+        ("US $1.00-$9.00", Decimal("1.00"), Decimal("9.00")),
+    ):
+        display, min_price, max_price, _currency = parse_alibaba_price(raw)
+        assert display == raw
+        assert min_price == expected_min
+        assert max_price == expected_max
+        assert min_price <= max_price
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        assert product.min_price == expected_min
+        assert product.max_price == expected_max
+        _assert_search_row_survives(product)
+
+
+def test_negative_second_range_bound_does_not_become_positive() -> None:
+    for raw in (
+        "$1.30--1.60",
+        "$1.30-$-1.60",
+        "$1.30-USD -$1.60",
+        "USD $1.30 - -$1.60",
+        "$1.30-EUR -$1.60",
+    ):
+        product = _assert_no_usable_positive_price(raw)
+        assert product.min_price is None
+        assert product.max_price is None
+
+
 def test_mapper_keeps_missing_optional_identity_fields() -> None:
     product = map_alibaba_item({"title": "Mouse", "price": "USD 4.03", "moq": True})
     assert product is not None
