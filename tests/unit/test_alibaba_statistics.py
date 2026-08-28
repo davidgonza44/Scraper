@@ -87,7 +87,13 @@ def test_quantize_cents_fail_closes_above_max_prec() -> None:
 def test_calculation_context_does_not_raise_for_unrepresentable_precision() -> None:
     over = _huge(_OVER_EXPONENT)
     normal = Decimal("4.00")
-    for group in ([over], [normal, over], [over, normal], [over, over]):
+    for group in (
+        [over],
+        [normal, over],
+        [over, normal],
+        [over, over],
+        [normal, over, normal],
+    ):
         context = _calculation_context(group)
         assert context is None or context.prec <= MAX_PREC
 
@@ -109,14 +115,17 @@ def test_textual_near_max_exponent_does_not_crash_rows() -> None:
 def test_unrepresentable_usd_price_does_not_contaminate_or_abort_siblings() -> None:
     over = _huge(_OVER_EXPONENT)
     extreme = _usd_product("extreme", over)
-    normal = map_alibaba_item({"title": "ok", "price": "$4.00", "currency": "USD"})
-    assert normal is not None
+    low = map_alibaba_item({"title": "ok-low", "price": "$4.00", "currency": "USD"})
+    high = map_alibaba_item({"title": "ok-high", "price": "$6.00", "currency": "USD"})
+    assert low is not None
+    assert high is not None
     assert alibaba_price_bounds(extreme) is None
     assert alibaba_representative_price(extreme) is None
 
     for products in (
-        [normal, extreme],
-        [extreme, normal],
+        [low, extreme],
+        [extreme, low],
+        [low, extreme, high],
         [extreme, _usd_product("extreme-2", over)],
     ):
         payload = gui_services.run_alibaba_search(
@@ -129,13 +138,15 @@ def test_unrepresentable_usd_price_does_not_contaminate_or_abort_siblings() -> N
         stats = calculate_alibaba_price_statistics(products)
         scores = score_alibaba_listings(products)
         assert len(scores) == len(products)
-        if any(item.title == "ok" for item in products):
-            assert stats.priced_products == 1
-            assert stats.minimum == Decimal("4.00")
-            assert stats.maximum == Decimal("4.00")
-            ok_index = [item.title for item in products].index("ok")
-            assert payload["results"][ok_index]["price"]
-            assert scores[ok_index].price_score >= 0
+        if any(item.title.startswith("ok") for item in products):
+            ok_products = [item for item in products if item.title.startswith("ok")]
+            assert stats.priced_products == len(ok_products)
+            assert stats.minimum == min(item.min_price for item in ok_products)
+            assert stats.maximum == max(item.max_price for item in ok_products)
+            for index, item in enumerate(products):
+                if item.title.startswith("ok"):
+                    assert payload["results"][index]["price"]
+                    assert scores[index].price_score >= 0
         else:
             assert stats.priced_products == 0
             assert stats.minimum is None
