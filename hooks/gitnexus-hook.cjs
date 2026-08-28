@@ -42,23 +42,9 @@ function isGlobalRegistryDir(candidate) {
   );
 }
 
-function walkForGitNexusDir(startDir) {
-  let dir = startDir;
-  for (let i = 0; i < 5; i++) {
-    const candidate = path.join(dir, '.gitnexus');
-    if (fs.existsSync(candidate)) {
-      if (!isGlobalRegistryDir(candidate)) return candidate;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-function findCanonicalRepoRoot(cwd) {
+function gitStdout(cwd, args) {
   try {
-    const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    const result = spawnSync('git', args, {
       encoding: 'utf-8',
       timeout: 2000,
       cwd,
@@ -66,54 +52,175 @@ function findCanonicalRepoRoot(cwd) {
       windowsHide: true,
     });
     if (result.error || result.status !== 0) return null;
-    const commonDir = (result.stdout || '').trim();
-    if (!commonDir || !path.isAbsolute(commonDir)) return null;
-    return path.dirname(commonDir);
+    const out = (result.stdout || '').trim();
+    return out || null;
   } catch {
     return null;
   }
 }
 
-function findGitNexusDir(startDir) {
-  const cwd = startDir || process.cwd();
-  const fromCwd = walkForGitNexusDir(cwd);
-  if (fromCwd) return fromCwd;
-  const canonicalRoot = findCanonicalRepoRoot(cwd);
-  if (canonicalRoot && canonicalRoot !== cwd) {
-    return walkForGitNexusDir(canonicalRoot);
+function findWorkingTreeRoot(cwd) {
+  const toplevel = gitStdout(cwd, ['rev-parse', '--show-toplevel']);
+  return toplevel ? path.resolve(toplevel) : null;
+}
+
+function findCanonicalRepoRoot(cwd) {
+  const commonDir = gitStdout(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!commonDir) return null;
+  const resolved = path.resolve(commonDir.replace(/[/\\]+$/, ''));
+  // Worktrees share the main repo's `.git`. Submodules use `.git/modules/<name>`,
+  // which must not be treated as another repository root to walk from.
+  if (path.basename(resolved) !== '.git') return null;
+  return path.dirname(resolved);
+}
+
+function walkForGitNexusDir(startDir, stopDir) {
+  const stop = path.resolve(stopDir);
+  const stopPrefix = stop.endsWith(path.sep) ? stop : stop + path.sep;
+  let dir = path.resolve(startDir);
+  for (let i = 0; i < 64; i++) {
+    const inBounds = dir === stop || dir.startsWith(stopPrefix);
+    if (inBounds) {
+      const candidate = path.join(dir, '.gitnexus');
+      if (fs.existsSync(candidate) && !isGlobalRegistryDir(candidate)) {
+        return candidate;
+      }
+    }
+    if (dir === stop) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
   return null;
+}
+
+function findGitNexusDir(startDir) {
+  const cwd = path.resolve(startDir || process.cwd());
+  const workTreeRoot = findWorkingTreeRoot(cwd);
+  if (!workTreeRoot) return null;
+  const fromWorkTree = walkForGitNexusDir(cwd, workTreeRoot);
+  if (fromWorkTree) return fromWorkTree;
+  const canonicalRoot = findCanonicalRepoRoot(cwd);
+  if (canonicalRoot && path.resolve(canonicalRoot) !== workTreeRoot) {
+    return walkForGitNexusDir(canonicalRoot, canonicalRoot);
+  }
+  return null;
+}
+
+// Pattern-bearing options: the following token (or attached value) IS the search pattern.
+// Distinct from options that consume a non-pattern argument.
+const PATTERN_LONG = new Set(['regexp']);
+const PATTERN_SHORT = new Set(['e']);
+
+// Required-value long options from `rg --help` / `grep --help` (excluding regexp).
+const RG_VALUE_LONG = new Set([
+  'after-context',
+  'before-context',
+  'colors',
+  'context',
+  'context-separator',
+  'cursor-ignore',
+  'dfa-size-limit',
+  'encoding',
+  'engine',
+  'field-context-separator',
+  'field-match-separator',
+  'file',
+  'generate',
+  'glob',
+  'hostname-bin',
+  'hyperlink-format',
+  'iglob',
+  'ignore-file',
+  'max-columns',
+  'max-count',
+  'max-depth',
+  'max-filesize',
+  'path-separator',
+  'pre',
+  'pre-glob',
+  'regex-size-limit',
+  'replace',
+  'sort',
+  'sortr',
+  'threads',
+  'type',
+  'type-add',
+  'type-clear',
+  'type-not',
+]);
+const GREP_VALUE_LONG = new Set([
+  'after-context',
+  'before-context',
+  'binary-files',
+  'context',
+  'devices',
+  'directories',
+  'exclude',
+  'exclude-dir',
+  'exclude-from',
+  'file',
+  'group-separator',
+  'include',
+  'label',
+  'max-count',
+]);
+// Optional values (`--color[=WHEN]`): consume `--opt=value`, or a following
+// token only when it is a recognized WHEN value. Bare `--color` must not
+// swallow the search pattern.
+const OPTIONAL_VALUE_LONG = new Set(['color', 'colour']);
+const OPTIONAL_VALUE_TOKENS = new Set(['always', 'never', 'auto', 'ansi']);
+const RG_VALUE_SHORT = new Set(['f', 'E', 'm', 'j', 'g', 'd', 't', 'T', 'A', 'B', 'C', 'M', 'r']);
+const GREP_VALUE_SHORT = new Set(['f', 'm', 'd', 'D', 'A', 'B', 'C']);
+
+function detectSearchTool(token) {
+  if (/\brg$/.test(token)) return 'rg';
+  if (/\bgrep$/.test(token)) return 'grep';
+  return null;
+}
+
+function cleanPatternToken(token) {
+  const pattern = String(token).replace(/['"]/g, '');
+  return pattern.length >= 3 ? pattern : null;
+}
+
+function valueLongSet(tool) {
+  return tool === 'grep' ? GREP_VALUE_LONG : RG_VALUE_LONG;
+}
+
+function valueShortSet(tool) {
+  return tool === 'grep' ? GREP_VALUE_SHORT : RG_VALUE_SHORT;
 }
 
 function parseRgGrepPattern(cmd) {
   const tokens = cmd.split(/\s+/);
   let foundCmd = false;
+  let tool = 'rg';
   let skipNext = false;
-  const flagsWithValues = new Set([
-    '-f',
-    '-m',
-    '-A',
-    '-B',
-    '-C',
-    '-g',
-    '--glob',
-    '-t',
-    '--type',
-    '--include',
-    '--exclude',
-  ]);
 
   for (const token of tokens) {
     if (skipNext === 'pattern') {
-      const pattern = token.replace(/['"]/g, '');
-      return pattern.length >= 3 ? pattern : null;
+      return cleanPatternToken(token);
     }
-    if (skipNext) {
+    if (skipNext === 'optional') {
+      skipNext = false;
+      const lowered = token.toLowerCase().replace(/['"]/g, '');
+      if (OPTIONAL_VALUE_TOKENS.has(lowered)) continue;
+      // Fall through and parse this token as a flag or pattern.
+    } else if (skipNext) {
       skipNext = false;
       continue;
     }
     if (!foundCmd) {
-      if (/\brg$|\bgrep$/.test(token)) foundCmd = true;
+      const detected = detectSearchTool(token);
+      if (detected) {
+        foundCmd = true;
+        tool = detected;
+      }
+      continue;
+    }
+    if (token === '--') {
+      skipNext = 'pattern';
       continue;
     }
     if (token === '-e' || token === '--regexp') {
@@ -121,19 +228,42 @@ function parseRgGrepPattern(cmd) {
       continue;
     }
     if (token.startsWith('--regexp=')) {
-      const pattern = token.slice('--regexp='.length).replace(/['"]/g, '');
-      return pattern.length >= 3 ? pattern : null;
+      return cleanPatternToken(token.slice('--regexp='.length));
     }
-    if (token.startsWith('-e') && token.length > 2) {
-      const pattern = token.slice(2).replace(/['"]/g, '');
-      return pattern.length >= 3 ? pattern : null;
+    if (token.startsWith('-e') && token.length > 2 && !token.startsWith('--')) {
+      return cleanPatternToken(token.slice(2));
     }
-    if (token.startsWith('-')) {
-      if (flagsWithValues.has(token)) skipNext = true;
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      const name = (eq === -1 ? token.slice(2) : token.slice(2, eq)).toLowerCase();
+      if (PATTERN_LONG.has(name)) {
+        if (eq === -1) skipNext = 'pattern';
+        else return cleanPatternToken(token.slice(eq + 1));
+        continue;
+      }
+      if (eq !== -1) continue;
+      if (OPTIONAL_VALUE_LONG.has(name)) {
+        skipNext = 'optional';
+        continue;
+      }
+      if (valueLongSet(tool).has(name)) skipNext = true;
       continue;
     }
-    const cleaned = token.replace(/['"]/g, '');
-    return cleaned.length >= 3 ? cleaned : null;
+    if (token.startsWith('-') && token.length > 1) {
+      if (/^-\d+$/.test(token)) continue;
+      const body = token.slice(1);
+      const shorts = valueShortSet(tool);
+      if (PATTERN_SHORT.has(body[0]) && body.length > 1) {
+        return cleanPatternToken(body.slice(1));
+      }
+      if (body.length === 1 && shorts.has(body)) {
+        skipNext = true;
+        continue;
+      }
+      if (body.length > 1 && shorts.has(body[0])) continue;
+      continue;
+    }
+    return cleanPatternToken(token);
   }
   return null;
 }
@@ -357,5 +487,7 @@ module.exports = {
   runGitNexusCli,
   extractPattern,
   findGitNexusDir,
+  findCanonicalRepoRoot,
+  walkForGitNexusDir,
   npmGlobalNodeModules,
 };

@@ -5,6 +5,97 @@ const HOOK_LOCK_SUBDIR = '.hook-locks';
 const HOOK_LOCK_MAX_INFLIGHT = 3;
 const HOOK_LOCK_STALE_MS = 30000;
 
+function pidIsLive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // ESRCH = process gone. EPERM = process exists but owned by another user.
+    if (e && e.code === 'ESRCH') return false;
+    return true;
+  }
+}
+
+function ownerLiveness(ownerStr, mtimeMs, now = Date.now()) {
+  let isLive = false;
+  if (ownerStr === '') {
+    // Owner created the file but hasn't written its PID yet. The wx
+    // open+write window is microseconds; treat as live unless stale.
+    isLive = true;
+  } else {
+    const owner = Number.parseInt(ownerStr, 10);
+    if (Number.isFinite(owner) && owner > 0) {
+      isLive = pidIsLive(owner);
+    }
+  }
+  // For files younger than HOOK_LOCK_STALE_MS, PID-liveness wins -- a
+  // slow-but-alive hook is never wrongly evicted. For older files, age is
+  // the final arbiter as a defense against PID reuse on long-abandoned
+  // claims. 30s >> the 7s augment timeout, so a healthy run never crosses
+  // this threshold. Reclaim sidecars use the same timeout: they should only
+  // exist for the microseconds of stale-slot cleanup.
+  if (isLive && now - mtimeMs > HOOK_LOCK_STALE_MS) {
+    isLive = false;
+  }
+  return isLive;
+}
+
+function readOwnerMetadata(fd) {
+  const stat = fs.fstatSync(fd);
+  const buf = Buffer.alloc(64);
+  const n = fs.readSync(fd, buf, 0, 64, 0);
+  const ownerStr = buf.slice(0, n).toString('utf-8').trim().split(/\r?\n/, 1)[0] || '';
+  return {
+    stat,
+    ownerStr,
+    isLive: ownerLiveness(ownerStr, stat.mtimeMs),
+  };
+}
+
+function unlinkIfSameIdentity(filePath, observedStat) {
+  if (!observedStat) return false;
+  try {
+    const current = fs.statSync(filePath);
+    if (current.dev === observedStat.dev && current.ino === observedStat.ino) {
+      fs.unlinkSync(filePath);
+      return true;
+    }
+  } catch {
+    /* replaced or already gone */
+  }
+  return false;
+}
+
+function tryCreateExclusive(filePath, contents) {
+  try {
+    fs.writeFileSync(filePath, contents, { flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireStaleClaim(claimPath, contents) {
+  if (tryCreateExclusive(claimPath, contents)) return true;
+  let fd;
+  try {
+    fd = fs.openSync(claimPath, 'r');
+  } catch {
+    return tryCreateExclusive(claimPath, contents);
+  }
+  let meta;
+  try {
+    meta = readOwnerMetadata(fd);
+  } catch {
+    meta = null;
+  } finally {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
+  }
+  if (!meta || meta.isLive) return false;
+  unlinkIfSameIdentity(claimPath, meta.stat);
+  return tryCreateExclusive(claimPath, contents);
+}
+
 function acquireHookSlot(gitNexusDir) {
   const lockDir = path.join(gitNexusDir, HOOK_LOCK_SUBDIR);
   try {
@@ -52,46 +143,12 @@ function acquireHookSlot(gitNexusDir) {
           continue; // Vanished between EEXIST and open -- retry this slot.
         }
         let isLive = false;
-        let mtimeMs = Date.now();
         try {
-          observedStat = fs.fstatSync(fd);
-          mtimeMs = observedStat.mtimeMs;
-          const buf = Buffer.alloc(32);
-          const n = fs.readSync(fd, buf, 0, 32, 0);
-          const ownerStr = buf.slice(0, n).toString('utf-8').trim();
-          if (ownerStr === '') {
-            // Owner created the file but hasn't written its PID yet. The
-            // wx open+write window is microseconds; give it the benefit
-            // of the doubt and treat as live.
-            isLive = true;
-          } else {
-            const owner = Number.parseInt(ownerStr, 10);
-            if (Number.isFinite(owner) && owner > 0) {
-              try {
-                process.kill(owner, 0);
-                isLive = true;
-              } catch (e) {
-                // ESRCH = process gone -> treat as dead. EPERM = process exists
-                // but owned by another user (cross-user lock dir) -> still alive,
-                // keep the slot. Anything else: be conservative, assume alive.
-                if (e && e.code === 'ESRCH') {
-                  isLive = false;
-                } else {
-                  isLive = true;
-                }
-              }
-            }
-          }
+          const meta = readOwnerMetadata(fd);
+          observedStat = meta.stat;
+          isLive = meta.isLive;
         } catch {
           /* unreadable -- treat as dead */
-        }
-        // For slots younger than HOOK_LOCK_STALE_MS, PID-liveness wins --
-        // a slow-but-alive hook is never wrongly evicted. For older slots,
-        // age is the final arbiter as a defense against PID reuse on long-
-        // abandoned slots. 30s >> the 7s augment timeout, so a healthy run
-        // never crosses this threshold.
-        if (isLive && Date.now() - mtimeMs > HOOK_LOCK_STALE_MS) {
-          isLive = false;
         }
         if (isLive) {
           try { fs.closeSync(fd); } catch { /* already closed */ }
@@ -100,30 +157,22 @@ function acquireHookSlot(gitNexusDir) {
         // Serialize stale cleanup with a sidecar created via wx. After owning
         // the claim, compare file identity to the still-open instance we
         // inspected. A contender that replaced it before the claim therefore
-        // cannot have its new live lock removed.
+        // cannot have its new live lock removed. Abandoned reclaim sidecars
+        // are recovered only when their owner is dead or stale; a live
+        // reclaim claimant is never stolen.
         const claimPath = `${slotPath}.reclaim`;
         const claimToken = `${myPidStr}-${Date.now()}-${Math.random()}`;
-        try {
-          fs.writeFileSync(claimPath, claimToken, { flag: 'wx' });
-        } catch {
+        const claimRecord = `${myPidStr}\n${claimToken}`;
+        if (!acquireStaleClaim(claimPath, claimRecord)) {
           try { fs.closeSync(fd); } catch { /* already closed */ }
           break;
         }
         try {
-          const currentStat = fs.statSync(slotPath);
-          if (
-            observedStat &&
-            currentStat.dev === observedStat.dev &&
-            currentStat.ino === observedStat.ino
-          ) {
-            fs.unlinkSync(slotPath);
-          }
-        } catch {
-          /* stale instance already removed */
+          unlinkIfSameIdentity(slotPath, observedStat);
         } finally {
           try { fs.closeSync(fd); } catch { /* already closed */ }
           try {
-            if (fs.readFileSync(claimPath, 'utf8') === claimToken) fs.unlinkSync(claimPath);
+            if (fs.readFileSync(claimPath, 'utf8') === claimRecord) fs.unlinkSync(claimPath);
           } catch {
             /* claim already removed or replaced */
           }
@@ -141,4 +190,7 @@ module.exports = {
   HOOK_LOCK_MAX_INFLIGHT,
   HOOK_LOCK_STALE_MS,
   acquireHookSlot,
+  pidIsLive,
+  ownerLiveness,
+  unlinkIfSameIdentity,
 };
