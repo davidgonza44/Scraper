@@ -90,7 +90,6 @@ function parseRgGrepPattern(cmd) {
   let foundCmd = false;
   let skipNext = false;
   const flagsWithValues = new Set([
-    '-e',
     '-f',
     '-m',
     '-A',
@@ -105,6 +104,10 @@ function parseRgGrepPattern(cmd) {
   ]);
 
   for (const token of tokens) {
+    if (skipNext === 'pattern') {
+      const pattern = token.replace(/['"]/g, '');
+      return pattern.length >= 3 ? pattern : null;
+    }
     if (skipNext) {
       skipNext = false;
       continue;
@@ -112,6 +115,18 @@ function parseRgGrepPattern(cmd) {
     if (!foundCmd) {
       if (/\brg$|\bgrep$/.test(token)) foundCmd = true;
       continue;
+    }
+    if (token === '-e' || token === '--regexp') {
+      skipNext = 'pattern';
+      continue;
+    }
+    if (token.startsWith('--regexp=')) {
+      const pattern = token.slice('--regexp='.length).replace(/['"]/g, '');
+      return pattern.length >= 3 ? pattern : null;
+    }
+    if (token.startsWith('-e') && token.length > 2) {
+      const pattern = token.slice(2).replace(/['"]/g, '');
+      return pattern.length >= 3 ? pattern : null;
     }
     if (token.startsWith('-')) {
       if (flagsWithValues.has(token)) skipNext = true;
@@ -191,19 +206,23 @@ function extractPattern(toolName, toolInput) {
   return null;
 }
 
-function npmGlobalNodeModules() {
+function npmGlobalNodeModules(
+  executable = process.execPath,
+  platform = process.platform,
+  env = process.env,
+) {
   const roots = [];
-  if (process.env.NODE_PATH) {
-    for (const part of process.env.NODE_PATH.split(path.delimiter)) {
+  if (env.NODE_PATH) {
+    for (const part of env.NODE_PATH.split(path.delimiter)) {
       if (part) roots.push(part);
     }
   }
-  if (process.platform === 'win32') {
-    if (process.env.APPDATA) {
-      roots.push(path.join(process.env.APPDATA, 'npm', 'node_modules'));
+  if (platform === 'win32') {
+    if (env.APPDATA) {
+      roots.push(path.join(env.APPDATA, 'npm', 'node_modules'));
     }
   } else {
-    const home = process.env.HOME || '';
+    const home = env.HOME || '';
     if (home) {
       roots.push(path.join(home, '.npm-global', 'lib', 'node_modules'));
       roots.push(path.join(home, '.local', 'lib', 'node_modules'));
@@ -211,9 +230,12 @@ function npmGlobalNodeModules() {
     roots.push('/usr/local/lib/node_modules');
     roots.push('/usr/lib/node_modules');
   }
-  const execDir = path.dirname(process.execPath);
+  const execDir = path.dirname(executable);
   roots.push(path.join(execDir, 'node_modules'));
   roots.push(path.join(execDir, 'lib', 'node_modules'));
+  if (platform !== 'win32' && path.basename(execDir) === 'bin') {
+    roots.push(path.join(path.dirname(execDir), 'lib', 'node_modules'));
+  }
   return roots;
 }
 
@@ -335,4 +357,5 @@ module.exports = {
   runGitNexusCli,
   extractPattern,
   findGitNexusDir,
+  npmGlobalNodeModules,
 };

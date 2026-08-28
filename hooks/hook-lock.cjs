@@ -45,6 +45,7 @@ function acquireHookSlot(gitNexusDir) {
         // no TOCTOU between the metadata check and the content read
         // (codeql js/file-system-race).
         let fd;
+        let observedStat;
         try {
           fd = fs.openSync(slotPath, 'r');
         } catch {
@@ -53,7 +54,8 @@ function acquireHookSlot(gitNexusDir) {
         let isLive = false;
         let mtimeMs = Date.now();
         try {
-          mtimeMs = fs.fstatSync(fd).mtimeMs;
+          observedStat = fs.fstatSync(fd);
+          mtimeMs = observedStat.mtimeMs;
           const buf = Buffer.alloc(32);
           const n = fs.readSync(fd, buf, 0, 32, 0);
           const ownerStr = buf.slice(0, n).toString('utf-8').trim();
@@ -82,12 +84,6 @@ function acquireHookSlot(gitNexusDir) {
           }
         } catch {
           /* unreadable -- treat as dead */
-        } finally {
-          try {
-            fs.closeSync(fd);
-          } catch {
-            /* already closed */
-          }
         }
         // For slots younger than HOOK_LOCK_STALE_MS, PID-liveness wins --
         // a slow-but-alive hook is never wrongly evicted. For older slots,
@@ -97,11 +93,40 @@ function acquireHookSlot(gitNexusDir) {
         if (isLive && Date.now() - mtimeMs > HOOK_LOCK_STALE_MS) {
           isLive = false;
         }
-        if (isLive) break; // Try the next slot.
+        if (isLive) {
+          try { fs.closeSync(fd); } catch { /* already closed */ }
+          break; // Try the next slot.
+        }
+        // Serialize stale cleanup with a sidecar created via wx. After owning
+        // the claim, compare file identity to the still-open instance we
+        // inspected. A contender that replaced it before the claim therefore
+        // cannot have its new live lock removed.
+        const claimPath = `${slotPath}.reclaim`;
+        const claimToken = `${myPidStr}-${Date.now()}-${Math.random()}`;
         try {
-          fs.unlinkSync(slotPath);
+          fs.writeFileSync(claimPath, claimToken, { flag: 'wx' });
         } catch {
-          /* another hook beat us to it -- retry will hit EEXIST */
+          try { fs.closeSync(fd); } catch { /* already closed */ }
+          break;
+        }
+        try {
+          const currentStat = fs.statSync(slotPath);
+          if (
+            observedStat &&
+            currentStat.dev === observedStat.dev &&
+            currentStat.ino === observedStat.ino
+          ) {
+            fs.unlinkSync(slotPath);
+          }
+        } catch {
+          /* stale instance already removed */
+        } finally {
+          try { fs.closeSync(fd); } catch { /* already closed */ }
+          try {
+            if (fs.readFileSync(claimPath, 'utf8') === claimToken) fs.unlinkSync(claimPath);
+          } catch {
+            /* claim already removed or replaced */
+          }
         }
         // Loop and retry this slot.
       }
