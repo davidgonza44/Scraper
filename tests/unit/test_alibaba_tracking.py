@@ -21,6 +21,7 @@ from bera_price_tracker.application.alibaba_tracking import (
     UNKNOWN_LISTING,
     AlibabaFollowError,
     AlibabaFollowObservation,
+    AlibabaTrackedProduct,
     FollowAlibabaPrice,
     ListAlibabaTracked,
     RecordAlibabaPriceSnapshot,
@@ -479,6 +480,36 @@ def test_two_canonical_observations_compare_between_themselves() -> None:
     assert variation.percentage_change.quantize(Decimal("0.01")) == Decimal("-2.96")
     assert variation.historical_minimum == Decimal("105")
     assert variation.historical_maximum == Decimal("108.20")
+
+
+def test_tracked_price_decrease_renders_as_negative_known_amount() -> None:
+    provisional = _price_observation("98.70", minimum="89.20", maximum="108.20")
+    first = _price_observation(
+        "108.20", query=f"{REFRESH_QUERY_PREFIX}op-1", at=BASE + timedelta(hours=1)
+    )
+    second = _price_observation(
+        "105", query=f"{REFRESH_QUERY_PREFIX}op-2", at=BASE + timedelta(hours=2)
+    )
+    history = (provisional, first, second)
+    variation = calculate_alibaba_tracking_variation(list(history))
+    assert variation.absolute_change == Decimal("-3.20")
+    tracked = AlibabaTrackedProduct(
+        product_id="1600000000000",
+        title="Wireless Mouse",
+        supplier_name="Example Electronics Co., Ltd.",
+        url="https://www.alibaba.com/product-detail/1600000000000.html",
+        is_active=True,
+        current_price_display="$105.00",
+        price_min=Decimal("105"),
+        price_max=Decimal("105"),
+        last_updated=BASE + timedelta(hours=2),
+        variation=variation,
+        history=history,
+    )
+    row = services.tracked_product_to_row(tracked)
+    assert row["variation"].startswith("$-3.20")
+    assert "unavailable" not in row["variation"]
+    assert row["last_price"] == "$105.00"
 
 
 def test_canonical_min_max_ignore_provisional_midpoint() -> None:

@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, Context, Decimal, localcontext
+from decimal import (
+    MAX_PREC,
+    ROUND_CEILING,
+    ROUND_FLOOR,
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    InvalidOperation,
+    localcontext,
+)
 
 _MINIMUM_CALCULATION_PRECISION = 50
+ALIBABA_DECIMAL_WORK_PRECISION_CAP = 10_000
 _DISPLAY_CENTS = Decimal("0.01")
 _TWO = Decimal("2")
 _ONE_POINT_FIVE = Decimal("1.5")
@@ -57,28 +67,149 @@ def _empty_statistics(total: int) -> AlibabaPriceStatistics:
     )
 
 
-def _calculation_context(prices: list[Decimal]) -> Context:
+def _bounded_precision(required: int) -> int | None:
+    """Return ``required`` only when it is a safe ``Context.prec`` value.
+
+    ``MAX_PREC`` is only Decimal's legal upper bound. Provider-controlled
+    exponents can still request prohibitive coefficient work below that
+    limit. ``ALIBABA_DECIMAL_WORK_PRECISION_CAP`` is a deterministic
+    computational cap, not a commercial price maximum.
+    """
+
+    cap = min(MAX_PREC, ALIBABA_DECIMAL_WORK_PRECISION_CAP)
+    if required < 1 or required > cap:
+        return None
+    return required
+
+
+def _decimal_context(precision: int) -> Context | None:
+    bounded = _bounded_precision(precision)
+    if bounded is None:
+        return None
+    try:
+        return Context(prec=bounded, rounding=ROUND_HALF_EVEN)
+    except (ValueError, InvalidOperation, OverflowError):
+        return None
+
+
+def _cents_precision(value: Decimal) -> int:
+    return max(_MINIMUM_CALCULATION_PRECISION, value.adjusted() + 3)
+
+
+def _canonical_exponent(value: Decimal) -> int:
+    """Return the exponent after stripping insignificant trailing zeros.
+
+    Provider Decimals may equal an ordinary magnitude while storing a padded
+    coefficient such as ``1.000...0``. Context compatibility must use the
+    significant coefficient, not that notation. This inspects ``as_tuple()``
+    only: it does not round and does not use ``Decimal.normalize()``.
+    """
+
+    _sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):
+        raise ValueError("statistics prices must be finite")
+    trailing = 0
+    while trailing < len(digits) - 1 and digits[-1 - trailing] == 0:
+        trailing += 1
+    return exponent + trailing
+
+
+def _decimal_in_context_range(value: Decimal, context: Context) -> bool:
+    """True when ``value`` is a normal in ``context`` (Emin..Emax).
+
+    ``Etiny`` is the subnormal floor. Values below ``Emin`` underflow this
+    pipeline rather than participating as a usable price.
+    """
+
+    try:
+        adjusted = value.adjusted()
+    except (ArithmeticError, InvalidOperation, OverflowError, ValueError):
+        return False
+    return context.Emin <= adjusted <= context.Emax
+
+
+def _representable_amount(value: Decimal) -> bool:
+    """Technical representability for cents formatting. Sign-neutral."""
+
+    if not value.is_finite():
+        return False
+    exponent = value.as_tuple().exponent
+    if not isinstance(exponent, int):
+        return False
+    context = _decimal_context(_cents_precision(value))
+    if context is None:
+        return False
+    return _decimal_in_context_range(value, context)
+
+
+def _representable_price(value: Decimal) -> bool:
+    """Published listing price: technically representable and strictly positive."""
+
+    return _representable_amount(value) and value > Decimal("0")
+
+
+def _calculation_context(prices: list[Decimal]) -> Context | None:
     exponents: list[int] = []
     for price in prices:
-        exponent = price.as_tuple().exponent
-        if not isinstance(exponent, int):
-            raise ValueError("statistics prices must be finite")
-        exponents.append(exponent)
+        exponents.append(_canonical_exponent(price))
     minimum_exponent = min(exponents)
     maximum_adjusted = max(price.adjusted() for price in prices)
-    exact_sum_digits = maximum_adjusted - minimum_exponent + 1 + len(str(len(prices)))
-    return Context(
-        prec=max(_MINIMUM_CALCULATION_PRECISION, exact_sum_digits),
-        rounding=ROUND_HALF_EVEN,
-    )
+    precision = _required_group_precision(maximum_adjusted, minimum_exponent, len(prices))
+    if precision is None:
+        return None
+    return _decimal_context(precision)
+
+
+def _required_group_precision(max_adjusted: int, min_exponent: int, count: int) -> int | None:
+    if count < 1:
+        return None
+    exact_sum_digits = max_adjusted - min_exponent + 1 + len(str(count))
+    return _bounded_precision(max(_MINIMUM_CALCULATION_PRECISION, exact_sum_digits))
+
+
+def _max_compatible_count(max_adjusted: int, min_exponent: int, available: int) -> int:
+    low = 1
+    high = available
+    best = 0
+    while low <= high:
+        mid = (low + high) // 2
+        if _required_group_precision(max_adjusted, min_exponent, mid) is not None:
+            best = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best
+
+
+def _window_cardinality(max_adjusted: int, min_exponent: int, available: int) -> int:
+    if available < 1:
+        return 0
+    if _required_group_precision(max_adjusted, min_exponent, available) is not None:
+        return available
+    return _max_compatible_count(max_adjusted, min_exponent, available)
 
 
 def _as_decimal(value: object) -> Decimal | None:
     if isinstance(value, bool) or not isinstance(value, Decimal):
         return None
-    if not value.is_finite() or value <= Decimal("0"):
+    if not _representable_price(value):
         return None
     return value
+
+
+def _quantize_cents(value: Decimal) -> Decimal | None:
+    """Quantize to display cents, or None if the coefficient cannot be represented."""
+
+    if not _representable_amount(value):
+        return None
+    context = _decimal_context(_cents_precision(value))
+    if context is None:
+        return None
+    try:
+        with localcontext(context):
+            return value.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    except (InvalidOperation, ValueError, OverflowError):
+        return None
 
 
 def explicit_alibaba_currency(value: object) -> str | None:
@@ -112,9 +243,14 @@ def alibaba_price_bounds(product: object) -> tuple[Decimal, Decimal] | None:
     minimum = _as_decimal(getattr(product, "min_price", None))
     if minimum is None:
         return None
-    maximum = _as_decimal(getattr(product, "max_price", None))
+    raw_maximum = getattr(product, "max_price", None)
+    if raw_maximum is None:
+        return minimum, minimum
+    maximum = _as_decimal(raw_maximum)
     if maximum is None:
-        maximum = minimum
+        return None
+    if minimum > maximum:
+        return None
     return minimum, maximum
 
 
@@ -127,7 +263,10 @@ def alibaba_representative_price(product: object) -> Decimal | None:
     minimum, maximum = bounds
     if minimum == maximum:
         return minimum
-    with localcontext(_calculation_context([minimum, maximum])):
+    context = _calculation_context([minimum, maximum])
+    if context is None:
+        return None
+    with localcontext(context):
         return (minimum + maximum) / _TWO
 
 
@@ -146,7 +285,10 @@ def alibaba_percentile(ordered: Sequence[Decimal], percentile: Decimal) -> Decim
         raise ValueError("percentile requires at least one value")
     if count == 1:
         return values[0]
-    with localcontext(_calculation_context(values)):
+    context = _calculation_context(values)
+    if context is None:
+        raise ValueError("percentile requires representable prices")
+    with localcontext(context):
         position = Decimal(count - 1) * percentile
         integral = position.to_integral_value(rounding=ROUND_FLOOR)
         if position == integral:
@@ -164,7 +306,10 @@ def alibaba_trimmed_mean(ordered: Sequence[Decimal]) -> Decimal:
     count = len(values)
     if count == 0:
         raise ValueError("trimmed mean requires at least one value")
-    with localcontext(_calculation_context(values)):
+    context = _calculation_context(values)
+    if context is None:
+        raise ValueError("trimmed mean requires representable prices")
+    with localcontext(context):
         trim = (Decimal(count) * _TRIM_FRACTION).to_integral_value(rounding=ROUND_FLOOR)
         start = int(trim)
         stop = count - start
@@ -191,6 +336,109 @@ def _usable_representatives(
     return mins, maxes, values
 
 
+def _eligible_for_group_statistics(values: list[Decimal]) -> list[bool]:
+    """Keep the largest order-independent subset that shares one Context.
+
+    Cardinality is maximized first. Ordinary magnitude, narrower exponent span,
+    and smaller required precision are used only to break equal-size ties.
+    """
+
+    count = len(values)
+    if count == 0:
+        return []
+    if _calculation_context(values) is not None:
+        return [True] * count
+
+    exponents = [_canonical_exponent(value) for value in values]
+    adjusted = [value.adjusted() for value in values]
+    abs_adjusted = [abs(item) for item in adjusted]
+    by_adjusted = sorted(range(count), key=lambda index: (adjusted[index], index))
+    by_rank = sorted(
+        range(count),
+        key=lambda index: (abs_adjusted[index], values[index], index),
+    )
+    unique_bounds = sorted(set(exponents))
+
+    def _for_each_window(observe: Callable[[int, int, list[int]], None]) -> None:
+        for min_exponent_bound in unique_bounds:
+            running_min_exponent: int | None = None
+            window: list[int] = []
+            cursor = 0
+            while cursor < count:
+                item = by_adjusted[cursor]
+                if exponents[item] < min_exponent_bound:
+                    cursor += 1
+                    continue
+                max_adjusted = adjusted[item]
+                while cursor < count:
+                    current = by_adjusted[cursor]
+                    if adjusted[current] != max_adjusted:
+                        break
+                    if exponents[current] >= min_exponent_bound:
+                        window.append(current)
+                        current_exponent = exponents[current]
+                        if running_min_exponent is None:
+                            running_min_exponent = current_exponent
+                        else:
+                            running_min_exponent = min(running_min_exponent, current_exponent)
+                    cursor += 1
+                if running_min_exponent is None:
+                    continue
+                observe(max_adjusted, running_min_exponent, window)
+
+    max_card = 0
+
+    def _note_cardinality(max_adjusted: int, min_exponent: int, window: list[int]) -> None:
+        nonlocal max_card
+        card = _window_cardinality(max_adjusted, min_exponent, len(window))
+        if card > max_card:
+            max_card = card
+
+    _for_each_window(_note_cardinality)
+    if max_card < 1:
+        return [False] * count
+
+    best_key: tuple[object, ...] | None = None
+    best_selected: set[int] | None = None
+
+    def _consider_window(max_adjusted: int, min_exponent: int, window: list[int]) -> None:
+        nonlocal best_key, best_selected
+        available = len(window)
+        card = _window_cardinality(max_adjusted, min_exponent, available)
+        if card < max_card:
+            return
+        if _required_group_precision(max_adjusted, min_exponent, available) is not None:
+            selected = list(window)
+        else:
+            membership = set(window)
+            selected = []
+            for index in by_rank:
+                if index in membership:
+                    selected.append(index)
+                    if len(selected) == card:
+                        break
+        selected_count = len(selected)
+        selected_min_exponent = min(exponents[index] for index in selected)
+        selected_max_adjusted = max(adjusted[index] for index in selected)
+        precision = _required_group_precision(
+            selected_max_adjusted, selected_min_exponent, selected_count
+        )
+        if precision is None:
+            return
+        span = selected_max_adjusted - selected_min_exponent
+        ordinary = max(abs_adjusted[index] for index in selected)
+        cohort = tuple(sorted(values[index] for index in selected))
+        key = (-selected_count, precision, span, ordinary, cohort)
+        if best_key is None or key < best_key:
+            best_key = key
+            best_selected = set(selected)
+
+    _for_each_window(_consider_window)
+    if best_selected is None:
+        return [False] * count
+    return [index in best_selected for index in range(count)]
+
+
 def calculate_alibaba_price_statistics(products: Sequence[object]) -> AlibabaPriceStatistics:
     """Aggregate published USD search prices. Other currencies are excluded."""
 
@@ -198,11 +446,20 @@ def calculate_alibaba_price_statistics(products: Sequence[object]) -> AlibabaPri
     mins, maxes, values = _usable_representatives(products)
     if not values:
         return _empty_statistics(total)
+    keep = _eligible_for_group_statistics(values)
+    mins = [price for price, eligible in zip(mins, keep, strict=True) if eligible]
+    maxes = [price for price, eligible in zip(maxes, keep, strict=True) if eligible]
+    values = [price for price, eligible in zip(values, keep, strict=True) if eligible]
+    if not values:
+        return _empty_statistics(total)
 
     ordered = sorted(values)
     count = len(values)
     middle = count // 2
-    with localcontext(_calculation_context(values)):
+    context = _calculation_context(values)
+    if context is None:
+        return _empty_statistics(total)
+    with localcontext(context):
         average = sum(values, Decimal("0")) / Decimal(count)
         if count % 2:
             median = ordered[middle]
@@ -239,7 +496,9 @@ def format_alibaba_money(value: Decimal | None) -> str:
 
     if value is None:
         return UNAVAILABLE_DISPLAY
-    quantized = value.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    quantized = _quantize_cents(value)
+    if quantized is None:
+        return UNAVAILABLE_DISPLAY
     return f"${quantized}"
 
 
@@ -249,7 +508,9 @@ def format_alibaba_currency(value: Decimal | None, currency: object) -> str:
     explicit = explicit_alibaba_currency(currency)
     if value is None or explicit is None:
         return UNAVAILABLE_DISPLAY
-    quantized = value.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    quantized = _quantize_cents(value)
+    if quantized is None:
+        return UNAVAILABLE_DISPLAY
     if explicit == STATS_CURRENCY:
         return f"${quantized}"
     return f"{explicit} {quantized}"
@@ -262,12 +523,22 @@ def format_alibaba_listing_price(
 ) -> str:
     """GUI listing price. ``min``/``max``/ISO are authority; never raw ``$`` text."""
 
-    low = min_price if isinstance(min_price, Decimal) and min_price.is_finite() else None
+    low = _as_decimal(min_price)
     if low is None:
         return ""
-    high = max_price if isinstance(max_price, Decimal) and max_price.is_finite() else low
-    quantized_low = low.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
-    quantized_high = high.quantize(_DISPLAY_CENTS, rounding=ROUND_HALF_EVEN)
+    if max_price is None:
+        high = low
+    else:
+        parsed_high = _as_decimal(max_price)
+        if parsed_high is None:
+            return ""
+        high = parsed_high
+    if high < low:
+        return ""
+    quantized_low = _quantize_cents(low)
+    quantized_high = _quantize_cents(high)
+    if quantized_low is None or quantized_high is None:
+        return ""
     explicit = explicit_alibaba_currency(currency)
     if explicit is None:
         amount = (

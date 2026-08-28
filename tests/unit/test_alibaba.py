@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from urllib.parse import parse_qs, quote_plus, urlparse
 
 import pytest
 
+from bera_price_tracker.application.alibaba_score import score_alibaba_listings
 from bera_price_tracker.application.alibaba_statistics import (
     MISSING_CURRENCY_DISPLAY,
     UNAVAILABLE_DISPLAY,
@@ -34,20 +36,26 @@ from bera_price_tracker.application.services import (
     alibaba_credit_warning,
     validate_alibaba_search,
 )
-from bera_price_tracker.config import DEFAULT_APIFY_ALIBABA_ACTOR, Settings
+from bera_price_tracker.config import (
+    DEFAULT_APIFY_ALIBABA_ACTOR,
+    DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR,
+    Settings,
+)
 from bera_price_tracker.domain.alibaba import AlibabaProduct
 from bera_price_tracker.gui import services as gui_services
 from bera_price_tracker.gui.state import AlibabaResultRow, AlibabaTrackedRow, TrackerState
 from bera_price_tracker.infrastructure.providers.alibaba import (
+    DEFAULT_ALIBABA_ACTOR,
     ApifyAlibabaClient,
     _as_mapping,
     _decimal_from_text,
     build_alibaba_run_input,
-    build_alibaba_search_url,
     map_alibaba_item,
     parse_alibaba_price,
 )
 from bera_price_tracker.infrastructure.providers.apify import ApifyConfigurationError
+
+MEMO23_ALIBABA_SEARCH_ACTOR = "memo23/alibaba-scraper"
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 ALIBABA_PATHS = [
@@ -147,42 +155,86 @@ def test_empty_query_rejected() -> None:
     assert provider.calls == []
 
 
-def test_url_encoding_uses_quote_plus() -> None:
+def test_memo23_run_input_contains_exactly_one_search_term() -> None:
     query = "Men's Jackets"
-    url = build_alibaba_search_url(query)
-    assert url == (
-        "https://www.alibaba.com/trade/search?fsb=y&IndexArea=product_en&keywords="
-        + quote_plus(query)
-        + "&page=1"
-    )
-    assert "keywords=Men%27s+Jackets" in url
     payload = build_alibaba_run_input(query=query, limit=10)
-    assert list(payload.keys()) == ["urls", "maxItems"]
-    assert payload["urls"] == [url]
+    assert list(payload.keys()) == ["searchTerms", "maxPages", "maxItems"]
+    assert payload["searchTerms"] == [query]
+    assert payload["maxPages"] == 1
     assert payload["maxItems"] == 10
+    assert "urls" not in payload
+    assert "proxy" not in payload
 
 
-def test_alibaba_search_url_includes_page_one() -> None:
-    """Actor search URLs must include page=1 or the dataset comes back empty."""
-
+def test_memo23_run_input_does_not_construct_search_urls() -> None:
     query = "Iphone 15"
-    url = build_alibaba_search_url(query)
-    parsed = urlparse(url)
-    params = parse_qs(parsed.query, keep_blank_values=True)
-
-    assert parsed.scheme == "https"
-    assert parsed.netloc == "www.alibaba.com"
-    assert parsed.path == "/trade/search"
-    assert params.get("page") == ["1"]
-    assert params.get("fsb") == ["y"]
-    assert params.get("IndexArea") == ["product_en"]
-    assert params.get("keywords") == [query]
-
     payload = build_alibaba_run_input(query=query, limit=20)
-    assert payload["urls"] == [url]
-    actor_url = cast(list[object], payload["urls"])[0]
-    assert isinstance(actor_url, str)
-    assert parse_qs(urlparse(actor_url).query).get("page") == ["1"]
+    serialized = json.dumps(payload)
+    assert "alibaba.com/trade/search" not in serialized
+    assert "page=1" not in serialized
+    assert "IndexArea" not in serialized
+    assert payload["searchTerms"] == [query]
+    assert payload["maxPages"] == 1
+    assert payload["maxItems"] == 20
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected_max_pages"),
+    [
+        (1, 1),
+        (5, 1),
+        (20, 1),
+        (21, 2),
+        (100, 5),
+        (500, 25),
+    ],
+)
+def test_memo23_max_pages_covers_requested_item_limit(limit: int, expected_max_pages: int) -> None:
+    payload = build_alibaba_run_input(query="solar panel 550w", limit=limit)
+    assert payload["searchTerms"] == ["solar panel 550w"]
+    assert payload["maxItems"] == limit
+    assert payload["maxPages"] == expected_max_pages
+    assert list(payload.keys()) == ["searchTerms", "maxPages", "maxItems"]
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected_max_pages"),
+    [
+        (21, 2),
+        (100, 5),
+        (500, 25),
+    ],
+)
+def test_memo23_multi_page_budget_is_still_one_actor_call(
+    limit: int, expected_max_pages: int
+) -> None:
+    client, fake, _products = _search_with_items(
+        [memo23_actor_item()], query="Iphone 15", limit=limit
+    )
+    assert len(fake.calls) == 1
+    payload = fake.calls[0]
+    assert payload["searchTerms"] == ["Iphone 15"]
+    assert payload["maxItems"] == limit
+    assert payload["maxPages"] == expected_max_pages
+    assert client.last_metrics is not None
+    assert client.last_metrics.requested == limit
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+
+
+def test_failed_high_limit_search_does_not_retry_or_switch_actors() -> None:
+    fake = FakeApify([], run={"status": "FAILED", "defaultDatasetId": "ds1"})
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=DEFAULT_APIFY_ALIBABA_ACTOR,
+        client_factory=lambda _token: fake,
+    )
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        client.search("Iphone 15", 500)
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["maxItems"] == 500
+    assert fake.calls[0]["maxPages"] == 25
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert client.last_metrics is None
 
 
 @pytest.mark.parametrize("limit", [1, 20, 500])
@@ -362,18 +414,599 @@ def test_client_uses_documented_input_and_default_actor() -> None:
         client_factory=lambda _token: fake,
     )
     products = client.search("bags", 20)
-    assert fake.actor_id == "scraper-engine/alibaba-scraper"
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
     assert len(fake.calls) == 1
+    assert fake.calls[0] == {
+        "searchTerms": ["bags"],
+        "maxPages": 1,
+        "maxItems": 20,
+    }
     assert fake.calls[0] == build_alibaba_run_input(query="bags", limit=20)
     assert products[0].title == "Bag"
+    assert client.last_metrics is not None
+    assert client.last_metrics.requested == 20
+    assert client.last_metrics.fetched == 1
+    assert client.last_metrics.usable == 1
+
+
+def _alibaba_search_actor_env() -> str:
+    return "_".join(("BERA_TRACKER", "APIFY", "ALIBABA", "ACTOR"))
+
+
+def _legacy_alibaba_search_actor(*, tilde: bool = False) -> str:
+    separator = "~" if tilde else "/"
+    return separator.join(("scraper-engine", "alibaba-scraper"))
+
+
+def _memo23_tilde_search_actor() -> str:
+    return "~".join(("memo23", "alibaba-scraper"))
 
 
 def test_default_actor_config() -> None:
     settings = Settings.from_env({})
-    assert settings.apify_alibaba_actor == "scraper-engine/alibaba-scraper"
+    assert DEFAULT_APIFY_ALIBABA_ACTOR == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert DEFAULT_ALIBABA_ACTOR == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert settings.apify_alibaba_refresh_actor == DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR
+    assert settings.apify_alibaba_refresh_actor != MEMO23_ALIBABA_SEARCH_ACTOR
 
 
-# Keys observed on scraper-engine/alibaba-scraper SUCCEEDED dataset items.
+def test_unset_search_actor_uses_memo23_and_runs_once() -> None:
+    settings = Settings.from_env({})
+    fake = FakeApify([memo23_actor_item()])
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=settings.apify_alibaba_actor,
+        client_factory=lambda _token: fake,
+    )
+    products = client.search("Iphone 15", 5)
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert len(fake.calls) == 1
+    assert fake.calls[0] == build_alibaba_run_input(query="Iphone 15", limit=5)
+    assert products[0].title == "Iphone 15 Protective Case"
+
+
+def test_explicit_memo23_search_actor_uses_memo23_schema() -> None:
+    settings = Settings.from_env(
+        {_alibaba_search_actor_env(): f"  {MEMO23_ALIBABA_SEARCH_ACTOR}  "}
+    )
+    fake = FakeApify([memo23_actor_item()])
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=settings.apify_alibaba_actor,
+        client_factory=lambda _token: fake,
+    )
+    products = client.search("Iphone 15", 5)
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert len(fake.calls) == 1
+    assert fake.calls[0] == {
+        "searchTerms": ["Iphone 15"],
+        "maxPages": 1,
+        "maxItems": 5,
+    }
+    assert products[0].title == "Iphone 15 Protective Case"
+
+
+def test_memo23_tilde_alias_canonicalizes_before_actor_call() -> None:
+    tilde = _memo23_tilde_search_actor()
+    settings = Settings.from_env({_alibaba_search_actor_env(): f"  {tilde}  "})
+    fake = FakeApify([memo23_actor_item()])
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=settings.apify_alibaba_actor,
+        client_factory=lambda _token: fake,
+    )
+    products = client.search("Iphone 15", 5)
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert client.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id != tilde
+    assert len(fake.calls) == 1
+    assert products[0].title == "Iphone 15 Protective Case"
+
+    direct = FakeApify([memo23_actor_item()])
+    constructed = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=f"  {tilde}  ",
+        client_factory=lambda _token: direct,
+    )
+    constructed.search("Iphone 15", 1)
+    assert constructed.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert direct.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        _legacy_alibaba_search_actor(),
+        _legacy_alibaba_search_actor(tilde=True),
+        "/".join(("other", "alibaba-scraper")),
+        "~".join(("other", "alibaba-scraper")),
+        "/".join(("memo23", "other")),
+        "a1b2c3d4e5f6g7h8i9j0",
+    ],
+)
+def test_unsupported_search_actor_forms_never_reach_client_actor(actor: str) -> None:
+    fake = FakeApify([memo23_actor_item()])
+    with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
+        Settings.from_env({_alibaba_search_actor_env(): actor})
+    with pytest.raises(ApifyConfigurationError, match="Unsupported Alibaba SEARCH Actor"):
+        ApifyAlibabaClient(
+            _api_token="token",
+            actor_id=actor,
+            client_factory=lambda _token: fake,
+        )
+    assert fake.calls == []
+    assert fake.actor_id == ""
+
+
+def test_legacy_search_actor_override_never_reaches_memo23_run_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[dict[str, object]] = []
+
+    def _capture_run_input(*, query: str, limit: int) -> dict[str, object]:
+        payload = {"searchTerms": [query], "maxPages": 1, "maxItems": limit}
+        built.append(payload)
+        return payload
+
+    monkeypatch.setattr(
+        "bera_price_tracker.infrastructure.providers.alibaba.build_alibaba_run_input",
+        _capture_run_input,
+    )
+    fake = FakeApify([memo23_actor_item()])
+    with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
+        Settings.from_env({_alibaba_search_actor_env(): _legacy_alibaba_search_actor()})
+    with pytest.raises(ApifyConfigurationError, match="Unsupported Alibaba SEARCH Actor"):
+        ApifyAlibabaClient(
+            _api_token="token",
+            actor_id=_legacy_alibaba_search_actor(),
+            client_factory=lambda _token: fake,
+        )
+    assert fake.calls == []
+    assert fake.actor_id == ""
+    assert built == []
+
+
+def test_incompatible_custom_search_actor_does_not_receive_memo23_schema() -> None:
+    custom_actor = "custom/incompatible-alibaba-actor"
+    fake = FakeApify([memo23_actor_item()])
+    with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
+        Settings.from_env({_alibaba_search_actor_env(): custom_actor})
+    with pytest.raises(ApifyConfigurationError, match="Unsupported Alibaba SEARCH Actor"):
+        ApifyAlibabaClient(
+            _api_token="token",
+            actor_id=custom_actor,
+            client_factory=lambda _token: fake,
+        )
+    assert fake.calls == []
+    assert fake.actor_id == ""
+
+
+def test_refresh_actor_override_stays_independent_of_search_actor() -> None:
+    custom_refresh = "custom/alibaba-refresh-actor"
+    settings = Settings.from_env(
+        {
+            _alibaba_search_actor_env(): MEMO23_ALIBABA_SEARCH_ACTOR,
+            "BERA_TRACKER_APIFY_ALIBABA_REFRESH_ACTOR": custom_refresh,
+        }
+    )
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert settings.apify_alibaba_refresh_actor == custom_refresh
+    assert settings.apify_alibaba_refresh_actor != settings.apify_alibaba_actor
+    fake = FakeApify([memo23_actor_item()])
+    ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=settings.apify_alibaba_actor,
+        client_factory=lambda _token: fake,
+    ).search("Iphone 15", 1)
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id != custom_refresh
+    assert len(fake.calls) == 1
+
+
+def test_process_settings_ignore_leftover_search_actor_env() -> None:
+    settings = Settings.from_env()
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+
+
+def memo23_actor_item(**overrides: object) -> dict[str, object]:
+    """Representative memo23/alibaba-scraper dataset row. Offline fixture only."""
+
+    item: dict[str, object] = {
+        "title": "Iphone 15 Protective Case",
+        "productId": "1601111111111",
+        "productUrl": "https://www.alibaba.com/product-detail/Iphone-15_1601111111111.html",
+        "price": "US $1.00-$9.00",
+        "priceMin": 1.0,
+        "minOrder": "10 pieces",
+        "unit": "piece",
+        "mainImage": "https://s.alicdn.com/example.jpg",
+        "category": "Mobile Phone Cases",
+        "categoryId": "5090301",
+        "isAd": False,
+        "supplierName": "Shenzhen Example Co., Ltd.",
+        "supplierCountry": "China",
+        "supplierCountryCode": "CN",
+        "supplierYears": 7,
+        "reviewScore": 4.8,
+        "reviewCount": 120,
+        "supplierServiceScore": 4.9,
+        "goldSupplier": True,
+        "verifiedSupplierPro": True,
+        "tradeAssurance": True,
+        "certifications": ["CE", "RoHS"],
+        "quantityPrices": [{"price": "US $1.00", "quantityMin": 10, "unit": "piece"}],
+        "searchTerm": "Iphone 15",
+        "page": 1,
+    }
+    item.update(overrides)
+    return item
+
+
+def _search_with_items(
+    items: Sequence[object],
+    *,
+    query: str = "Iphone 15",
+    limit: int = 5,
+    run: object | None = None,
+) -> tuple[ApifyAlibabaClient, FakeApify, list[AlibabaProduct]]:
+    fake = FakeApify(list(items), run=run)
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=DEFAULT_APIFY_ALIBABA_ACTOR,
+        client_factory=lambda _token: fake,
+    )
+    products = client.search(query, limit)
+    return client, fake, products
+
+
+def test_memo23_schema_maps_truthful_public_fields() -> None:
+    product = map_alibaba_item(memo23_actor_item())
+    assert product is not None
+    assert product.title == "Iphone 15 Protective Case"
+    assert product.product_id == "1601111111111"
+    assert product.product_url == (
+        "https://www.alibaba.com/product-detail/Iphone-15_1601111111111.html"
+    )
+    assert product.price_display == "US $1.00-$9.00"
+    assert product.min_price == Decimal("1.00")
+    assert product.max_price == Decimal("9.00")
+    assert product.currency is None
+    assert product.moq == "10 pieces"
+    assert product.supplier_name == "Shenzhen Example Co., Ltd."
+    assert product.supplier_country == "CN"
+    assert product.image_url == "https://s.alicdn.com/example.jpg"
+    assert product.supplier_service_score == "4.9"
+    assert product.review_count == "120"
+    assert product.review_score == "4.8"
+
+
+def test_supplier_years_does_not_become_gold_supplier_years() -> None:
+    product = map_alibaba_item(memo23_actor_item(supplierYears=7, goldSupplier=True))
+    assert product is not None
+    assert product.gold_supplier_years is None
+    dumped = repr(product)
+    assert "7" not in dumped or product.gold_supplier_years is None
+    assert "supplierYears" not in dumped
+
+
+def test_dollar_price_range_does_not_invent_usd_currency() -> None:
+    product = map_alibaba_item(memo23_actor_item(price="US $1.00-$9.00"))
+    assert product is not None
+    assert product.price_display == "US $1.00-$9.00"
+    assert product.min_price == Decimal("1.00")
+    assert product.max_price == Decimal("9.00")
+    assert product.currency is None
+
+
+def test_memo23_documented_us_dollar_prefix_does_not_enter_usd_statistics() -> None:
+    product = map_alibaba_item(memo23_actor_item(price="US $0.71-$0.78"))
+    assert product is not None
+    assert product.price_display == "US $0.71-$0.78"
+    assert product.min_price == Decimal("0.71")
+    assert product.max_price == Decimal("0.78")
+    assert product.currency is None
+    assert infer_alibaba_currency(product) is None
+    stats = calculate_alibaba_price_statistics([product])
+    assert stats.priced_products == 0
+    assert stats.average is None
+    assert stats.median is None
+    assert stats.minimum is None
+    assert stats.maximum is None
+    assert stats.currency is None
+
+
+def test_memo23_documented_us_dollar_prefix_caps_opportunity_below_50() -> None:
+    product = map_alibaba_item(
+        memo23_actor_item(
+            price="US $0.71-$0.78",
+            minOrder="1 piece",
+        )
+    )
+    assert product is not None
+    scores = score_alibaba_listings([product])
+    assert len(scores) == 1
+    score = scores[0]
+    assert score.price_score == 0
+    assert score.information_score == 20
+    assert score.price_clarity_score == 4
+    assert score.moq_score > 0
+    assert score.total < 50
+    assert score.total == (
+        score.price_score + score.moq_score + score.information_score + score.price_clarity_score
+    )
+
+
+def test_single_price_and_missing_price_are_truthful() -> None:
+    single = map_alibaba_item(memo23_actor_item(price="US $4.50", priceMin=4.5))
+    assert single is not None
+    assert single.price_display == "US $4.50"
+    assert single.min_price == Decimal("4.50")
+    assert single.max_price == Decimal("4.50")
+    assert single.currency is None
+    missing = map_alibaba_item(memo23_actor_item(price=None, priceMin=None, minOrder="5 pieces"))
+    assert missing is not None
+    assert missing.price_display is None
+    assert missing.min_price is None
+    assert missing.max_price is None
+    assert missing.currency is None
+    assert missing.moq == "5 pieces"
+
+
+def test_min_order_and_supplier_fields_map_from_memo23_names() -> None:
+    product = map_alibaba_item(
+        {
+            "title": "Motorcycle brake pads",
+            "minOrder": 50,
+            "supplierName": "Example Brakes",
+            "supplierCountry": "China",
+        }
+    )
+    assert product is not None
+    assert product.moq == "50"
+    assert product.supplier_name == "Example Brakes"
+    assert product.supplier_country == "China"
+    coded = map_alibaba_item(memo23_actor_item(supplierCountry="China", supplierCountryCode="CN"))
+    assert coded is not None
+    assert coded.supplier_country == "CN"
+
+
+def test_zero_review_fields_are_not_converted_to_missing() -> None:
+    product = map_alibaba_item(memo23_actor_item(reviewScore=0, reviewCount=0))
+    assert product is not None
+    assert product.review_score == "0"
+    assert product.review_count == "0"
+
+
+def test_missing_optional_memo23_metadata_keeps_title_bearing_listing() -> None:
+    product = map_alibaba_item(
+        {
+            "title": "Solar panel 550w",
+            "isAd": True,
+            "category": "Solar Panels",
+            "categoryId": "1001",
+            "quantityPrices": [{"price": "US $9.00"}],
+            "verifiedSupplierPro": True,
+            "tradeAssurance": True,
+            "certifications": ["CE"],
+        }
+    )
+    assert product is not None
+    assert product.title == "Solar panel 550w"
+    assert product.product_id is None
+    assert product.product_url is None
+    assert product.price_display is None
+    assert product.moq is None
+    assert product.supplier_name is None
+    assert product.supplier_country is None
+    assert product.image_url is None
+    assert product.gold_supplier_years is None
+    assert product.review_score is None
+    assert "quantityPrices" not in repr(product)
+    assert "categoryId" not in repr(product)
+
+
+def test_is_ad_true_does_not_drop_a_valid_listing() -> None:
+    product = map_alibaba_item(memo23_actor_item(isAd=True, title="Sponsored Iphone case"))
+    assert product is not None
+    assert product.title == "Sponsored Iphone case"
+
+
+def test_title_less_memo23_row_is_skipped() -> None:
+    assert map_alibaba_item(memo23_actor_item(title="  ")) is None
+    assert map_alibaba_item(memo23_actor_item(title=None)) is None
+
+
+def test_non_string_title_is_not_coerced_into_a_listing() -> None:
+    for title in (4.5, 5, True, False, 0):
+        assert map_alibaba_item(memo23_actor_item(title=title)) is None
+
+
+def test_non_string_identity_fields_do_not_fabricate_metadata() -> None:
+    product = map_alibaba_item(
+        memo23_actor_item(
+            title="Wireless mouse",
+            productId=4.5,
+            productUrl=4.5,
+            supplierName=4.5,
+            supplierCountry=4.5,
+            supplierCountryCode=4.5,
+            countryCode=4.5,
+            companyName=4.5,
+            mainImage=4.5,
+            reviewScore=4.5,
+            supplierServiceScore=4.5,
+            reviewCount=5,
+        )
+    )
+    assert product is not None
+    assert product.title == "Wireless mouse"
+    assert product.product_id is None
+    assert product.product_url is None
+    assert product.supplier_name is None
+    assert product.supplier_country is None
+    assert product.image_url is None
+    assert product.review_score == "4.5"
+    assert product.supplier_service_score == "4.5"
+    assert product.review_count == "5"
+    sibling_name = map_alibaba_item(
+        memo23_actor_item(title="Named mouse", supplierName=4.5, companyName="Acme Trading")
+    )
+    assert sibling_name is not None
+    assert sibling_name.supplier_name == "Acme Trading"
+    scores = score_alibaba_listings([product, sibling_name])
+    assert scores[0].information_score < scores[1].information_score
+
+
+def test_bool_is_not_numeric_or_identity_metadata() -> None:
+    product = map_alibaba_item(
+        {
+            "title": "Wireless mouse",
+            "productId": True,
+            "supplierName": False,
+            "reviewScore": True,
+            "reviewCount": False,
+            "supplierServiceScore": True,
+            "minOrder": True,
+        }
+    )
+    assert product is not None
+    assert product.product_id is None
+    assert product.supplier_name is None
+    assert product.review_score is None
+    assert product.review_count is None
+    assert product.supplier_service_score is None
+    assert product.moq is None
+
+
+def test_search_maps_five_memo23_results_in_actor_order() -> None:
+    items = [
+        memo23_actor_item(title="First", productId="p-1", price="US $9.00"),
+        memo23_actor_item(title="Second", productId="p-2", isAd=True, price="US $2.00"),
+        memo23_actor_item(title="Third", productId="p-3", price="US $5.00"),
+        memo23_actor_item(title="Fourth", productId="p-4", price="US $1.00"),
+        memo23_actor_item(title="Fifth", productId="p-5", price="US $8.00"),
+    ]
+    client, fake, products = _search_with_items(items, limit=5)
+    assert [item.title for item in products] == ["First", "Second", "Third", "Fourth", "Fifth"]
+    assert [item.product_id for item in products] == ["p-1", "p-2", "p-3", "p-4", "p-5"]
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["maxPages"] == 1
+    assert fake.calls[0]["maxItems"] == 5
+    assert fake.calls[0]["searchTerms"] == ["Iphone 15"]
+    assert client.last_metrics is not None
+    assert client.last_metrics.requested == 5
+    assert client.last_metrics.fetched == 5
+    assert client.last_metrics.usable == 5
+
+
+def test_empty_dataset_is_empty_not_error() -> None:
+    client, fake, products = _search_with_items([], query="nothing", limit=20)
+    assert products == []
+    assert len(fake.calls) == 1
+    assert client.last_metrics is not None
+    assert client.last_metrics.requested == 20
+    assert client.last_metrics.fetched == 0
+    assert client.last_metrics.usable == 0
+
+
+def test_failed_actor_run_is_unavailable_and_does_not_retry() -> None:
+    fake = FakeApify([], run={"status": "FAILED", "defaultDatasetId": "ds1"})
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        client_factory=lambda _token: fake,
+    )
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        client.search("Iphone 15", 5)
+    assert len(fake.calls) == 1
+    assert client.last_metrics is None
+
+
+def test_non_succeeded_and_missing_dataset_are_unavailable_without_retry() -> None:
+    aborted = FakeApify([], run={"status": "ABORTED", "defaultDatasetId": "ds1"})
+    client = ApifyAlibabaClient(_api_token="token", client_factory=lambda _token: aborted)
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        client.search("Iphone 15", 5)
+    assert len(aborted.calls) == 1
+    missing = FakeApify([], run={"status": "SUCCEEDED"})
+    with pytest.raises(MarketplaceSourceUnavailable, match="unavailable"):
+        ApifyAlibabaClient(_api_token="token", client_factory=lambda _token: missing).search(
+            "Iphone 15", 5
+        )
+    assert len(missing.calls) == 1
+
+
+def test_identity_less_and_duplicate_looking_rows_are_preserved() -> None:
+    items = [
+        memo23_actor_item(title="Same title", productId=None, price="US $1.00"),
+        memo23_actor_item(title="Same title", productId=None, price="US $1.00"),
+        memo23_actor_item(title="Same title", productId="stable-1", price="US $2.00"),
+        memo23_actor_item(
+            title="Unrelated category",
+            productId="stable-2",
+            category="Motorcycles",
+            isAd=True,
+        ),
+    ]
+    _client, fake, products = _search_with_items(items, limit=10)
+    assert [item.product_id for item in products] == [None, None, "stable-1", "stable-2"]
+    assert [item.title for item in products] == [
+        "Same title",
+        "Same title",
+        "Same title",
+        "Unrelated category",
+    ]
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["maxItems"] == 10
+
+
+def test_no_title_url_price_or_category_fuzzy_dedup() -> None:
+    items = [
+        memo23_actor_item(
+            title="Wireless mouse",
+            productId="a",
+            productUrl="https://www.alibaba.com/product-detail/a.html",
+            price="US $4.00",
+            category="Mice",
+        ),
+        memo23_actor_item(
+            title="Wireless mouse",
+            productId="b",
+            productUrl="https://www.alibaba.com/product-detail/b.html",
+            price="US $4.00",
+            category="Mice",
+        ),
+    ]
+    _client, _fake, products = _search_with_items(items, limit=5)
+    assert [item.product_id for item in products] == ["a", "b"]
+
+
+def test_one_actor_call_for_one_search_and_no_legacy_urls() -> None:
+    _client, fake, _products = _search_with_items(
+        [memo23_actor_item()], query="motorcycle brake pads", limit=5
+    )
+    assert len(fake.calls) == 1
+    payload = fake.calls[0]
+    assert payload == {
+        "searchTerms": ["motorcycle brake pads"],
+        "maxPages": 1,
+        "maxItems": 5,
+    }
+    assert "urls" not in payload
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+
+
+def test_search_url_builder_is_removed() -> None:
+    import bera_price_tracker.infrastructure.providers.alibaba as alibaba_provider
+
+    assert not hasattr(alibaba_provider, "build_alibaba_search_url")
+
+
+# Keys observed on a previous search-actor SUCCEEDED dataset. Kept as a
+# historical schema sample; it is not the current memo23 search Actor.
 OBSERVED_ACTOR_KEYS = frozenset(
     {
         "badges",
@@ -1378,6 +2011,382 @@ def test_mapper_rejects_malformed_and_non_positive_prices() -> None:
     assert garbage.min_price is None
     nan = parse_alibaba_price("NaN")
     assert nan == ("NaN", None, None, None)
+
+
+def test_numeric_price_scalars_are_not_regex_split() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price(4)
+    assert display == "4"
+    assert min_price == Decimal("4")
+    assert max_price == Decimal("4")
+    assert currency is None
+
+    display, min_price, max_price, currency = parse_alibaba_price(4.5)
+    assert display == "4.5"
+    assert min_price == Decimal("4.5")
+    assert max_price == Decimal("4.5")
+    assert currency is None
+
+    for raw in (0, 0.0, -4, -4.5, float("nan"), float("inf"), float("-inf"), True, False):
+        display, min_price, max_price, currency = parse_alibaba_price(raw)
+        assert min_price is None
+        assert max_price is None
+        assert currency is None
+        if raw is True or raw is False:
+            assert display is None
+        elif isinstance(raw, float) and not math.isfinite(raw):
+            assert display is None
+        else:
+            assert display == str(raw)
+
+    huge = 1e20
+    display, min_price, max_price, currency = parse_alibaba_price(huge)
+    assert display == str(huge)
+    assert min_price == Decimal(str(huge))
+    assert max_price == Decimal(str(huge))
+    assert min_price != Decimal("1")
+    assert max_price != Decimal("20")
+    assert currency is None
+
+    tiny = 1e-20
+    display, min_price, max_price, currency = parse_alibaba_price(tiny)
+    assert display == str(tiny)
+    assert min_price == Decimal(str(tiny))
+    assert max_price == Decimal(str(tiny))
+    assert (min_price, max_price) != (Decimal("1"), Decimal("20"))
+    assert currency is None
+
+
+def test_textual_prices_do_not_fabricate_from_sign_or_exponent() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("US $1.00-$9.00")
+    assert display == "US $1.00-$9.00"
+    assert min_price == Decimal("1.00")
+    assert max_price == Decimal("9.00")
+    assert currency is None
+
+    display, min_price, max_price, currency = parse_alibaba_price("US $4.50")
+    assert display == "US $4.50"
+    assert min_price == Decimal("4.50")
+    assert max_price == Decimal("4.50")
+    assert currency is None
+
+    display, min_price, max_price, currency = parse_alibaba_price("$1.00-$9.00")
+    assert display == "$1.00-$9.00"
+    assert min_price == Decimal("1.00")
+    assert max_price == Decimal("9.00")
+    assert currency is None
+
+    display, min_price, max_price, currency = parse_alibaba_price("USD 1.00-9.00")
+    assert display == "USD 1.00-9.00"
+    assert min_price == Decimal("1.00")
+    assert max_price == Decimal("9.00")
+    assert currency == "USD"
+
+    for raw in ("-4.5", "1e20", "1e-20", "", "n/a"):
+        parsed = parse_alibaba_price(raw)
+        if raw == "":
+            assert parsed == (None, None, None, None)
+            continue
+        display, min_price, max_price, currency = parsed
+        assert display == raw
+        assert min_price is None or (min_price, max_price) != (Decimal("1"), Decimal("20"))
+        if raw in ("-4.5", "n/a"):
+            assert min_price is None
+            assert max_price is None
+        if raw in ("1e20", "1e-20"):
+            assert (min_price, max_price) != (Decimal("1"), Decimal("20"))
+            if min_price is not None:
+                assert min_price == max_price == Decimal(raw)
+        assert currency is None
+
+    three = parse_alibaba_price("1.00 2.00 3.00")
+    assert three[0] == "1.00 2.00 3.00"
+    assert three[1] is None
+    assert three[2] is None
+
+    mixed = parse_alibaba_price("MOQ 10 US $1.00-$9.00")
+    assert mixed[1] is None
+    assert mixed[2] is None
+    assert mixed[0] == "MOQ 10 US $1.00-$9.00"
+
+
+def test_negative_numeric_price_does_not_enter_statistics() -> None:
+    product = map_alibaba_item({"title": "Mouse", "price": -4.5})
+    assert product is not None
+    assert product.price_display == "-4.5"
+    assert product.min_price is None
+    assert product.max_price is None
+    stats = calculate_alibaba_price_statistics([product])
+    assert stats.priced_products == 0
+    assert stats.minimum is None
+
+
+def _assert_search_row_survives(product: AlibabaProduct) -> dict[str, Any]:
+    row = gui_services.alibaba_product_to_row(product)
+    payload = gui_services.run_alibaba_search(
+        "mouse",
+        10,
+        search_service=SearchAlibabaProducts(FakeAlibabaProvider([product])),
+    )
+    assert payload["ui_status"] == "SUCCESS"
+    assert payload["error_message"] == ""
+    assert len(payload["results"]) == 1
+    return row
+
+
+def test_extreme_provider_prices_do_not_crash_listing_rows() -> None:
+    documented = map_alibaba_item({"title": "Mouse", "price": "US $1.00-$9.00"})
+    assert documented is not None
+    documented_row = _assert_search_row_survives(documented)
+    assert documented.min_price == Decimal("1.00")
+    assert documented.max_price == Decimal("9.00")
+    assert documented_row["price"]
+
+    for raw in (1e20, 1e100, 1e-20, 1e-100, "1e20", "1e100", "1e500"):
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        row = _assert_search_row_survives(product)
+        assert isinstance(row["price"], str)
+        money = format_alibaba_money(product.min_price)
+        assert isinstance(money, str)
+        listing = format_alibaba_listing_price(
+            product.min_price, product.max_price, product.currency
+        )
+        assert isinstance(listing, str)
+
+    overflow = map_alibaba_item({"title": "Mouse", "price": 1e500})
+    assert overflow is not None
+    assert overflow.min_price is None
+    _assert_search_row_survives(overflow)
+
+
+def test_reversed_price_range_numeric_bounds_are_unavailable() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("US $1.00-$9.00")
+    assert display == "US $1.00-$9.00"
+    assert min_price == Decimal("1.00")
+    assert max_price == Decimal("9.00")
+    assert currency is None
+    assert min_price <= max_price
+
+    for raw, expected_display in (
+        ("US $9.00-$1.00", "US $9.00-$1.00"),
+        ("$9-$1", "$9-$1"),
+    ):
+        parsed = parse_alibaba_price(raw)
+        assert parsed[0] == expected_display
+        assert parsed[1] is None
+        assert parsed[2] is None
+        product = map_alibaba_item({"title": "Mouse", "price": raw, "currency": "USD"})
+        assert product is not None
+        assert product.price_display == expected_display
+        assert product.min_price is None
+        assert product.max_price is None
+        assert alibaba_price_bounds(product) is None
+        assert alibaba_representative_price(product) is None
+        row = _assert_search_row_survives(product)
+        assert "9.00–1.00" not in row["price"]
+        assert "9–1" not in row["price"]
+        stats = calculate_alibaba_price_statistics([product])
+        assert stats.priced_products == 0
+        assert stats.minimum is None
+        assert stats.maximum is None
+        assert stats.average is None
+
+    equal = parse_alibaba_price("$1-$1")
+    assert equal[1] == Decimal("1")
+    assert equal[2] == Decimal("1")
+    assert equal[1] <= equal[2]
+
+    hyphen = parse_alibaba_price("$1.30-1.60")
+    assert hyphen[1] == Decimal("1.30")
+    assert hyphen[2] == Decimal("1.60")
+    assert hyphen[1] <= hyphen[2]
+
+    mixed = [
+        map_alibaba_item({"title": "reversed", "price": "$9.00-$1.00", "currency": "USD"}),
+        map_alibaba_item({"title": "ok", "price": "$2.00", "currency": "USD"}),
+    ]
+    mapped = [item for item in mixed if item is not None]
+    stats = calculate_alibaba_price_statistics(mapped)
+    assert stats.priced_products == 1
+    assert stats.minimum == Decimal("2.00")
+    assert stats.maximum == Decimal("2.00")
+    assert stats.average == Decimal("2.00")
+
+    domain = AlibabaProduct(
+        title="Mouse",
+        price_display="US $9.00-$1.00",
+        min_price=Decimal("9.00"),
+        max_price=Decimal("1.00"),
+        currency="USD",
+    )
+    assert domain.price_display == "US $9.00-$1.00"
+    assert domain.min_price is None
+    assert domain.max_price is None
+    assert alibaba_price_bounds(domain) is None
+
+
+def test_successfully_parsed_ranges_keep_ordered_bounds() -> None:
+    for raw in ("US $1.00-$9.00", "$1.00-$9.00", "USD 1.00-9.00", "$1.30-1.60", "$1-$1"):
+        _display, minimum, maximum, _currency = parse_alibaba_price(raw)
+        assert minimum is not None
+        assert maximum is not None
+        assert minimum <= maximum
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        assert product.min_price is not None
+        assert product.max_price is not None
+        assert product.min_price <= product.max_price
+        bounds = alibaba_price_bounds(product)
+        assert bounds is not None
+        assert bounds[0] <= bounds[1]
+
+
+def _assert_no_usable_positive_price(raw: str) -> AlibabaProduct:
+    display, min_price, max_price, _currency = parse_alibaba_price(raw)
+    assert display == raw
+    assert min_price is None
+    assert max_price is None
+    product = map_alibaba_item({"title": "Mouse", "price": raw, "currency": "USD"})
+    assert product is not None
+    assert product.price_display == raw
+    assert product.min_price is None
+    assert product.max_price is None
+    assert alibaba_price_bounds(product) is None
+    assert alibaba_representative_price(product) is None
+    row = _assert_search_row_survives(product)
+    assert row["price_min"] == ""
+    assert row["price_max"] == ""
+    stats = calculate_alibaba_price_statistics([product])
+    assert stats.priced_products == 0
+    assert stats.minimum is None
+    scores = score_alibaba_listings([product])
+    assert scores[0].price_score == 0
+    return product
+
+
+def test_minus_before_currency_does_not_fabricate_a_positive_price() -> None:
+    for raw in (
+        "-4.50",
+        "-$4.50",
+        "$-4.50",
+        "USD -4.50",
+        "USD -$4.50",
+        "USD - $4.50",
+        "USD $-4.50",
+        "EUR -$4.50",
+        "CAD -$4.50",
+        "US -$4.50",
+        "USD-$4.50",
+        "-$ 4.50",
+        "- $4.50",
+        "USD -$ 4.50",
+    ):
+        _assert_no_usable_positive_price(raw)
+
+
+def test_valid_signed_currency_and_range_forms_remain_usable() -> None:
+    for raw, expected_min, expected_max in (
+        ("$4.50", Decimal("4.50"), Decimal("4.50")),
+        ("USD $4.50", Decimal("4.50"), Decimal("4.50")),
+        ("USD 4.50", Decimal("4.50"), Decimal("4.50")),
+        ("$1.30-$1.60", Decimal("1.30"), Decimal("1.60")),
+        ("USD $1.30-$1.60", Decimal("1.30"), Decimal("1.60")),
+        ("US $1.00-$9.00", Decimal("1.00"), Decimal("9.00")),
+    ):
+        display, min_price, max_price, _currency = parse_alibaba_price(raw)
+        assert display == raw
+        assert min_price == expected_min
+        assert max_price == expected_max
+        assert min_price <= max_price
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        assert product.min_price == expected_min
+        assert product.max_price == expected_max
+        _assert_search_row_survives(product)
+
+
+def test_negative_second_range_bound_does_not_become_positive() -> None:
+    for raw in (
+        "$1.30--1.60",
+        "$1.30-$-1.60",
+        "$1.30-USD -$1.60",
+        "USD $1.30 - -$1.60",
+        "$1.30-EUR -$1.60",
+    ):
+        product = _assert_no_usable_positive_price(raw)
+        assert product.min_price is None
+        assert product.max_price is None
+
+
+def test_non_dollar_signed_symbols_do_not_fabricate_a_positive_price() -> None:
+    for raw in (
+        "-€4.50",
+        "EUR -€4.50",
+        "EUR €-4.50",
+        "-£4.50",
+        "GBP -£4.50",
+        "GBP £-4.50",
+        "-¥4.50",
+        "CNY -¥4.50",
+        "CNY ¥-4.50",
+        "$1.30-€-1.60",
+        "EUR €1.30-€-1.60",
+        "GBP £1.30-£-1.60",
+        "CNY ¥1.30-¥-1.60",
+    ):
+        product = _assert_no_usable_positive_price(raw)
+        assert product.currency != "MOQ"
+        scores = score_alibaba_listings([product])
+        assert scores[0].price_score == 0
+        assert scores[0].price_clarity_score == 0
+
+
+def test_price_text_does_not_join_unrelated_tokens_or_invent_iso() -> None:
+    for raw in (
+        "MOQ 100 US $4.50",
+        "MOQ 100 USD 4.50",
+        "10 pcs USD 4.50",
+        "From 10 USD 4.50",
+        "abc 1 def 2",
+        "MOQ 4.50",
+    ):
+        display, min_price, max_price, currency = parse_alibaba_price(raw)
+        assert display == raw
+        assert min_price is None
+        assert max_price is None
+        assert currency is None
+        assert currency != "MOQ"
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        assert product.price_display == raw
+        assert product.min_price is None
+        assert product.max_price is None
+        assert product.currency is None
+        assert product.currency != "MOQ"
+        assert alibaba_price_bounds(product) is None
+        stats = calculate_alibaba_price_statistics([product])
+        assert stats.priced_products == 0
+        scores = score_alibaba_listings([product])
+        assert scores[0].price_score == 0
+        _assert_search_row_survives(product)
+
+    for raw, expected_min, expected_max, expected_currency in (
+        ("US $1.00-$9.00", Decimal("1.00"), Decimal("9.00"), None),
+        ("US $4.50", Decimal("4.50"), Decimal("4.50"), None),
+        ("$1.00-$9.00", Decimal("1.00"), Decimal("9.00"), None),
+        ("USD 1.00-9.00", Decimal("1.00"), Decimal("9.00"), "USD"),
+        ("USD 4.50", Decimal("4.50"), Decimal("4.50"), "USD"),
+    ):
+        display, min_price, max_price, currency = parse_alibaba_price(raw)
+        assert display == raw
+        assert min_price == expected_min
+        assert max_price == expected_max
+        assert currency == expected_currency
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        assert product.min_price == expected_min
+        assert product.max_price == expected_max
+        _assert_search_row_survives(product)
 
 
 def test_mapper_keeps_missing_optional_identity_fields() -> None:

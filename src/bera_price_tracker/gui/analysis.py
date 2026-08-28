@@ -16,6 +16,7 @@ from bera_price_tracker.application.alibaba_ranking import (
     is_low_match,
 )
 from bera_price_tracker.application.alibaba_reputation import LABEL_INSUFFICIENT
+from bera_price_tracker.application.alibaba_statistics import format_alibaba_money
 
 SORT_ORIGINAL = "original"
 SORT_PRICE_ASC = "price_asc"
@@ -294,7 +295,7 @@ def select_chart_values(
 
 
 def _money_label(value: Decimal) -> str:
-    return f"${value.quantize(_CENTS, rounding=ROUND_HALF_EVEN)}"
+    return format_alibaba_money(value)
 
 
 def build_histogram(values: Sequence[Decimal]) -> list[dict[str, str]]:

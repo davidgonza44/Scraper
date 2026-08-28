@@ -33,6 +33,7 @@ from bera_price_tracker.application.alibaba_tracking import AlibabaFollowObserva
 from bera_price_tracker.application.ports import MarketplaceSourceUnavailable
 from bera_price_tracker.composition import ApplicationComposition
 from bera_price_tracker.config import (
+    DEFAULT_APIFY_ALIBABA_ACTOR,
     DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR,
     DEFAULT_APIFY_ALIBABA_REFRESH_CONCURRENCY,
     DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES,
@@ -207,7 +208,7 @@ def test_refresh_input_uses_audited_fields_only() -> None:
 
 def test_defaults_are_low_retries_and_xtracto() -> None:
     settings = Settings.from_env({})
-    assert settings.apify_alibaba_actor == "scraper-engine/alibaba-scraper"
+    assert settings.apify_alibaba_actor == DEFAULT_APIFY_ALIBABA_ACTOR
     assert settings.apify_alibaba_refresh_actor == DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR
     assert settings.apify_alibaba_refresh_retries == DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES
     assert settings.apify_alibaba_refresh_concurrency == DEFAULT_APIFY_ALIBABA_REFRESH_CONCURRENCY

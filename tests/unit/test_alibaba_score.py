@@ -156,6 +156,96 @@ def test_extract_moq_quantity_examples() -> None:
     assert extract_moq_quantity(None) is None
 
 
+def test_ordinary_moq_forms_remain_usable() -> None:
+    assert extract_moq_quantity("1 piece") == Decimal("1")
+    assert extract_moq_quantity("5 meters") == Decimal("5")
+    assert extract_moq_quantity("10 pieces") == Decimal("10")
+    assert extract_moq_quantity("1.5 kg") == Decimal("1.5")
+    assert extract_moq_quantity("1,000 pieces") == Decimal("1000")
+    numeric = _product(minOrder=5, moq=None)
+    assert numeric.moq == "5"
+    assert extract_moq_quantity(numeric.moq) == Decimal("5")
+
+
+def test_scientific_and_negative_moq_are_not_fabricated() -> None:
+    for raw in (
+        1e100,
+        1e20,
+        1e-20,
+        -5,
+        -0.5,
+        "1e100",
+        "1e-20",
+        "-5 pieces",
+        "-0.5 kg",
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        True,
+        False,
+        0,
+        0.0,
+    ):
+        product = map_alibaba_item({"title": "Mouse", "minOrder": raw})
+        assert product is not None
+        assert extract_moq_quantity(product.moq) is None
+        assert extract_moq_quantity(raw if isinstance(raw, str) else product.moq) is None
+
+    assert extract_moq_quantity("1e100") is None
+    assert extract_moq_quantity("1e+100") is None
+    assert extract_moq_quantity("-5 pieces") is None
+
+
+def test_separated_negative_moq_does_not_receive_points() -> None:
+    for raw in ("- 5 pieces", "-    5 pieces"):
+        product = map_alibaba_item({"title": "neg", "minOrder": raw, "price": "$8.00"})
+        assert product is not None
+        assert extract_moq_quantity(product.moq) is None
+        five = map_alibaba_item({"title": "five", "minOrder": "5 pieces", "price": "$8.00"})
+        ten = map_alibaba_item({"title": "ten", "minOrder": "10 pieces", "price": "$8.00"})
+        assert five is not None
+        assert ten is not None
+        assert extract_moq_quantity(five.moq) == Decimal("5")
+        assert extract_moq_quantity(ten.moq) == Decimal("10")
+        scores = _scores([product, five, ten])
+        assert scores[0].moq_score == 0
+        assert scores[1].moq_score == 25
+        assert scores[2].moq_score == 0
+        payload = _payload([product, five, ten])
+        assert payload["results"][0]["score_moq"] == "0/25"
+        assert [row["title"] for row in payload["results"]] == ["neg", "five", "ten"]
+
+    for raw in (
+        "5 pieces",
+        "Min. order: 5 pieces",
+        "MOQ: 5",
+        "1.5 kg",
+        "1,000 pieces",
+    ):
+        quantity = extract_moq_quantity(raw)
+        assert quantity is not None
+        assert quantity > 0
+
+
+def test_exponent_min_order_does_not_win_moq_score() -> None:
+    products = [
+        _product(title="sci", minOrder=1e100, moq=None),
+        _product(title="five", minOrder=5, moq=None),
+        _product(title="ten", minOrder=10, moq=None),
+    ]
+    assert products[0].moq == "1e+100"
+    assert extract_moq_quantity(products[0].moq) is None
+    scores = _scores(products)
+    assert scores[0].moq_score != 25
+    assert scores[0].moq_score == 0
+    assert scores[1].moq_score == 25
+    assert scores[2].moq_score == 0
+    payload = _payload(products)
+    assert payload["results"][0]["score_moq"] != "25/25"
+    assert payload["results"][0]["moq"] == "1e+100"
+    assert [row["title"] for row in payload["results"]] == ["sci", "five", "ten"]
+
+
 def test_complete_listing_gets_full_information_score() -> None:
     scores = _scores([_product()])
     assert scores[0].information_score == 20

@@ -205,6 +205,12 @@ def test_histogram_normal_dataset() -> None:
         assert item["width"].endswith("%")
 
 
+def test_histogram_survives_extreme_representative_prices() -> None:
+    bins = analysis.build_histogram([Decimal("4.00"), Decimal("1E+100")])
+    assert bins
+    assert sum(int(item["count"]) for item in bins) == 2
+
+
 def test_chart_typical_scope_excludes_outliers() -> None:
     values = [Decimal(price.replace("$", "")) for price in OUTLIER_PRICES]
     scoped = analysis.select_chart_values(

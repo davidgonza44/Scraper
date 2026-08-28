@@ -57,6 +57,9 @@ class AlibabaProduct:
         max_price = _optional_decimal(self.max_price, "max_price")
         if min_price is not None and max_price is None:
             max_price = min_price
+        if min_price is not None and max_price is not None and min_price > max_price:
+            min_price = None
+            max_price = None
         object.__setattr__(self, "min_price", min_price)
         object.__setattr__(self, "max_price", max_price)
         object.__setattr__(self, "currency", _optional_text(self.currency))

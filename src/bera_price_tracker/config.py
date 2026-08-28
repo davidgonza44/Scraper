@@ -30,7 +30,7 @@ DEFAULT_BRIGHTDATA_POLL_INTERVAL_SECONDS = 5.0
 DEFAULT_BRIGHTDATA_POLL_TIMEOUT_SECONDS = 900.0
 DEFAULT_FACEBOOK_CITY = "caracas"
 DEFAULT_FACEBOOK_BACKEND = "apify"
-DEFAULT_APIFY_ALIBABA_ACTOR = "scraper-engine/alibaba-scraper"
+DEFAULT_APIFY_ALIBABA_ACTOR = "memo23/alibaba-scraper"
 DEFAULT_APIFY_ALIBABA_REFRESH_ACTOR = "xtracto/alibaba-product-scraper"
 DEFAULT_APIFY_MERCADOLIBRE_ACTOR = "piotrv1001/mercado-libre-listings-scraper"
 DEFAULT_APIFY_ALIBABA_REFRESH_RETRIES = 1
@@ -340,6 +340,30 @@ def normalize_brightdata_base_url(value: str) -> str:
     return f"https://{parsed.netloc}".rstrip("/")
 
 
+_SUPPORTED_ALIBABA_SEARCH_ACTOR_ALIASES = frozenset(
+    {
+        DEFAULT_APIFY_ALIBABA_ACTOR,
+        "memo23~alibaba-scraper",
+    }
+)
+
+
+def normalize_alibaba_search_actor(value: str) -> str:
+    """Accept only the memo23 SEARCH Actor. Reject leftover or custom overrides."""
+
+    if not isinstance(value, str):
+        raise TypeError("apify_alibaba_actor must be a string")
+    actor = value.strip()
+    if not actor:
+        raise ValueError("apify_alibaba_actor must not be blank")
+    if actor not in _SUPPORTED_ALIBABA_SEARCH_ACTOR_ALIASES:
+        raise ValueError(
+            "Unsupported Alibaba SEARCH Actor "
+            f"{actor!r}; only {DEFAULT_APIFY_ALIBABA_ACTOR} is supported"
+        )
+    return DEFAULT_APIFY_ALIBABA_ACTOR
+
+
 def _positive_finite(value: float, field_name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{field_name} must be a number")
@@ -523,10 +547,11 @@ class Settings:
             raise ValueError("facebook_backend must be apify or brightdata")
         object.__setattr__(self, "facebook_backend", backend)
 
-        actor = self.apify_alibaba_actor.strip()
-        if not actor:
-            raise ValueError("apify_alibaba_actor must not be blank")
-        object.__setattr__(self, "apify_alibaba_actor", actor)
+        object.__setattr__(
+            self,
+            "apify_alibaba_actor",
+            normalize_alibaba_search_actor(self.apify_alibaba_actor),
+        )
         refresh_actor = self.apify_alibaba_refresh_actor.strip()
         if not refresh_actor:
             raise ValueError("apify_alibaba_refresh_actor must not be blank")

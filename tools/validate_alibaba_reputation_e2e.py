@@ -17,13 +17,14 @@ trackInfo.
 from __future__ import annotations
 
 import dataclasses
+import math
 import re
 import statistics
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,8 +47,8 @@ FORBIDDEN_REPORT_FIELDS = (
     "trackInfo",
 )
 
-# Keys previously observed on SUCCEEDED runs (mirrors tests/unit/test_alibaba.py).
-PREVIOUSLY_OBSERVED_ACTOR_KEYS = frozenset(
+# Keys previously observed on the retired search Actor. Not the memo23 baseline.
+HISTORICAL_SEARCH_ACTOR_KEYS = frozenset(
     {
         "badges",
         "certifications",
@@ -90,6 +91,350 @@ PREVIOUSLY_OBSERVED_ACTOR_KEYS = frozenset(
     }
 )
 
+# Documented memo23/alibaba-scraper output fields. Optional keys may be absent.
+MEMO23_DOCUMENTED_ACTOR_KEYS = frozenset(
+    {
+        "assessedSupplier",
+        "category",
+        "categoryId",
+        "certifications",
+        "employeesTotal",
+        "goldSupplier",
+        "hasVideo",
+        "images",
+        "isAd",
+        "mainImage",
+        "minOrder",
+        "page",
+        "price",
+        "priceMin",
+        "productId",
+        "productReviewScore",
+        "productUrl",
+        "quantityPrices",
+        "responseRate",
+        "reviewCount",
+        "reviewScore",
+        "searchTerm",
+        "shippingTimeScore",
+        "supplierCountry",
+        "supplierCountryCode",
+        "supplierName",
+        "supplierServiceScore",
+        "supplierYears",
+        "title",
+        "tradeAssurance",
+        "unit",
+        "verifiedSupplierPro",
+    }
+)
+
+
+EXCLUDED_ALIBABA_PRODUCT_ATTRS = (
+    "display_star_level",
+    "product_score",
+    "shipping_score",
+    "sold_order",
+    "badges",
+    "certifications",
+    "show_crown",
+)
+
+
+def has_mapped_products(products: Sequence[object]) -> bool:
+    return bool(products)
+
+
+def alibaba_product_excludes_transport_fields(
+    products: Sequence[object],
+    excluded_attrs: Sequence[str] = EXCLUDED_ALIBABA_PRODUCT_ATTRS,
+) -> bool:
+    """True when the first mapped product omits excluded transport fields.
+
+    An empty product list is a failed mapping outcome, not a model that
+    silently has those fields. Never indexes the first product by position.
+    """
+
+    first = next(iter(products), None)
+    if first is None:
+        return False
+    return all(not hasattr(first, attr) for attr in excluded_attrs)
+
+
+def report_mapped_products(
+    products: Sequence[object],
+    check: Callable[[str, bool, str], None],
+) -> None:
+    """Record empty-mapping failures without indexing the first product."""
+
+    mapped = has_mapped_products(products)
+    check(
+        "SUCCEEDED produjo al menos un producto mapeable",
+        mapped,
+        "0 productos mapeados" if not mapped else "",
+    )
+    if mapped:
+        check(
+            "AlibabaProduct no transporta campos excluidos",
+            alibaba_product_excludes_transport_fields(products),
+            "",
+        )
+
+
+class ReplayActorMismatch(ValueError):
+    """Replayed Apify run does not belong to the configured SEARCH Actor."""
+
+
+class ReplayProvenanceUnavailable(ValueError):
+    """Replayed Apify run Actor provenance cannot be verified."""
+
+
+ReplayProvenance = Literal["match", "mismatch", "unavailable"]
+ReplaySearchFailureKind = Literal["mismatch", "unavailable", "other"]
+
+
+def _actor_ref_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    return text
+
+
+def _is_named_actor_ref(value: str) -> bool:
+    return "/" in value or "~" in value
+
+
+def _named_actor_canonical(value: str) -> str:
+    return value.replace("~", "/")
+
+
+def _alias_refs(configured_actor_id: object, extra_ids: object) -> tuple[str, ...]:
+    values: list[object] = [configured_actor_id]
+    extra_items: Sequence[object]
+    if isinstance(extra_ids, (str, bytes)):
+        extra_items = (extra_ids,)
+    elif isinstance(extra_ids, Sequence):
+        extra_items = extra_ids
+    else:
+        extra_items = ()
+    values.extend(extra_items)
+    refs: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = _actor_ref_text(item)
+        if text is None or text in seen:
+            continue
+        seen.add(text)
+        refs.append(text)
+    return tuple(refs)
+
+
+def classify_replay_provenance(
+    *,
+    configured_actor_id: object,
+    run_act_id: object,
+    extra_ids: object = (),
+) -> ReplayProvenance:
+    """Classify replay Actor provenance without treating opaque IDs as names."""
+
+    run_ref = _actor_ref_text(run_act_id)
+    if run_ref is None:
+        return "unavailable"
+    aliases = _alias_refs(configured_actor_id, extra_ids)
+    named_aliases = tuple(alias for alias in aliases if _is_named_actor_ref(alias))
+    opaque_aliases = tuple(alias for alias in aliases if not _is_named_actor_ref(alias))
+    if _is_named_actor_ref(run_ref):
+        canonical = _named_actor_canonical(run_ref)
+        if any(_named_actor_canonical(alias) == canonical for alias in named_aliases):
+            return "match"
+        return "mismatch"
+    if run_ref in opaque_aliases:
+        return "match"
+    if opaque_aliases:
+        return "mismatch"
+    return "unavailable"
+
+
+def run_belongs_to_configured_search_actor(
+    *,
+    configured_actor_id: object,
+    run_act_id: object,
+    extra_ids: object = (),
+) -> bool:
+    """True when run actId matches the configured SEARCH Actor or a resolved alias."""
+
+    return (
+        classify_replay_provenance(
+            configured_actor_id=configured_actor_id,
+            run_act_id=run_act_id,
+            extra_ids=extra_ids,
+        )
+        == "match"
+    )
+
+
+def find_exception_in_chain[T: BaseException](
+    exc: BaseException | None,
+    expected_type: type[T],
+    *,
+    max_depth: int = 32,
+) -> T | None:
+    """Return the first matching exception in ``__cause__`` / ``__context__``.
+
+    Cycle-safe: identities are tracked with a seen-id set. Does not print
+    chained exception messages or reprs.
+    """
+
+    pending: list[BaseException] = []
+    if exc is not None:
+        pending.append(exc)
+    seen: set[int] = set()
+    inspected = 0
+    while pending:
+        current = pending.pop()
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        inspected += 1
+        if inspected > max_depth:
+            return None
+        if isinstance(current, expected_type):
+            return current
+        cause = current.__cause__
+        context = current.__context__
+        if isinstance(cause, BaseException):
+            pending.append(cause)
+        if isinstance(context, BaseException) and context is not cause:
+            pending.append(context)
+    return None
+
+
+def replay_search_failure_kind(exc: BaseException) -> ReplaySearchFailureKind:
+    if find_exception_in_chain(exc, ReplayActorMismatch) is not None:
+        return "mismatch"
+    if find_exception_in_chain(exc, ReplayProvenanceUnavailable) is not None:
+        return "unavailable"
+    return "other"
+
+
+def _safe_run_metadata(value: object) -> str | None:
+    """Accept only scalar run metadata. Never stringify mappings/lists/objects."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, int):
+        return str(value)
+    return None
+
+
+def extract_run_provenance(run: Mapping[str, object] | None) -> dict[str, object]:
+    if run is None:
+        return {
+            "run_id": None,
+            "act_id": None,
+            "build_id": None,
+            "build_number": None,
+            "status": None,
+        }
+    act_id = run.get("actId")
+    if act_id is None:
+        act_id = run.get("actorId")
+    return {
+        "run_id": _safe_run_metadata(run.get("id")),
+        "act_id": _safe_run_metadata(act_id),
+        "build_id": _safe_run_metadata(run.get("buildId")),
+        "build_number": _safe_run_metadata(run.get("buildNumber")),
+        "status": _safe_run_metadata(run.get("status")),
+    }
+
+
+def _apply_run_to_record(record: dict[str, Any], run: object) -> None:
+    provenance = extract_run_provenance(run if isinstance(run, Mapping) else None)
+    record["run_status"] = provenance["status"]
+    record["run_id"] = provenance["run_id"]
+    record["run_act_id"] = provenance["act_id"]
+    record["run_build_id"] = provenance["build_id"]
+    record["run_build_number"] = provenance["build_number"]
+
+
+def _display_provenance(value: object) -> str:
+    text = _safe_run_metadata(value)
+    if text is None:
+        return "—"
+    return text
+
+
+def _display_count(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "—"
+    return str(value)
+
+
+def _print_run_record(record: Mapping[str, Any]) -> None:
+    print(f"Actor runs creados: {_display_count(record.get('actor_calls_created', 0))}")
+    print(f"Actor configurado: {_display_provenance(record.get('configured_actor_id'))}")
+    print(f"Actor real del run (actId): {_display_provenance(record.get('run_act_id'))}")
+    print(f"buildId: {_display_provenance(record.get('run_build_id'))}")
+    print(f"buildNumber: {_display_provenance(record.get('run_build_number'))}")
+    print(f"status: {_display_provenance(record.get('run_status'))}")
+    print(f"run reutilizable: {_display_provenance(record.get('run_id'))}")
+
+
+def emit_search_failure(exc: BaseException, record: Mapping[str, Any]) -> int:
+    """Print a sanitized search-failure diagnosis. Never dumps chained reprs."""
+
+    from bera_price_tracker.gui.services import sanitize_alibaba_error
+
+    _print_run_record(record)
+    kind = replay_search_failure_kind(exc)
+    if kind == "mismatch":
+        print("ERROR: el run reutilizado no pertenece al Actor SEARCH configurado")
+        return 1
+    if kind == "unavailable":
+        print("ERROR: no se pudo verificar el Actor del run reutilizado")
+        return 1
+    print(f"ERROR (sanitizado): {sanitize_alibaba_error(exc)}")
+    return 1
+
+
+def classify_observed_schema(observed: set[str]) -> tuple[list[str], list[str]]:
+    """Return (unknown keys, documented optional keys absent from this run)."""
+
+    unknown = sorted(observed - MEMO23_DOCUMENTED_ACTOR_KEYS)
+    absent_optional = sorted(MEMO23_DOCUMENTED_ACTOR_KEYS - observed)
+    return unknown, absent_optional
+
+
+def _configured_actor_aliases(actor_id: str, inner: Any) -> list[str]:
+    aliases = {actor_id, actor_id.replace("/", "~"), actor_id.replace("~", "/")}
+    actor_client = getattr(inner, "actor", None)
+    if not callable(actor_client):
+        return sorted(aliases)
+    try:
+        info = actor_client(actor_id).get()
+    except Exception:
+        return sorted(aliases)
+    if not isinstance(info, Mapping):
+        return sorted(aliases)
+    unique = info.get("id")
+    username = info.get("username")
+    name = info.get("name")
+    if isinstance(unique, str) and unique.strip():
+        aliases.add(unique.strip())
+    if isinstance(username, str) and isinstance(name, str):
+        user = username.strip()
+        actor_name = name.strip()
+        if user and actor_name:
+            aliases.add(f"{user}/{actor_name}")
+            aliases.add(f"{user}~{actor_name}")
+    return sorted(aliases)
+
 
 def load_dotenv_without_printing(path: Path) -> None:
     from bera_price_tracker.config import load_local_environment
@@ -107,9 +452,7 @@ class RecordingActorClient:
     def call(self, *, run_input: dict[str, object]) -> Any:
         self._record["actor_calls_created"] += 1
         run = self._inner.call(run_input=run_input)
-        if isinstance(run, Mapping):
-            self._record["run_status"] = run.get("status")
-            self._record["run_id"] = run.get("id")
+        _apply_run_to_record(self._record, run)
         return run
 
 
@@ -123,9 +466,20 @@ class ReplayActorClient:
     def call(self, *, run_input: dict[str, object]) -> Any:
         del run_input
         run = self._runs_client.get()
-        if isinstance(run, Mapping):
-            self._record["run_status"] = run.get("status")
-            self._record["run_id"] = run.get("id")
+        _apply_run_to_record(self._record, run)
+        configured = self._record.get("configured_actor_id") or self._record.get("actor_id")
+        aliases = self._record.get("configured_actor_aliases") or ()
+        classification = classify_replay_provenance(
+            configured_actor_id=configured,
+            run_act_id=self._record.get("run_act_id"),
+            extra_ids=aliases,
+        )
+        if classification == "mismatch":
+            raise ReplayActorMismatch(
+                "Replayed run does not belong to the configured Alibaba SEARCH Actor"
+            )
+        if classification == "unavailable":
+            raise ReplayProvenanceUnavailable("Replayed run Actor provenance could not be verified")
         return run
 
 
@@ -150,6 +504,8 @@ class RecordingApifyClient:
 
     def actor(self, actor_id: str) -> RecordingActorClient | ReplayActorClient:
         self._record["actor_id"] = actor_id
+        self._record["configured_actor_id"] = actor_id
+        self._record["configured_actor_aliases"] = _configured_actor_aliases(actor_id, self._inner)
         if self._replay_run_id is not None:
             return ReplayActorClient(self._inner.run(self._replay_run_id), self._record)
         return RecordingActorClient(self._inner.actor(actor_id), self._record)
@@ -173,11 +529,25 @@ class RecordingSearchService:
 def scalar_text(value: object) -> str | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, (str, int)):
-        normalized = str(value).strip()
-        if normalized:
-            return normalized
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return str(value)
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
     return None
+
+
+def identity_text(value: object) -> str | None:
+    """Require a real non-empty string. Numbers and bools are not identity."""
+
+    if isinstance(value, bool) or not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def row_field(row: object, name: str) -> object:
@@ -215,7 +585,7 @@ def indep_years(raw: object) -> Decimal | None:
     text = scalar_text(raw)
     if text is None:
         return None
-    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(?:yrs?|years?)?\s*", text, re.IGNORECASE)
     if match is None:
         return None
     try:
@@ -223,6 +593,8 @@ def indep_years(raw: object) -> Decimal | None:
     except InvalidOperation:
         return None
     if not value.is_finite() or value < 0:
+        return None
+    if "E" in str(value).upper():
         return None
     return value
 
@@ -236,6 +608,8 @@ def indep_count(raw: object) -> Decimal | None:
     except InvalidOperation:
         return None
     if not value.is_finite() or value < 0:
+        return None
+    if value != value.to_integral_value():
         return None
     return value
 
@@ -325,7 +699,7 @@ def main() -> int:  # noqa: PLR0915
         showing_counter,
         top_result_cards,
     )
-    from bera_price_tracker.gui.services import run_alibaba_search, sanitize_alibaba_error
+    from bera_price_tracker.gui.services import run_alibaba_search
     from bera_price_tracker.infrastructure.providers.alibaba import (
         ApifyAlibabaClient,
         map_alibaba_item,
@@ -337,6 +711,11 @@ def main() -> int:  # noqa: PLR0915
         "run_status": None,
         "run_id": None,
         "actor_id": None,
+        "configured_actor_id": None,
+        "configured_actor_aliases": [],
+        "run_act_id": None,
+        "run_build_id": None,
+        "run_build_number": None,
     }
 
     settings = Settings.from_env()
@@ -351,22 +730,16 @@ def main() -> int:  # noqa: PLR0915
     print(f"=== 1-2. RUN REAL — modo {mode} ===")
     try:
         payload = run_alibaba_search(QUERY, LIMIT, search_service=service)
-    except BaseException as exc:  # noqa: BLE001 - sanitized stop, no retry
-        print(f"Actor runs creados: {record['actor_calls_created']}")
-        print(f"status: {record['run_status']}")
-        print(f"ERROR (sanitizado): {sanitize_alibaba_error(exc)}")
-        return 1
+    except Exception as exc:
+        return emit_search_failure(exc, record)
 
     products: list[Any] = service.products
     raw_items = [item for item in record["raw_items"] if isinstance(item, Mapping)]
     rows: list[dict[str, Any]] = payload["results"]
-    print(f"Actor runs creados: {record['actor_calls_created']}")
-    print(f"Actor: {record['actor_id']}")
-    print(f"status: {record['run_status']}")
-    print(f"run reutilizable: {record['run_id']}")
+    _print_run_record(record)
     print(f"items en dataset (reutilizado): {len(raw_items)}")
     print(f"productos mapeados: {len(products)}")
-    print(f"ui_status: {payload['ui_status']}")
+    print(f"ui_status: {_display_provenance(payload.get('ui_status'))}")
 
     failures: list[str] = []
 
@@ -395,7 +768,7 @@ def main() -> int:  # noqa: PLR0915
         ("reviewCount", "review_count"),
     )
     mapping_ok = True
-    mapped_raw = [item for item in raw_items if scalar_text(item.get("title")) is not None]
+    mapped_raw = [item for item in raw_items if identity_text(item.get("title")) is not None]
     for raw_item, product in zip(mapped_raw, products, strict=True):
         for raw_key, attr in mapping_pairs:
             if scalar_text(raw_item.get(raw_key)) != getattr(product, attr):
@@ -450,7 +823,7 @@ def main() -> int:  # noqa: PLR0915
         )
         if not same:
             indep_ok = False
-        supplier_name = products[index].supplier_name or "—"
+        supplier_name = _display_provenance(products[index].supplier_name)
         print(
             f"    {supplier_name[:38]:38s} score app={rep.score} indep={indep['score']} "
             f"cov app={rep.evidence_coverage} indep={indep['coverage']} "
@@ -482,25 +855,14 @@ def main() -> int:  # noqa: PLR0915
         if same_signals and not same_scores:
             repeated_ok = False
         print(
-            f"    {name[:40]:40s} items={len(idxs)} señales_iguales={same_signals} "
+            f"    {_display_provenance(name)[:40]:40s} items={len(idxs)} "
+            f"señales_iguales={same_signals} "
             f"score_igual={same_scores}"
         )
     check("mismas señales => mismo score y cobertura", repeated_ok)
 
     print("\n=== 10. CAMPOS QUE NO DEBEN AFECTAR ===")
-    excluded_attrs = (
-        "display_star_level",
-        "product_score",
-        "shipping_score",
-        "sold_order",
-        "badges",
-        "certifications",
-        "show_crown",
-    )
-    check(
-        "AlibabaProduct no transporta campos excluidos",
-        all(not hasattr(products[0], attr) for attr in excluded_attrs),
-    )
+    report_mapped_products(products, check)
     sample = next((p for i, p in enumerate(products) if reputations[i].score is not None), None)
     if sample is not None:
         only_four = {
@@ -674,35 +1036,34 @@ def main() -> int:  # noqa: PLR0915
     ]
     check("modelo sin campos sensibles", not leaked)
 
-    print("\n=== 17/22. SCHEMA OBSERVADO vs CONOCIDO ===")
+    print("\n=== 17/22. SCHEMA OBSERVADO vs MEMO23 CONOCIDO ===")
     observed_keys: set[str] = set()
     for item in raw_items:
-        observed_keys.update(str(key) for key in item)
-    new_keys = sorted(observed_keys - PREVIOUSLY_OBSERVED_ACTOR_KEYS)
-    missing_keys = sorted(PREVIOUSLY_OBSERVED_ACTOR_KEYS - observed_keys)
-    schema_changed = bool(new_keys) or bool(missing_keys)
-    print(f"    schema cambió: {'sí' if schema_changed else 'no'}")
-    if new_keys:
-        print(f"    claves nuevas: {new_keys}")
-    if missing_keys:
-        print(f"    claves ausentes en este run: {missing_keys}")
+        observed_keys.update(key for key in item if isinstance(key, str))
+    unknown_keys, absent_optional = classify_observed_schema(observed_keys)
+    unknown_text = ", ".join(unknown_keys) if unknown_keys else "ninguna"
+    absent_text = ", ".join(absent_optional) if absent_optional else "ninguna"
+    print(f"    claves nuevas (desconocidas): {unknown_text}")
+    print(f"    claves conocidas opcionales ausentes en este run: {absent_text}")
 
     print("\n=== EJEMPLOS SANITIZADOS (máx 5) ===")
     for index in picked[:5]:
         product = products[index]
         rep = reputations[index]
         print(
-            f"    supplier={product.supplier_name or '—'} | "
+            f"    supplier={_display_provenance(product.supplier_name)} | "
             f"reputation={format_reputation_display(rep.score)} | "
             f"coverage={rep.evidence_coverage}% | "
-            f"years={product.gold_supplier_years or '—'} | "
-            f"service={product.supplier_service_score or '—'} | "
-            f"review_score={product.review_score or '—'} | "
-            f"review_count={product.review_count or '—'}"
+            f"years={_display_provenance(product.gold_supplier_years)} | "
+            f"service={_display_provenance(product.supplier_service_score)} | "
+            f"review_score={_display_provenance(product.review_score)} | "
+            f"review_count={_display_provenance(product.review_count)}"
         )
 
     print("\n=== RESULTADO ===")
-    print(f"Actor runs creados en esta ejecución: {record['actor_calls_created']}")
+    print(
+        f"Actor runs creados en esta ejecución: {_display_count(record.get('actor_calls_created'))}"
+    )
     if failures:
         print(f"FALLOS: {failures}")
         return 2
