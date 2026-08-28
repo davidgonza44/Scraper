@@ -80,63 +80,34 @@ test('Windows APPDATA global root is preserved', () => {
   assert.ok(roots.includes(path.join('C:\\Users\\test\\AppData\\Roaming', 'npm', 'node_modules')));
 });
 
-test('explicit regexp options provide the single augmentation pattern', () => {
-  const cases = [
-    ['rg -e validateUser src/', 'validateUser'],
-    ['grep -e validateUser src/', 'validateUser'],
-    ['rg --regexp validateUser src/', 'validateUser'],
-    ['grep --regexp validateUser src/', 'validateUser'],
-    ['rg --regexp=validateUser src/', 'validateUser'],
-    ['grep --regexp=validateUser src/', 'validateUser'],
-    ["rg -e pattern --glob '*.py' src/", 'pattern'],
-    ["rg --glob '*.py' -e pattern src/", 'pattern'],
-    ['grep -n -e pattern file', 'pattern'],
-    ['grep --regexp=pattern file', 'pattern'],
-    ['rg -e first -e second src/', 'first'],
-  ];
-  for (const [command, expected] of cases) {
-    assert.equal(hook.extractPattern('Shell', { command }), expected, command);
-  }
+test('project hook matcher is exactly Read|Grep', () => {
+  const hooksJson = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', '.cursor', 'hooks.json'), 'utf8'),
+  );
+  assert.equal(hooksJson.hooks.postToolUse.length, 1);
+  assert.equal(hooksJson.hooks.postToolUse[0].matcher, 'Read|Grep');
+  assert.doesNotMatch(hooksJson.hooks.postToolUse[0].matcher, /Shell/);
 });
 
-test('ordinary patterns and value-bearing flags remain supported', () => {
-  assert.equal(hook.extractPattern('Shell', { command: 'rg validateUser src/' }), 'validateUser');
-  assert.equal(hook.extractPattern('Shell', { command: 'grep validateUser src/' }), 'validateUser');
-  assert.equal(hook.extractPattern('Shell', { command: "rg --glob '*.py' validateUser src/" }), 'validateUser');
+test('structured Grep pattern aliases still work', () => {
+  assert.equal(hook.extractPattern('Grep', { query: 'validateUser' }), 'validateUser');
+  assert.equal(hook.extractPattern('Grep', { pattern: 'validateUser' }), 'validateUser');
+  assert.equal(hook.extractPattern('Grep', { regex: 'validateUser' }), 'validateUser');
+  assert.equal(hook.extractPattern('Grep', { q: 'validateUser' }), 'validateUser');
+  assert.equal(hook.extractPattern('Grep', { search: 'validateUser' }), 'validateUser');
+  assert.equal(hook.extractPattern('Grep', { searchQuery: 'validateUser' }), 'validateUser');
+  assert.equal(
+    hook.extractPattern('Grep', { query: 'id', pattern: 'validateUser' }),
+    'validateUser',
+  );
+  assert.equal(hook.extractPattern('Grep', { pattern: 'identifier' }), 'identifier');
 });
 
-test('a seen but unusable pattern candidate never falls through to a later operand', () => {
-  const cases = [
-    ['rg id src/', null],
-    ['grep id file', null],
-    ['rg -e ok src/', null],
-    ['grep --regexp=x file', null],
-    ['rg --regexp= src/', null],
-    ['rg -e ok -e validateUser src/', null],
-    ['rg --hidden id src/', null],
-    ["rg id --glob '*.py' src/", null],
-    ['rg identifier src/', 'identifier'],
-    ['rg -e validateUser file.py', 'validateUser'],
-    ['rg -f patterns.txt src/', null],
-    ['rg --files src/', null],
-    ['rg -eok src/', null],
-    ['rg -- id src/', null],
-    ['rg id -- src/', null],
-    ['rg -e ok -- src/', null],
-    ['rg src/ -e ok', null],
-    ['rg -e first -e ok src/', 'first'],
-    ['grep -e ok file', null],
-    ['rg --regexp=ok src/', null],
-    ['rg src/ -e validateUser', 'validateUser'],
-    ['rg id -e validateUser', 'validateUser'],
-    ['rg -e ok identifier src/', null],
-    ["rg --glob '*.py' id src/", null],
-  ];
-  for (const [command, expected] of cases) {
-    assert.equal(hook.extractPattern('Shell', { command }), expected, command);
-  }
+test('a present-but-unusable Grep pattern cannot fall through to a path', () => {
   assert.equal(hook.extractPattern('Grep', { pattern: 'id', path: 'src/' }), null);
   assert.equal(hook.extractPattern('Grep', { query: 'ok', path: 'file.py' }), null);
+  assert.equal(hook.extractPattern('Grep', { regex: 'x', path: 'hooks/gitnexus-hook.cjs' }), null);
+  assert.equal(hook.extractPattern('Grep', { q: '', glob: '**/*.py' }), null);
   assert.equal(hook.extractPattern('Grep', { pattern: 'identifier' }), 'identifier');
   assert.equal(
     hook.extractPattern('Grep', { query: 'id', pattern: 'validateUser' }),
@@ -144,29 +115,51 @@ test('a seen but unusable pattern candidate never falls through to a later opera
   );
 });
 
-test('value-bearing rg/grep options are skipped in both space and attached forms', () => {
-  const cases = [
-    ['grep --exclude-dir cache validateUser .', 'validateUser'],
-    ['grep --exclude-dir=cache validateUser .', 'validateUser'],
-    ['rg --context 3 validateUser src/', 'validateUser'],
-    ['rg --context=3 validateUser src/', 'validateUser'],
-    ["rg --type-add 'web:*.html' validateUser src/", 'validateUser'],
-    ["rg --type-add='web:*.html' validateUser src/", 'validateUser'],
-    ['grep --exclude-from ignore.txt validateUser .', 'validateUser'],
-    ['rg --max-count 4 validateUser src/', 'validateUser'],
-    ['rg --encoding utf-8 validateUser src/', 'validateUser'],
-    ['grep -C 3 validateUser file', 'validateUser'],
-    ['grep --directories recurse validateUser .', 'validateUser'],
-    ['rg --glob *.py validateUser src/', 'validateUser'],
-    ['rg --glob=*.py validateUser src/', 'validateUser'],
-    ['grep -r validateUser src/', 'validateUser'],
-    ['rg -r foo validateUser src/', 'validateUser'],
-    ['grep --color validateUser file', 'validateUser'],
-    ['grep --color=always validateUser file', 'validateUser'],
+test('Read augmentation uses the cleaned file basename', () => {
+  assert.equal(
+    hook.extractPattern('Read', { target_file: 'src/validateUser.py' }),
+    'validateUser',
+  );
+  assert.equal(hook.extractPattern('Read', { file_path: 'hooks/gitnexus-hook.cjs' }), 'gitnexushook');
+  assert.equal(hook.extractPattern('Read', { filePath: 'src/fooBar.js' }), 'fooBar');
+  assert.equal(hook.extractPattern('Read', { path: 'my_module.py' }), 'my_module');
+  assert.equal(hook.extractPattern('Read', { file: 'ab.ts' }), null);
+  assert.equal(hook.extractPattern('Read', {}), null);
+});
+
+test('Shell commands are not parsed, including compound boundaries and Windows executables', () => {
+  const commands = [
+    'rg validateUser src/',
+    'grep validateUser file',
+    'rg.exe validateUser src/',
+    'grep.exe validateUser file',
+    'C:\\Windows\\rg.exe validateUser src/',
+    'rg primary src/ || grep -e secondary file',
+    'rg primary src/ && grep secondary file',
+    'rg primary src/ | grep secondary',
+    'rg --files src/',
+    'rg -f patterns.txt src/',
+    'rg -e validateUser src/',
   ];
-  for (const [command, expected] of cases) {
-    assert.equal(hook.extractPattern('Shell', { command }), expected, command);
+  for (const command of commands) {
+    assert.equal(hook.extractPattern('Shell', { command }), null, command);
+    assert.equal(hook.extractPattern('shell', { command }), null, command);
   }
+});
+
+test('hook implementation does not import or touch product application files', () => {
+  const hookSource = fs.readFileSync(path.join(__dirname, 'gitnexus-hook.cjs'), 'utf8');
+  const lockSource = fs.readFileSync(path.join(__dirname, 'hook-lock.cjs'), 'utf8');
+  for (const source of [hookSource, lockSource]) {
+    assert.doesNotMatch(source, /require\(['"]\.\.\/src/);
+    assert.doesNotMatch(source, /from ['"]src\//);
+    assert.doesNotMatch(source, /openspec/);
+    assert.doesNotMatch(source, /docs\/architecture/);
+  }
+  assert.doesNotMatch(hookSource, /parseRgGrepPattern/);
+  assert.doesNotMatch(hookSource, /detectSearchTool/);
+  assert.doesNotMatch(hookSource, /t === 'shell'/);
+  assert.doesNotMatch(hookSource, /function parseRgGrepPattern/);
 });
 
 test('missing GitNexus remains a local, fail-open result', () => {
@@ -261,84 +254,6 @@ test('CASE D: unproven canonical index is not reused; local worktree index wins'
   const worktreeIndex = writeRepoIndex(worktree);
   assert.equal(hook.findGitNexusDir(worktree), worktreeIndex);
   assert.notEqual(hook.findGitNexusDir(worktree), mainIndex);
-});
-
-test('pattern-file options do not treat remaining path operands as patterns', () => {
-  const cases = [
-    'rg -f patterns.txt src/',
-    'rg --file patterns.txt src/',
-    'rg --file=patterns.txt src/',
-    'rg -fpatterns.txt src/',
-    'grep -f patterns.txt src/',
-    'grep --file patterns.txt src/',
-    'grep --file=patterns.txt src/',
-    'grep -fpatterns.txt src/',
-    'grep -nf patterns.txt src/',
-    'rg -nf patterns.txt src/',
-  ];
-  for (const command of cases) {
-    assert.equal(hook.extractPattern('Shell', { command }), null, command);
-  }
-});
-
-test('explicit -e/--regexp still supplies the single pattern when mixed with -f/--file', () => {
-  const cases = [
-    ['rg -f patterns.txt -e validateUser src/', 'validateUser'],
-    ['rg -e validateUser -f patterns.txt src/', 'validateUser'],
-    ['rg --file patterns.txt --regexp validateUser src/', 'validateUser'],
-    ['rg --regexp=validateUser --file=patterns.txt src/', 'validateUser'],
-    ['grep -f patterns.txt -e validateUser src/', 'validateUser'],
-    ['grep -e validateUser -f patterns.txt src/', 'validateUser'],
-    ['grep --file patterns.txt --regexp validateUser src/', 'validateUser'],
-    ['grep --regexp=validateUser --file=patterns.txt src/', 'validateUser'],
-  ];
-  for (const [command, expected] of cases) {
-    assert.equal(hook.extractPattern('Shell', { command }), expected, command);
-  }
-});
-
-test('ripgrep no-pattern listing modes skip GitNexus augmentation', () => {
-  const noPattern = [
-    'rg --files src/',
-    'rg --files',
-    'rg --files --hidden src/',
-    'rg --hidden --files src/',
-    'rg --type-list',
-    'rg --type-list python',
-    'rg --pcre2-version',
-    'rg --pcre2-version extraarg',
-    'rg --generate man',
-    'rg --generate man src/',
-    'rg --files -e validateUser src/',
-  ];
-  for (const command of noPattern) {
-    assert.equal(hook.extractPattern('Shell', { command }), null, command);
-  }
-  assert.equal(
-    hook.extractPattern('Shell', { command: 'rg --files-with-matches validateUser src/' }),
-    'validateUser',
-  );
-  assert.equal(
-    hook.extractPattern('Shell', { command: 'rg --files-without-match validateUser src/' }),
-    'validateUser',
-  );
-});
-
-test('GNU grep bare --color/--colour does not consume the next token', () => {
-  const cases = [
-    ['grep --color auto file.txt', 'auto'],
-    ['grep --colour always file.txt', 'always'],
-    ['grep --color never file.txt', 'never'],
-    ['grep --color=auto validateUser file.txt', 'validateUser'],
-    ['grep --colour=always validateUser file.txt', 'validateUser'],
-    ['grep --color always validateUser file', 'always'],
-    ['rg --color auto validateUser src/', 'validateUser'],
-    ['rg --color=auto validateUser src/', 'validateUser'],
-    ['rg --color always validateUser src/', 'validateUser'],
-  ];
-  for (const [command, expected] of cases) {
-    assert.equal(hook.extractPattern('Shell', { command }), expected, command);
-  }
 });
 
 test('linked worktree with a different HEAD must not use the canonical index', (t) => {
@@ -467,9 +382,22 @@ test('hook stdin: matching identity can emit additional_context without npx', (t
   const payload = JSON.parse(result.stdout.trim());
   assert.match(payload.additional_context, /^\[GitNexus\] /);
   assert.match(payload.additional_context, /ApifyAlibabaClient/);
+
+  const readResult = runHook(
+    {
+      cwd: parent,
+      tool_name: 'Read',
+      tool_input: { target_file: 'src/ApifyAlibabaClient.py' },
+    },
+    { NODE_PATH: fakeRoot },
+  );
+  assert.equal(readResult.status, 0, readResult.stderr);
+  const readPayload = JSON.parse(readResult.stdout.trim());
+  assert.match(readPayload.additional_context, /^\[GitNexus\] /);
+  assert.match(readPayload.additional_context, /ApifyAlibabaClient/);
 });
 
-test('hook stdin: no-pattern, pattern-file, mismatched worktree, and missing GitNexus fail open', (t) => {
+test('hook stdin: Shell, unusable Grep, mismatched worktree, and missing GitNexus fail open', (t) => {
   const parent = tempDir(t, 'gitnexus-hook-neg-main-');
   initGitRepo(parent);
   fs.writeFileSync(path.join(parent, 'README'), 'main\n');
@@ -498,19 +426,19 @@ test('hook stdin: no-pattern, pattern-file, mismatched worktree, and missing Git
   );
   const env = { NODE_PATH: fakeRoot };
 
-  const noPattern = runHook(
-    { cwd: parent, tool_name: 'Shell', tool_input: { command: 'rg --files src/' } },
+  const shellIgnored = runHook(
+    { cwd: parent, tool_name: 'Shell', tool_input: { command: 'rg.exe validateUser src/ || grep -e secondary file' } },
     env,
   );
-  assert.equal(noPattern.status, 0, noPattern.stderr);
-  assert.equal((noPattern.stdout || '').trim(), '');
+  assert.equal(shellIgnored.status, 0, shellIgnored.stderr);
+  assert.equal((shellIgnored.stdout || '').trim(), '');
 
-  const filePattern = runHook(
-    { cwd: parent, tool_name: 'Shell', tool_input: { command: 'rg -f patterns.txt src/' } },
+  const unusableGrep = runHook(
+    { cwd: parent, tool_name: 'Grep', tool_input: { pattern: 'id', path: 'src/' } },
     env,
   );
-  assert.equal(filePattern.status, 0, filePattern.stderr);
-  assert.equal((filePattern.stdout || '').trim(), '');
+  assert.equal(unusableGrep.status, 0, unusableGrep.stderr);
+  assert.equal((unusableGrep.stdout || '').trim(), '');
 
   const mismatched = runHook(
     {

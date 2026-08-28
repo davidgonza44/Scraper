@@ -3,14 +3,17 @@
  * GitNexus Cursor postToolUse Hook
  *
  * Receives a JSON event on stdin describing a finished tool call, derives a
- * search pattern (Grep query, Read file basename, or rg/grep arg from a Shell
- * command), runs `gitnexus augment <pattern>`, and emits the enriched context
- * back as `{ additional_context: "..." }` so the agent sees it alongside the
+ * search pattern (Grep query or Read file basename), runs
+ * `gitnexus augment <pattern>`, and emits the enriched context back as
+ * `{ additional_context: "..." }` so the agent sees it alongside the
  * tool result.
  *
- * Replaces the legacy beforeShellExecution / augment-shell.sh pipeline:
- *   - Cross-platform (no bash, no jq -- runs on Windows out of the box)
- *   - Covers Read and Grep, not just Shell rg/grep
+ * Shell command parsing is intentionally unsupported. Arbitrary shell
+ * grammars (value-bearing flags, pattern-file modes, compound command
+ * boundaries, Windows `.exe` names) failed repeatedly; the hook matcher
+ * is exactly `Read|Grep`.
+ *
+ * Cross-platform (no bash, no jq -- runs on Windows, Linux, and macOS).
  *
  * Cursor 2.4+ generic hooks: https://cursor.com/docs/agent/hooks
  */
@@ -166,261 +169,6 @@ function findGitNexusDir(startDir) {
   return null;
 }
 
-// Pattern-bearing options: the following token (or attached value) IS the search pattern.
-// Distinct from options that consume a non-pattern argument.
-const PATTERN_LONG = new Set(['regexp']);
-const PATTERN_SHORT = new Set(['e']);
-
-// Required-value long options from `rg --help` / `grep --help` (excluding regexp).
-const RG_VALUE_LONG = new Set([
-  'after-context',
-  'before-context',
-  'colors',
-  'context',
-  'context-separator',
-  'cursor-ignore',
-  'dfa-size-limit',
-  'encoding',
-  'engine',
-  'field-context-separator',
-  'field-match-separator',
-  'generate',
-  'glob',
-  'hostname-bin',
-  'hyperlink-format',
-  'iglob',
-  'ignore-file',
-  'max-columns',
-  'max-count',
-  'max-depth',
-  'max-filesize',
-  'path-separator',
-  'pre',
-  'pre-glob',
-  'regex-size-limit',
-  'replace',
-  'sort',
-  'sortr',
-  'threads',
-  'type',
-  'type-add',
-  'type-clear',
-  'type-not',
-]);
-const GREP_VALUE_LONG = new Set([
-  'after-context',
-  'before-context',
-  'binary-files',
-  'context',
-  'devices',
-  'directories',
-  'exclude',
-  'exclude-dir',
-  'exclude-from',
-  'group-separator',
-  'include',
-  'label',
-  'max-count',
-]);
-// Optional values (`--color[=WHEN]`): ripgrep accepts a separate WHEN token.
-// GNU grep's bare `--color`/`--colour` is equivalent to `--color=auto` and
-// must not consume the next operand.
-const OPTIONAL_COLOR_VALUES = new Set(['always', 'never', 'auto', 'ansi']);
-const PATTERN_FILE_LONG = new Set(['file']);
-const PATTERN_FILE_SHORT = new Set(['f']);
-const RG_NO_PATTERN_LONG = new Set(['files', 'type-list', 'pcre2-version']);
-const RG_NO_PATTERN_VALUE_LONG = new Set(['generate']);
-const RG_VALUE_SHORT = new Set(['E', 'm', 'j', 'g', 'd', 't', 'T', 'A', 'B', 'C', 'M', 'r']);
-const GREP_VALUE_SHORT = new Set(['m', 'd', 'D', 'A', 'B', 'C']);
-
-function detectSearchTool(token) {
-  if (/\brg$/.test(token)) return 'rg';
-  if (/\bgrep$/.test(token)) return 'grep';
-  return null;
-}
-
-// Pattern occupancy is a three-state candidate, not a nullable string:
-//   unseen   -> no PATTERN token has been identified yet
-//   unusable -> a PATTERN token was seen but is ineligible (empty/too short)
-//   usable   -> a PATTERN token was seen and may be used for augmentation
-// Unusable must not collapse back to unseen; later paths or later -e/--regexp
-// values must not replace the first identified candidate.
-const PATTERN_CANDIDATE_UNSEEN = 'unseen';
-const PATTERN_CANDIDATE_UNUSABLE = 'unusable';
-const PATTERN_CANDIDATE_USABLE = 'usable';
-
-function unseenPatternCandidate() {
-  return { kind: PATTERN_CANDIDATE_UNSEEN, value: null };
-}
-
-function cleanPatternToken(token) {
-  const pattern = String(token).replace(/['"]/g, '');
-  return pattern.length >= 3 ? pattern : null;
-}
-
-function recordPatternCandidate(state, raw) {
-  if (state.kind !== PATTERN_CANDIDATE_UNSEEN) return;
-  const usable = cleanPatternToken(raw);
-  if (usable) {
-    state.kind = PATTERN_CANDIDATE_USABLE;
-    state.value = usable;
-    return;
-  }
-  state.kind = PATTERN_CANDIDATE_UNUSABLE;
-  state.value = null;
-}
-
-function patternCandidateSeen(state) {
-  return state.kind !== PATTERN_CANDIDATE_UNSEEN;
-}
-
-function resolvedPatternCandidate(state) {
-  return state.kind === PATTERN_CANDIDATE_USABLE ? state.value : null;
-}
-
-function valueLongSet(tool) {
-  return tool === 'grep' ? GREP_VALUE_LONG : RG_VALUE_LONG;
-}
-
-function valueShortSet(tool) {
-  return tool === 'grep' ? GREP_VALUE_SHORT : RG_VALUE_SHORT;
-}
-
-function parseRgGrepPattern(cmd) {
-  const tokens = cmd.split(/\s+/);
-  let foundCmd = false;
-  let tool = 'rg';
-  // Explicit parser states instead of scattered skip flags:
-  //   pattern        -> next token is -e/--regexp PATTERN
-  //   pattern-file   -> next token is -f/--file PATH (not an augmentation pattern)
-  //   value          -> next token is a non-pattern option argument
-  //   optional-color -> ripgrep --color WHEN, only when WHEN is a known value
-  let pending = null;
-  const explicitPattern = unseenPatternCandidate();
-  const positionalPattern = unseenPatternCandidate();
-  let patternFile = false;
-  let noPatternMode = false;
-
-  const takeExplicit = (raw) => {
-    recordPatternCandidate(explicitPattern, raw);
-  };
-
-  for (const token of tokens) {
-    if (pending === 'pattern') {
-      takeExplicit(token);
-      pending = null;
-      continue;
-    }
-    if (pending === 'pattern-file') {
-      patternFile = true;
-      pending = null;
-      continue;
-    }
-    if (pending === 'optional-color') {
-      pending = null;
-      const lowered = token.toLowerCase().replace(/['"]/g, '');
-      if (OPTIONAL_COLOR_VALUES.has(lowered)) continue;
-    } else if (pending === 'value') {
-      pending = null;
-      continue;
-    }
-    if (!foundCmd) {
-      const detected = detectSearchTool(token);
-      if (detected) {
-        foundCmd = true;
-        tool = detected;
-      }
-      continue;
-    }
-    if (token === '--') {
-      if (
-        noPatternMode ||
-        patternCandidateSeen(explicitPattern) ||
-        patternFile ||
-        patternCandidateSeen(positionalPattern)
-      ) {
-        break;
-      }
-      pending = 'pattern';
-      continue;
-    }
-    if (token === '-e' || token === '--regexp') {
-      pending = 'pattern';
-      continue;
-    }
-    if (token.startsWith('--regexp=')) {
-      takeExplicit(token.slice('--regexp='.length));
-      continue;
-    }
-    if (token.startsWith('-e') && token.length > 2 && !token.startsWith('--')) {
-      takeExplicit(token.slice(2));
-      continue;
-    }
-    if (token.startsWith('--')) {
-      const eq = token.indexOf('=');
-      const name = (eq === -1 ? token.slice(2) : token.slice(2, eq)).toLowerCase();
-      if (PATTERN_LONG.has(name)) {
-        if (eq === -1) pending = 'pattern';
-        else takeExplicit(token.slice(eq + 1));
-        continue;
-      }
-      if (PATTERN_FILE_LONG.has(name)) {
-        patternFile = true;
-        if (eq === -1) pending = 'pattern-file';
-        continue;
-      }
-      if (tool === 'rg' && RG_NO_PATTERN_LONG.has(name)) {
-        noPatternMode = true;
-        continue;
-      }
-      if (tool === 'rg' && RG_NO_PATTERN_VALUE_LONG.has(name)) {
-        noPatternMode = true;
-        if (eq === -1) pending = 'value';
-        continue;
-      }
-      if (eq !== -1) continue;
-      if (tool === 'rg' && name === 'color') {
-        pending = 'optional-color';
-        continue;
-      }
-      if (valueLongSet(tool).has(name)) pending = 'value';
-      continue;
-    }
-    if (token.startsWith('-') && token.length > 1) {
-      if (/^-\d+$/.test(token)) continue;
-      const body = token.slice(1);
-      const shorts = valueShortSet(tool);
-      for (let i = 0; i < body.length; i++) {
-        const ch = body[i];
-        const rest = body.slice(i + 1);
-        if (PATTERN_SHORT.has(ch)) {
-          if (rest) takeExplicit(rest);
-          else pending = 'pattern';
-          break;
-        }
-        if (PATTERN_FILE_SHORT.has(ch)) {
-          patternFile = true;
-          if (!rest) pending = 'pattern-file';
-          break;
-        }
-        if (shorts.has(ch)) {
-          if (!rest) pending = 'value';
-          break;
-        }
-      }
-      continue;
-    }
-    if (!patternCandidateSeen(positionalPattern)) {
-      recordPatternCandidate(positionalPattern, token);
-    }
-  }
-
-  if (noPatternMode) return null;
-  if (patternCandidateSeen(explicitPattern)) return resolvedPatternCandidate(explicitPattern);
-  if (patternFile) return null;
-  return resolvedPatternCandidate(positionalPattern);
-}
-
 /**
  * Extract a search pattern from the tool input. Cursor 2.4 docs at
  * https://cursor.com/docs/agent/hooks list the tool *matchers* but do not
@@ -429,6 +177,8 @@ function parseRgGrepPattern(cmd) {
  * (the highest-frequency search path) we also accept the longest plausible
  * string value in tool_input. Set GITNEXUS_DEBUG=1 to log the raw payload
  * to stderr if Cursor changes the contract and aliases stop matching.
+ *
+ * Shell is not a supported matcher and is never parsed here.
  */
 function pickLongestStringValue(obj) {
   let best = null;
@@ -478,18 +228,6 @@ function extractPattern(toolName, toolInput) {
     const base = path.basename(String(filePath), path.extname(String(filePath)));
     const cleaned = base.replace(/[^a-zA-Z0-9_]/g, '');
     return cleaned.length >= 3 ? cleaned : null;
-  }
-
-  if (t === 'shell') {
-    const cmd = toolInput.command || '';
-    if (!/\brg\b|\bgrep\b/.test(cmd)) return null;
-    // NOTE: parseRgGrepPattern uses split(/\s+/) and cannot handle shell
-    // quoting. `rg "User Service" src/` returns "User" (the first token
-    // after the rg/grep arg, with surrounding quotes stripped) -- the
-    // multi-word pattern is intentionally not reconstructed since BM25 is
-    // already token-tolerant. Quoted single tokens (`rg "validateUser"`)
-    // work fine.
-    return parseRgGrepPattern(cmd);
   }
 
   return null;
@@ -645,7 +383,6 @@ module.exports = {
   resolveCliPath,
   runGitNexusCli,
   extractPattern,
-  parseRgGrepPattern,
   findGitNexusDir,
   findCanonicalRepoRoot,
   walkForGitNexusDir,

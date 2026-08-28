@@ -3,7 +3,7 @@
   "hooks": {
     "postToolUse": [
       {
-        "matcher": "Shell|Read|Grep",
+        "matcher": "Read|Grep",
         "command": "node ./hooks/gitnexus-hook.cjs",
         "timeout": 10
       }
