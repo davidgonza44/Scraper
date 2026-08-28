@@ -96,6 +96,24 @@ def _cents_precision(value: Decimal) -> int:
     return max(_MINIMUM_CALCULATION_PRECISION, value.adjusted() + 3)
 
 
+def _canonical_exponent(value: Decimal) -> int:
+    """Return the exponent after stripping insignificant trailing zeros.
+
+    Provider Decimals may equal an ordinary magnitude while storing a padded
+    coefficient such as ``1.000...0``. Context compatibility must use the
+    significant coefficient, not that notation. This inspects ``as_tuple()``
+    only: it does not round and does not use ``Decimal.normalize()``.
+    """
+
+    _sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):
+        raise ValueError("statistics prices must be finite")
+    trailing = 0
+    while trailing < len(digits) - 1 and digits[-1 - trailing] == 0:
+        trailing += 1
+    return exponent + trailing
+
+
 def _decimal_in_context_range(value: Decimal, context: Context) -> bool:
     """True when ``value`` is a normal in ``context`` (Emin..Emax).
 
@@ -127,10 +145,7 @@ def _representable_price(value: Decimal) -> bool:
 def _calculation_context(prices: list[Decimal]) -> Context | None:
     exponents: list[int] = []
     for price in prices:
-        exponent = price.as_tuple().exponent
-        if not isinstance(exponent, int):
-            raise ValueError("statistics prices must be finite")
-        exponents.append(exponent)
+        exponents.append(_canonical_exponent(price))
     minimum_exponent = min(exponents)
     maximum_adjusted = max(price.adjusted() for price in prices)
     exact_sum_digits = maximum_adjusted - minimum_exponent + 1 + len(str(len(prices)))

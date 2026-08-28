@@ -11,6 +11,7 @@ from bera_price_tracker.application.alibaba_statistics import (
     UNAVAILABLE_DISPLAY,
     _bounded_precision,
     _calculation_context,
+    _canonical_exponent,
     _decimal_context,
     _quantize_cents,
     alibaba_price_bounds,
@@ -400,3 +401,134 @@ def test_ordinary_small_prices_remain_eligible_with_siblings() -> None:
         search_service=SearchAlibabaProducts(FakeAlibabaProvider(products)),
     )
     assert [row["title"] for row in payload["results"]] == ["milli", "one", "two", "three"]
+
+
+def _padded_one() -> Decimal:
+    return Decimal("1." + ("0" * 9998))
+
+
+def _ordinary_usd_cohort(count: int) -> list[AlibabaProduct]:
+    return [_usd_product(f"n{index}", Decimal(index)) for index in range(1, count + 1)]
+
+
+def test_equivalent_coefficient_padding_shares_technical_context() -> None:
+    one = Decimal("1")
+    one_padded = Decimal("1.000000")
+    thousand = Decimal("1000")
+    thousand_padded = Decimal("1000.000000")
+    thousand_exp = Decimal("1E+3")
+    sibling = Decimal("2")
+    assert one == one_padded
+    assert thousand == thousand_padded == thousand_exp
+    assert _canonical_exponent(one) == _canonical_exponent(one_padded) == 0
+    assert (
+        _canonical_exponent(thousand)
+        == _canonical_exponent(thousand_padded)
+        == _canonical_exponent(thousand_exp)
+        == 3
+    )
+
+    one_context = _calculation_context([one, sibling])
+    padded_one_context = _calculation_context([one_padded, sibling])
+    assert one_context is not None
+    assert padded_one_context is not None
+    assert one_context.prec == padded_one_context.prec
+
+    thousand_precs: list[int] = []
+    for value in (thousand, thousand_padded, thousand_exp):
+        context = _calculation_context([value, Decimal("1")])
+        assert context is not None
+        thousand_precs.append(context.prec)
+    assert len(set(thousand_precs)) == 1
+
+    compact = _padded_one()
+    assert compact == one
+    assert _canonical_exponent(compact) == _canonical_exponent(one) == 0
+    compact_context = _calculation_context([compact, one])
+    plain_context = _calculation_context([one, one])
+    assert compact_context is not None
+    assert plain_context is not None
+    assert compact_context.prec == plain_context.prec
+
+
+def test_insignificant_coefficient_padding_does_not_collapse_ordinary_statistics() -> None:
+    padded_one = _padded_one()
+    assert padded_one == Decimal("1")
+    ordinary = _ordinary_usd_cohort(499)
+    assert len(ordinary) == 499
+    padded = _usd_product("padded", padded_one)
+    values = [padded_one, *[item.min_price for item in ordinary if item.min_price is not None]]
+    assert len(values) == 500
+    assert _calculation_context(values) is not None
+
+    placements = (
+        [padded, *ordinary],
+        [*ordinary, padded],
+        [*ordinary[:249], padded, *ordinary[249:]],
+    )
+    stats_by_placement: list[tuple[int, Decimal | None, Decimal | None, Decimal | None]] = []
+    for products in placements:
+        payload = run_alibaba_search(
+            "mouse",
+            500,
+            search_service=SearchAlibabaProducts(FakeAlibabaProvider(products)),
+        )
+        assert payload["ui_status"] == "SUCCESS"
+        assert [row["title"] for row in payload["results"]] == [item.title for item in products]
+        stats = calculate_alibaba_price_statistics(products)
+        assert stats.priced_products == 500
+        assert stats.minimum == Decimal("1")
+        assert stats.maximum == Decimal("499")
+        assert stats.average is not None
+        stats_by_placement.append(
+            (stats.priced_products, stats.minimum, stats.maximum, stats.average)
+        )
+    assert stats_by_placement[0] == stats_by_placement[1] == stats_by_placement[2]
+
+
+def test_padded_huge_magnitude_still_fails_closed_from_ordinary_siblings() -> None:
+    huge = Decimal("1E+9997")
+    padded_huge = Decimal("1." + ("0" * 100) + "E+9997")
+    assert padded_huge == huge
+    assert _canonical_exponent(padded_huge) == _canonical_exponent(huge)
+    assert _quantize_cents(huge) is not None
+    assert _quantize_cents(padded_huge) is not None
+    assert _calculation_context([Decimal("0.01"), padded_huge]) is None
+    low = _usd_product("ok-low", Decimal("0.01"))
+    high = _usd_product("ok-high", Decimal("0.03"))
+    extreme = _usd_product("padded-huge", padded_huge)
+    for products in (
+        [low, extreme],
+        [extreme, low],
+        [low, extreme, high],
+        [high, extreme, low],
+    ):
+        stats = calculate_alibaba_price_statistics(products)
+        ok_mins = [
+            item.min_price for item in products if item.title.startswith("ok") and item.min_price
+        ]
+        assert stats.priced_products == len(ok_mins)
+        assert stats.minimum == min(ok_mins)
+        assert stats.maximum == max(ok_mins)
+
+
+def test_padded_tiny_exponent_still_does_not_starve_ordinary_cluster() -> None:
+    emin = Context().Emin
+    tiny = Decimal(f"1E{emin}")
+    padded_tiny = Decimal("1." + ("0" * 10) + f"E{emin}")
+    assert padded_tiny == tiny
+    assert _canonical_exponent(padded_tiny) == _canonical_exponent(tiny)
+    one = _usd_product("one", Decimal("1"))
+    two = _usd_product("two", Decimal("2"))
+    three = _usd_product("three", Decimal("3"))
+    padded = _usd_product("padded-tiny", padded_tiny)
+    for products in (
+        [padded, one, two, three],
+        [one, two, three, padded],
+        [one, padded, two, three],
+    ):
+        stats = calculate_alibaba_price_statistics(products)
+        assert stats.priced_products == 3
+        assert stats.minimum == Decimal("1")
+        assert stats.maximum == Decimal("3")
+        assert stats.average == Decimal("2")
