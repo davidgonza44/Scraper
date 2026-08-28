@@ -289,8 +289,8 @@ def _eligible_for_group_statistics(values: list[Decimal]) -> list[bool]:
 
     Individually representable prices can still be group-threatening when their
     combined exponent span exceeds the technical work cap. Prefer ordinary
-    magnitudes (smaller per-value cents precision) so a single extreme cannot
-    erase valid sibling statistics.
+    magnitudes: among equal per-value work, smaller ``abs(adjusted())`` ranks
+    first so an Emin-boundary tiny cannot starve usable siblings.
     """
 
     count = len(values)
@@ -302,7 +302,7 @@ def _eligible_for_group_statistics(values: list[Decimal]) -> list[bool]:
         range(count),
         key=lambda index: (
             _cents_precision(values[index]),
-            values[index].adjusted(),
+            abs(values[index].adjusted()),
             values[index],
         ),
     )

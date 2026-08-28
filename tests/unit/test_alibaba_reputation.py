@@ -38,6 +38,9 @@ def _observed_items() -> list[dict[str, object]]:
 def test_parse_years_and_ratings() -> None:
     assert parse_gold_supplier_years("6 yrs") == Decimal("6")
     assert parse_gold_supplier_years("1 yr") == Decimal("1")
+    assert parse_gold_supplier_years("10 yrs") == Decimal("10")
+    assert parse_gold_supplier_years("16 yrs") == Decimal("16")
+    assert parse_gold_supplier_years("5") == Decimal("5")
     assert parse_gold_supplier_years("not-a-year") is None
     assert parse_rating_0_5("4.5") == Decimal("4.5")
     assert parse_rating_0_5("5") == Decimal("5")
@@ -182,6 +185,33 @@ def test_unused_fields_do_not_change_score() -> None:
     assert changed.review_score_points == original.review_score_points
     assert changed.years_points == original.years_points
     assert changed.review_count_points == original.review_count_points
+
+
+def test_exponent_and_signed_gold_years_do_not_create_reputation() -> None:
+    review_only = calculate_supplier_reputation({"title": "Mouse", "reviewScore": 5})
+    assert review_only.years is None
+    assert review_only.years_points is None
+    assert review_only.score is None
+    assert parse_gold_supplier_years(Decimal("1E+100")) is None
+    assert parse_gold_supplier_years(Decimal("-5")) is None
+    assert parse_gold_supplier_years(6) == Decimal("6")
+    for raw_years in (1e100, -5.0, "1e100", "1e+100", "-5", "-5.0"):
+        assert parse_gold_supplier_years(raw_years) is None
+        product = map_alibaba_item(
+            {"title": "Mouse", "reviewScore": 5, "goldSupplierYears": raw_years}
+        )
+        assert product is not None
+        result = calculate_supplier_reputation(product)
+        assert parse_gold_supplier_years(product.gold_supplier_years) is None
+        assert result.years is None
+        assert result.years_points is None
+        assert result.score is None
+        assert result.evidence_coverage == review_only.evidence_coverage
+        direct = calculate_supplier_reputation(
+            {"title": "Mouse", "reviewScore": 5, "goldSupplierYears": raw_years}
+        )
+        assert direct.years is None
+        assert direct.score is None
 
 
 def test_mapper_reads_observed_supplier_fields() -> None:

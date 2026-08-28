@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -42,6 +43,7 @@ from tools.validate_alibaba_reputation_e2e import (
     has_mapped_products,
     identity_text,
     indep_rating,
+    indep_years,
     replay_search_failure_kind,
     report_mapped_products,
     run_belongs_to_configured_search_actor,
@@ -114,6 +116,14 @@ def test_zero_ratings_are_not_normalized_to_missing() -> None:
 def test_out_of_range_finite_score_survives_scalar_but_not_rating_parser() -> None:
     assert scalar_text(8.5) == "8.5"
     assert indep_rating(8.5) is None
+
+
+def test_indep_years_rejects_exponent_and_signed_forms() -> None:
+    assert indep_years("6 yrs") == Decimal("6")
+    assert indep_years("1 yr") == Decimal("1")
+    assert indep_years("5") == Decimal("5")
+    for raw in (1e100, -5.0, "1e100", "1e+100", "-5", "-5.0"):
+        assert indep_years(raw) is None
 
 
 def test_replay_rejects_legacy_search_actor_run() -> None:

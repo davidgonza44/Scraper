@@ -25,7 +25,10 @@ MIN_COVERAGE = Decimal("50")
 _HUNDRED = Decimal("100")
 _INTEGER = Decimal("1")
 _TENTH = Decimal("0.1")
-_YEAR_NUMBER = re.compile(r"(\d+(?:\.\d+)?)")
+_YEAR_FORM = re.compile(
+    r"^\s*(?P<years>\d+(?:\.\d+)?)\s*(?:yrs?|years?)?\s*$",
+    re.IGNORECASE,
+)
 
 LABEL_VERY_SOLID = "Señales muy sólidas"
 LABEL_SOLID = "Señales sólidas"
@@ -92,25 +95,29 @@ def parse_rating_0_5(raw: object) -> Decimal | None:
 
 
 def parse_gold_supplier_years(raw: object) -> Decimal | None:
-    """Parse ``6 yrs`` / ``1 yr`` conservatively. Does not invent a value."""
+    """Parse a complete ``6 yrs`` / ``1 yr`` / ``5`` form. Does not invent a value."""
 
     if isinstance(raw, bool):
         return None
-    if isinstance(raw, Decimal):
-        value = raw
-    elif isinstance(raw, int):
+    if isinstance(raw, int):
+        if raw < 0:
+            return None
         value = Decimal(raw)
+    elif isinstance(raw, Decimal):
+        value = raw
     elif isinstance(raw, str):
-        match = _YEAR_NUMBER.search(raw)
+        match = _YEAR_FORM.fullmatch(raw)
         if match is None:
             return None
         try:
-            value = Decimal(match.group(1))
+            value = Decimal(match.group("years"))
         except InvalidOperation:
             return None
     else:
         return None
     if not value.is_finite() or value < 0:
+        return None
+    if "E" in str(value).upper():
         return None
     return value
 

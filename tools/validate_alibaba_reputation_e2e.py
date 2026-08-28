@@ -585,7 +585,7 @@ def indep_years(raw: object) -> Decimal | None:
     text = scalar_text(raw)
     if text is None:
         return None
-    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(?:yrs?|years?)?\s*", text, re.IGNORECASE)
     if match is None:
         return None
     try:
@@ -593,6 +593,8 @@ def indep_years(raw: object) -> Decimal | None:
     except InvalidOperation:
         return None
     if not value.is_finite() or value < 0:
+        return None
+    if "E" in str(value).upper():
         return None
     return value
 

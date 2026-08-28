@@ -315,3 +315,88 @@ def test_negative_exponent_outside_context_range_is_unavailable() -> None:
             assert listing
             if raw == "1e-20":
                 assert listing == "$0.00"
+
+
+def test_tiny_emin_price_does_not_starve_ordinary_sibling_statistics() -> None:
+    emin = Context().Emin
+    tiny = Decimal(f"1E{emin}")
+    ordinary = (Decimal("1"), Decimal("2"), Decimal("3"))
+    assert _quantize_cents(tiny) is not None
+    for value in ordinary:
+        assert _quantize_cents(value) is not None
+    assert _calculation_context([tiny, *ordinary]) is None
+
+    tiny_product = _usd_product("tiny", tiny)
+    one = _usd_product("one", Decimal("1"))
+    two = _usd_product("two", Decimal("2"))
+    three = _usd_product("three", Decimal("3"))
+    groups = (
+        [tiny_product, one, two, three],
+        [one, two, three, tiny_product],
+        [three, tiny_product, one, two],
+        [one, tiny_product, two, three],
+    )
+    for products in groups:
+        payload = run_alibaba_search(
+            "mouse",
+            10,
+            search_service=SearchAlibabaProducts(FakeAlibabaProvider(products)),
+        )
+        assert payload["ui_status"] == "SUCCESS"
+        assert [row["title"] for row in payload["results"]] == [item.title for item in products]
+        stats = calculate_alibaba_price_statistics(products)
+        assert stats.priced_products == 3
+        assert stats.minimum == Decimal("1")
+        assert stats.maximum == Decimal("3")
+        assert stats.average == Decimal("2")
+        assert stats.median == Decimal("2")
+        assert format_alibaba_money(stats.average) != "$0.00"
+        assert format_alibaba_money(stats.minimum) == "$1.00"
+
+    near_tiny = Decimal(f"1E{emin + 1}")
+    near_group = [
+        _usd_product("near", near_tiny),
+        one,
+        two,
+        three,
+    ]
+    near_stats = calculate_alibaba_price_statistics(near_group)
+    assert near_stats.priced_products == 3
+    assert near_stats.minimum == Decimal("1")
+    assert near_stats.maximum == Decimal("3")
+
+    hundredths = Decimal("1E-100")
+    assert _calculation_context([hundredths, *ordinary]) is not None
+    hundredths_stats = calculate_alibaba_price_statistics(
+        [_usd_product("hundredths", hundredths), one, two, three]
+    )
+    assert hundredths_stats.priced_products == 4
+    assert hundredths_stats.minimum == hundredths
+    assert hundredths_stats.maximum == Decimal("3")
+
+    dual_extreme_stats = calculate_alibaba_price_statistics(
+        [tiny_product, _usd_product("near", near_tiny), one, two, three]
+    )
+    assert dual_extreme_stats.priced_products == 3
+    assert dual_extreme_stats.minimum == Decimal("1")
+    assert dual_extreme_stats.maximum == Decimal("3")
+
+
+def test_ordinary_small_prices_remain_eligible_with_siblings() -> None:
+    products = [
+        _usd_product("milli", Decimal("0.001")),
+        _usd_product("one", Decimal("1")),
+        _usd_product("two", Decimal("2")),
+        _usd_product("three", Decimal("3")),
+    ]
+    assert _calculation_context([item.min_price for item in products if item.min_price]) is not None
+    stats = calculate_alibaba_price_statistics(products)
+    assert stats.priced_products == 4
+    assert stats.minimum == Decimal("0.001")
+    assert stats.maximum == Decimal("3")
+    payload = run_alibaba_search(
+        "mouse",
+        10,
+        search_service=SearchAlibabaProducts(FakeAlibabaProvider(products)),
+    )
+    assert [row["title"] for row in payload["results"]] == ["milli", "one", "two", "three"]
