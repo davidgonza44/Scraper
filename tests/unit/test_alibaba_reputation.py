@@ -214,6 +214,88 @@ def test_exponent_and_signed_gold_years_do_not_create_reputation() -> None:
         assert direct.score is None
 
 
+def test_review_count_requires_non_negative_integral_value() -> None:
+    assert parse_review_count(0) == Decimal("0")
+    assert parse_review_count(0.0) == Decimal("0")
+    assert parse_review_count(Decimal("0.0")) == Decimal("0")
+    assert parse_review_count("0") == Decimal("0")
+    assert parse_review_count(1) == Decimal("1")
+    assert parse_review_count(1.0) == Decimal("1")
+    assert parse_review_count(Decimal("1.0")) == Decimal("1")
+    assert parse_review_count("1.0") == Decimal("1.0")
+    assert parse_review_count(12) == Decimal("12")
+    assert parse_review_count(12.0) == Decimal("12")
+    assert parse_review_count("12.0") == Decimal("12.0")
+    assert parse_review_count(100) == Decimal("100")
+    for raw in (
+        -1,
+        -1.0,
+        Decimal("-1"),
+        0.5,
+        1.5,
+        Decimal("0.5"),
+        Decimal("1.5"),
+        "0.5",
+        "1.5",
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        Decimal("NaN"),
+        Decimal("Infinity"),
+        Decimal("-Infinity"),
+    ):
+        assert parse_review_count(raw) is None
+    assert parse_rating_0_5(4.5) == Decimal("4.5")
+    assert parse_rating_0_5(0.5) == Decimal("0.5")
+    mapped_ratings = map_alibaba_item(
+        {"title": "Mouse", "reviewScore": 4.5, "supplierServiceScore": 4.5}
+    )
+    assert mapped_ratings is not None
+    assert mapped_ratings.review_score == "4.5"
+    assert mapped_ratings.supplier_service_score == "4.5"
+
+
+def test_fractional_review_count_cannot_create_reputation() -> None:
+    service_only = calculate_supplier_reputation({"supplierServiceScore": 5})
+    assert service_only.review_count is None
+    assert service_only.review_count_points is None
+    assert service_only.available_signal_count == 1
+    assert service_only.evidence_coverage == 35
+    assert service_only.score is None
+    assert service_only.label == LABEL_INSUFFICIENT
+
+    fractional = calculate_supplier_reputation({"supplierServiceScore": 5, "reviewCount": 0.5})
+    assert fractional.review_count is None
+    assert fractional.review_count_points is None
+    assert fractional.available_signal_count == 1
+    assert fractional.evidence_coverage == 35
+    assert fractional.score is None
+    assert fractional.label == LABEL_INSUFFICIENT
+
+    mapped = map_alibaba_item({"title": "Mouse", "supplierServiceScore": 5, "reviewCount": 0.5})
+    assert mapped is not None
+    assert mapped.review_count == "0.5"
+    mapped_result = calculate_supplier_reputation(mapped)
+    assert parse_review_count(mapped.review_count) is None
+    assert mapped_result.review_count is None
+    assert mapped_result.review_count_points is None
+    assert mapped_result.available_signal_count == 1
+    assert mapped_result.evidence_coverage == 35
+    assert mapped_result.score is None
+
+    integral = calculate_supplier_reputation({"supplierServiceScore": 5, "reviewCount": 1.0})
+    assert integral.review_count == Decimal("1")
+    assert integral.review_count_points == Decimal("3")
+    assert integral.available_signal_count == 2
+    assert integral.evidence_coverage == 50
+    assert integral.score is not None
+
+    mapped_one = map_alibaba_item({"title": "Mouse", "reviewCount": 1.0})
+    assert mapped_one is not None
+    assert mapped_one.review_count == "1.0"
+    assert parse_review_count(mapped_one.review_count) == Decimal("1")
+
+
 def test_mapper_reads_observed_supplier_fields() -> None:
     raw = _observed_items()[0]
     product = map_alibaba_item(raw)

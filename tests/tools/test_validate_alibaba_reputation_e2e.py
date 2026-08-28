@@ -42,6 +42,7 @@ from tools.validate_alibaba_reputation_e2e import (
     find_exception_in_chain,
     has_mapped_products,
     identity_text,
+    indep_count,
     indep_rating,
     indep_years,
     replay_search_failure_kind,
@@ -124,6 +125,15 @@ def test_indep_years_rejects_exponent_and_signed_forms() -> None:
     assert indep_years("5") == Decimal("5")
     for raw in (1e100, -5.0, "1e100", "1e+100", "-5", "-5.0"):
         assert indep_years(raw) is None
+
+
+def test_indep_count_requires_non_negative_integral_value() -> None:
+    assert indep_count(0) == Decimal("0")
+    assert indep_count(1.0) == Decimal("1")
+    assert indep_count("12.0") == Decimal("12.0")
+    for raw in (0.5, 1.5, "0.5", -1, float("nan"), float("inf")):
+        assert indep_count(raw) is None
+    assert indep_rating(4.5) == Decimal("4.5")
 
 
 def test_replay_rejects_legacy_search_actor_run() -> None:

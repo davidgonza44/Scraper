@@ -609,6 +609,8 @@ def indep_count(raw: object) -> Decimal | None:
         return None
     if not value.is_finite() or value < 0:
         return None
+    if value != value.to_integral_value():
+        return None
     return value
 
 

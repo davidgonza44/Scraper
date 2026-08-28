@@ -123,7 +123,7 @@ def parse_gold_supplier_years(raw: object) -> Decimal | None:
 
 
 def parse_review_count(raw: object) -> Decimal | None:
-    """Parse a review count. Zero is valid; unreadable text is unavailable."""
+    """Parse a review count. Zero is valid; fractional or unreadable values are not."""
 
     if isinstance(raw, bool):
         return None
@@ -142,6 +142,8 @@ def parse_review_count(raw: object) -> Decimal | None:
     else:
         return None
     if not value.is_finite() or value < 0:
+        return None
+    if value != value.to_integral_value():
         return None
     return value
 
