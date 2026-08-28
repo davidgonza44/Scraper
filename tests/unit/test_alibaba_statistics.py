@@ -246,15 +246,18 @@ def test_group_threatening_at_cap_price_does_not_erase_sibling_statistics() -> N
 
 
 def test_unrepresentable_max_bound_does_not_collapse_to_min_only() -> None:
-    product = SimpleNamespace(
-        min_price=Decimal("0.01"),
-        max_price=_huge(_AT_CAP_EXPONENT),
-        currency="USD",
-    )
-    assert _quantize_cents(Decimal("0.01")) is not None
-    assert alibaba_price_bounds(product) is None
-    assert alibaba_representative_price(product) is None
-    assert format_alibaba_listing_price(product.min_price, product.max_price, "USD") == ""
+    over = _huge(_OVER_EXPONENT)
+    underflow = Decimal("1E-100000000")
+    for raw_max in (over, underflow):
+        product = SimpleNamespace(
+            min_price=Decimal("0.01"),
+            max_price=raw_max,
+            currency="USD",
+        )
+        assert _quantize_cents(Decimal("0.01")) is not None
+        assert alibaba_price_bounds(product) is None
+        assert alibaba_representative_price(product) is None
+        assert format_alibaba_listing_price(product.min_price, product.max_price, "USD") == ""
 
 
 def test_negative_exponent_outside_context_range_is_unavailable() -> None:

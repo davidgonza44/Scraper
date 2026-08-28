@@ -152,7 +152,7 @@ def alibaba_product_excludes_transport_fields(
     """True when the first mapped product omits excluded transport fields.
 
     An empty product list is a failed mapping outcome, not a model that
-    silently has those fields. Never indexes ``products[0]``.
+    silently has those fields. Never indexes the first product by position.
     """
 
     first = next(iter(products), None)
@@ -165,7 +165,7 @@ def report_mapped_products(
     products: Sequence[object],
     check: Callable[[str, bool, str], None],
 ) -> None:
-    """Record empty-mapping failures without indexing ``products[0]``."""
+    """Record empty-mapping failures without indexing the first product."""
 
     mapped = has_mapped_products(products)
     check(

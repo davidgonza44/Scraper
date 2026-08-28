@@ -806,7 +806,7 @@ def test_succeeded_empty_dataset_fails_closed_without_indexing(
 ) -> None:
     fake, products, payload = _search_live([])
     assert products == []
-    assert payload["ui_status"] == "SUCCESS"
+    assert payload["ui_status"] == "EMPTY"
     assert payload["results"] == []
     assert len(fake.calls) == 1
     assert has_mapped_products(products) is False
@@ -847,7 +847,7 @@ def test_succeeded_titleless_rows_fail_closed_without_indexing(
     fake, products, payload = _search_live(raw_items)
     assert products == []
     assert all(map_alibaba_item(item) is None for item in raw_items)
-    assert payload["ui_status"] == "SUCCESS"
+    assert payload["ui_status"] == "EMPTY"
     assert len(fake.calls) == 1
     assert has_mapped_products(products) is False
 
