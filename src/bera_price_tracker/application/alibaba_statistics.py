@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import (
     MAX_PREC,
@@ -181,6 +181,14 @@ def _max_compatible_count(max_adjusted: int, min_exponent: int, available: int) 
     return best
 
 
+def _window_cardinality(max_adjusted: int, min_exponent: int, available: int) -> int:
+    if available < 1:
+        return 0
+    if _required_group_precision(max_adjusted, min_exponent, available) is not None:
+        return available
+    return _max_compatible_count(max_adjusted, min_exponent, available)
+
+
 def _as_decimal(value: object) -> Decimal | None:
     if isinstance(value, bool) or not isinstance(value, Decimal):
         return None
@@ -344,52 +352,88 @@ def _eligible_for_group_statistics(values: list[Decimal]) -> list[bool]:
     exponents = [_canonical_exponent(value) for value in values]
     adjusted = [value.adjusted() for value in values]
     abs_adjusted = [abs(item) for item in adjusted]
+    by_adjusted = sorted(range(count), key=lambda index: (adjusted[index], index))
+    by_rank = sorted(
+        range(count),
+        key=lambda index: (abs_adjusted[index], values[index], index),
+    )
+    unique_bounds = sorted(set(exponents))
+
+    def _for_each_window(observe: Callable[[int, int, list[int]], None]) -> None:
+        for min_exponent_bound in unique_bounds:
+            running_min_exponent: int | None = None
+            window: list[int] = []
+            cursor = 0
+            while cursor < count:
+                item = by_adjusted[cursor]
+                if exponents[item] < min_exponent_bound:
+                    cursor += 1
+                    continue
+                max_adjusted = adjusted[item]
+                while cursor < count:
+                    current = by_adjusted[cursor]
+                    if adjusted[current] != max_adjusted:
+                        break
+                    if exponents[current] >= min_exponent_bound:
+                        window.append(current)
+                        current_exponent = exponents[current]
+                        if running_min_exponent is None:
+                            running_min_exponent = current_exponent
+                        else:
+                            running_min_exponent = min(running_min_exponent, current_exponent)
+                    cursor += 1
+                if running_min_exponent is None:
+                    continue
+                observe(max_adjusted, running_min_exponent, window)
+
+    max_card = 0
+
+    def _note_cardinality(max_adjusted: int, min_exponent: int, window: list[int]) -> None:
+        nonlocal max_card
+        card = _window_cardinality(max_adjusted, min_exponent, len(window))
+        if card > max_card:
+            max_card = card
+
+    _for_each_window(_note_cardinality)
+    if max_card < 1:
+        return [False] * count
+
     best_key: tuple[object, ...] | None = None
     best_selected: set[int] | None = None
-    for min_exponent_bound in sorted(set(exponents)):
-        members = [index for index in range(count) if exponents[index] >= min_exponent_bound]
-        members.sort(key=lambda index: (adjusted[index], index))
-        running_min_exponent: int | None = None
-        cursor = 0
-        while cursor < len(members):
-            max_adjusted = adjusted[members[cursor]]
-            while cursor < len(members) and adjusted[members[cursor]] == max_adjusted:
-                index = members[cursor]
-                if running_min_exponent is None:
-                    running_min_exponent = exponents[index]
-                else:
-                    running_min_exponent = min(running_min_exponent, exponents[index])
-                cursor += 1
-            if running_min_exponent is None:
-                continue
-            window = members[:cursor]
-            available = len(window)
-            if _required_group_precision(max_adjusted, running_min_exponent, available) is not None:
-                selected = window
-            else:
-                keep = _max_compatible_count(max_adjusted, running_min_exponent, available)
-                if keep < 1:
-                    continue
-                ranked = sorted(
-                    window,
-                    key=lambda index: (abs_adjusted[index], values[index], index),
-                )
-                selected = ranked[:keep]
-            selected_count = len(selected)
-            selected_min_exponent = min(exponents[index] for index in selected)
-            selected_max_adjusted = max(adjusted[index] for index in selected)
-            precision = _required_group_precision(
-                selected_max_adjusted, selected_min_exponent, selected_count
-            )
-            if precision is None:
-                continue
-            span = selected_max_adjusted - selected_min_exponent
-            ordinary = max(abs_adjusted[index] for index in selected)
-            cohort = tuple(sorted(values[index] for index in selected))
-            key = (-selected_count, precision, span, ordinary, cohort)
-            if best_key is None or key < best_key:
-                best_key = key
-                best_selected = set(selected)
+
+    def _consider_window(max_adjusted: int, min_exponent: int, window: list[int]) -> None:
+        nonlocal best_key, best_selected
+        available = len(window)
+        card = _window_cardinality(max_adjusted, min_exponent, available)
+        if card < max_card:
+            return
+        if _required_group_precision(max_adjusted, min_exponent, available) is not None:
+            selected = list(window)
+        else:
+            membership = set(window)
+            selected = []
+            for index in by_rank:
+                if index in membership:
+                    selected.append(index)
+                    if len(selected) == card:
+                        break
+        selected_count = len(selected)
+        selected_min_exponent = min(exponents[index] for index in selected)
+        selected_max_adjusted = max(adjusted[index] for index in selected)
+        precision = _required_group_precision(
+            selected_max_adjusted, selected_min_exponent, selected_count
+        )
+        if precision is None:
+            return
+        span = selected_max_adjusted - selected_min_exponent
+        ordinary = max(abs_adjusted[index] for index in selected)
+        cohort = tuple(sorted(values[index] for index in selected))
+        key = (-selected_count, precision, span, ordinary, cohort)
+        if best_key is None or key < best_key:
+            best_key = key
+            best_selected = set(selected)
+
+    _for_each_window(_consider_window)
     if best_selected is None:
         return [False] * count
     return [index in best_selected for index in range(count)]

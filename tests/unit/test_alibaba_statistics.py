@@ -5,6 +5,9 @@ from __future__ import annotations
 from decimal import MAX_PREC, Context, Decimal
 from types import SimpleNamespace
 
+import pytest
+
+from bera_price_tracker.application import alibaba_statistics as alibaba_statistics_mod
 from bera_price_tracker.application.alibaba_score import score_alibaba_listings
 from bera_price_tracker.application.alibaba_statistics import (
     ALIBABA_DECIMAL_WORK_PRECISION_CAP,
@@ -712,3 +715,49 @@ def test_equal_large_clusters_are_not_beaten_by_mixed_digit_width_subset() -> No
     assert _calculation_context([Decimal("1")] * 100 + [extreme_value] * 100) is None
     for products in (ones + extremes, extremes + ones):
         _assert_stats_cohort(products, priced=100, minimum=Decimal("1"), maximum=Decimal("1"))
+
+
+def _distinct_compact_exponents_spanning_work_cap(count: int = 500) -> list[Decimal]:
+    start = 0
+    stop = _AT_CAP_EXPONENT
+    exponents = [index * (stop - start) // (count - 1) for index in range(count)]
+    assert exponents[0] == start
+    assert exponents[-1] == stop
+    assert len(set(exponents)) == count
+    values = [Decimal(f"1E+{exponent}") for exponent in exponents]
+    assert _calculation_context(values) is None
+    assert _calculation_context(values[:-1]) is not None
+    return values
+
+
+def test_distinct_exponent_adversary_selects_maximum_compatible_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = _distinct_compact_exponents_spanning_work_cap()
+    expected_maximum = values[-2]
+    decimal_sorted_sizes: list[int] = []
+    real_sorted = sorted
+
+    def _counting_sorted(iterable, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        items = list(iterable)
+        if items and all(isinstance(item, Decimal) for item in items):
+            decimal_sorted_sizes.append(len(items))
+        return real_sorted(items, *args, **kwargs)
+
+    monkeypatch.setattr(alibaba_statistics_mod, "sorted", _counting_sorted, raising=False)
+    keep = _eligible_for_group_statistics(values)
+    selected = [value for value, eligible in zip(values, keep, strict=True) if eligible]
+    assert keep == [True] * 499 + [False]
+    assert selected == values[:-1]
+    assert selected[-1] == expected_maximum
+    # Overlapping candidate windows must not re-sort their Decimal cohorts on every bound.
+    assert len(decimal_sorted_sizes) < len(values)
+
+    products = [_usd_product(f"e{index}", value) for index, value in enumerate(values)]
+    _assert_stats_cohort(products, priced=499, minimum=Decimal("1"), maximum=expected_maximum)
+    reversed_products = list(reversed(products))
+    _assert_stats_cohort(
+        reversed_products, priced=499, minimum=Decimal("1"), maximum=expected_maximum
+    )
+    rotated = products[-1:] + products[:-1]
+    _assert_stats_cohort(rotated, priced=499, minimum=Decimal("1"), maximum=expected_maximum)
