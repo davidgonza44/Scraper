@@ -2198,6 +2198,77 @@ def test_negative_second_range_bound_does_not_become_positive() -> None:
         assert product.max_price is None
 
 
+def test_non_dollar_signed_symbols_do_not_fabricate_a_positive_price() -> None:
+    for raw in (
+        "-€4.50",
+        "EUR -€4.50",
+        "EUR €-4.50",
+        "-£4.50",
+        "GBP -£4.50",
+        "GBP £-4.50",
+        "-¥4.50",
+        "CNY -¥4.50",
+        "CNY ¥-4.50",
+        "$1.30-€-1.60",
+        "EUR €1.30-€-1.60",
+        "GBP £1.30-£-1.60",
+        "CNY ¥1.30-¥-1.60",
+    ):
+        product = _assert_no_usable_positive_price(raw)
+        assert product.currency != "MOQ"
+        scores = score_alibaba_listings([product])
+        assert scores[0].price_score == 0
+        assert scores[0].price_clarity_score == 0
+
+
+def test_price_text_does_not_join_unrelated_tokens_or_invent_iso() -> None:
+    for raw in (
+        "MOQ 100 US $4.50",
+        "MOQ 100 USD 4.50",
+        "10 pcs USD 4.50",
+        "From 10 USD 4.50",
+        "abc 1 def 2",
+        "MOQ 4.50",
+    ):
+        display, min_price, max_price, currency = parse_alibaba_price(raw)
+        assert display == raw
+        assert min_price is None
+        assert max_price is None
+        assert currency is None
+        assert currency != "MOQ"
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        assert product.price_display == raw
+        assert product.min_price is None
+        assert product.max_price is None
+        assert product.currency is None
+        assert product.currency != "MOQ"
+        assert alibaba_price_bounds(product) is None
+        stats = calculate_alibaba_price_statistics([product])
+        assert stats.priced_products == 0
+        scores = score_alibaba_listings([product])
+        assert scores[0].price_score == 0
+        _assert_search_row_survives(product)
+
+    for raw, expected_min, expected_max, expected_currency in (
+        ("US $1.00-$9.00", Decimal("1.00"), Decimal("9.00"), None),
+        ("US $4.50", Decimal("4.50"), Decimal("4.50"), None),
+        ("$1.00-$9.00", Decimal("1.00"), Decimal("9.00"), None),
+        ("USD 1.00-9.00", Decimal("1.00"), Decimal("9.00"), "USD"),
+        ("USD 4.50", Decimal("4.50"), Decimal("4.50"), "USD"),
+    ):
+        display, min_price, max_price, currency = parse_alibaba_price(raw)
+        assert display == raw
+        assert min_price == expected_min
+        assert max_price == expected_max
+        assert currency == expected_currency
+        product = map_alibaba_item({"title": "Mouse", "price": raw})
+        assert product is not None
+        assert product.min_price == expected_min
+        assert product.max_price == expected_max
+        _assert_search_row_survives(product)
+
+
 def test_mapper_keeps_missing_optional_identity_fields() -> None:
     product = map_alibaba_item({"title": "Mouse", "price": "USD 4.03", "moq": True})
     assert product is not None

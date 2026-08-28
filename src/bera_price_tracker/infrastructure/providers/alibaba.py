@@ -21,11 +21,25 @@ from bera_price_tracker.infrastructure.providers.apify import (
 )
 
 DEFAULT_ALIBABA_ACTOR = DEFAULT_APIFY_ALIBABA_ACTOR
-_UNSIGNED_PRICE = re.compile(r"\d+(?:\.\d+)?")
 _SCI_TOKEN = re.compile(r"(?<![A-Za-z])[+-]?\d+(?:\.\d+)?[eE][+-]?\d+")
-_PLAIN_OR_SCI_NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
-_CURRENCY_NOISE = re.compile(r"(?i)\$|\bUS\b|\b[A-Z]{3}\b")
-_ISO_CURRENCY = re.compile(r"\b([A-Z]{3})\b")
+_SUPPORTED_PRICE_ISO = ("USD", "CNY", "EUR", "GBP")
+_ISO_PATTERN = "|".join(_SUPPORTED_PRICE_ISO)
+_MARKER_PATTERN = rf"(?:\$|\b(?:{_ISO_PATTERN})\b\s*\$?|\bUS\b\s*\$?)"
+_UNSIGNED_NUMBER_PATTERN = r"\d+(?:\.\d+)?"
+_PRICE_FORM = re.compile(
+    rf"^\s*(?P<lead>{_MARKER_PATTERN})?\s*"
+    rf"(?P<low>{_UNSIGNED_NUMBER_PATTERN})"
+    rf"(?:\s*-\s*(?P<mid>{_MARKER_PATTERN})?\s*(?P<high>{_UNSIGNED_NUMBER_PATTERN}))?"
+    rf"\s*(?P<tail>\b(?:{_ISO_PATTERN})\b)?\s*$",
+    re.IGNORECASE,
+)
+_SCI_AMOUNT_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+_SCI_FORM = re.compile(
+    rf"^\s*(?P<lead>{_MARKER_PATTERN})?\s*"
+    rf"(?P<amount>{_SCI_AMOUNT_PATTERN})"
+    rf"\s*(?P<tail>\b(?:{_ISO_PATTERN})\b)?\s*$",
+    re.IGNORECASE,
+)
 MEMO23_ALIBABA_MIN_PRODUCTS_PER_PAGE = 20
 
 
@@ -126,39 +140,21 @@ def _decimal_from_numeric_scalar(raw: int | float) -> Decimal | None:
     return _positive_decimal(parsed)
 
 
-def _explicit_display_currency(display: str) -> str | None:
-    currency_match = _ISO_CURRENCY.search(display)
-    if currency_match is None:
+def _marker_iso(raw: str | None) -> str | None:
+    if raw is None:
         return None
-    return explicit_alibaba_currency(currency_match.group(1))
+    token = re.sub(r"[\s$]", "", raw).upper()
+    if token in _SUPPORTED_PRICE_ISO:
+        return token
+    return None
 
 
-def _strip_currency_noise(text: str) -> str:
-    """Remove currency tokens and whitespace; keep digits, dots, and range hyphens."""
-
-    return re.sub(r"\s+", "", _CURRENCY_NOISE.sub("", text))
-
-
-def _parse_scientific_price_text(compact: str) -> Decimal | None:
-    candidate = _strip_currency_noise(compact)
-    if not _PLAIN_OR_SCI_NUMBER.fullmatch(candidate):
-        return None
-    try:
-        parsed = Decimal(candidate)
-    except (InvalidOperation, ValueError):
-        return None
-    return _positive_decimal(parsed)
-
-
-def _is_negative_price_prefix(compact: str, start: int) -> bool:
-    """True when '-' is a minus sign, not a range separator after another number."""
-
-    if start < 1 or compact[start - 1] != "-":
-        return False
-    if start == 1:
-        return True
-    previous = compact[start - 2]
-    return not (previous.isdigit() or previous == ".")
+def _resolved_iso(*markers: str | None) -> tuple[bool, str | None]:
+    found = [iso for iso in (_marker_iso(marker) for marker in markers) if iso is not None]
+    unique = set(found)
+    if len(unique) > 1:
+        return False, None
+    return True, next(iter(unique), None)
 
 
 def parse_alibaba_price(
@@ -177,31 +173,38 @@ def parse_alibaba_price(
     if display is None:
         return None, None, None, None
     compact = display.replace(",", "")
-    currency = _explicit_display_currency(display)
-    expression = _strip_currency_noise(compact)
-    if _SCI_TOKEN.search(compact) is not None or _SCI_TOKEN.search(expression) is not None:
-        amount = _parse_scientific_price_text(compact)
+    if _SCI_TOKEN.search(compact) is not None:
+        sci = _SCI_FORM.fullmatch(compact)
+        if sci is None:
+            return display, None, None, None
+        ok, currency = _resolved_iso(sci.group("lead"), sci.group("tail"))
+        if not ok:
+            return display, None, None, None
+        amount = _decimal_from_text(sci.group("amount"))
         if amount is None:
             return display, None, None, currency
         return display, amount, amount, currency
 
-    matches = list(_UNSIGNED_PRICE.finditer(expression))
-    numbers: list[Decimal] = []
-    for match in matches:
-        parsed = _decimal_from_text(match.group(0))
-        if parsed is None or _is_negative_price_prefix(expression, match.start()):
-            return display, None, None, currency
-        numbers.append(parsed)
-    if len(numbers) == 1:
-        return display, numbers[0], numbers[0], currency
-    if len(numbers) == 2:
-        between = expression[matches[0].end() : matches[1].start()]
-        if "-" in between:
-            if numbers[0] > numbers[1]:
-                return display, None, None, currency
-            return display, numbers[0], numbers[1], currency
+    matched = _PRICE_FORM.fullmatch(compact)
+    if matched is None:
+        return display, None, None, None
+    ok, currency = _resolved_iso(
+        matched.group("lead"),
+        matched.group("mid"),
+        matched.group("tail"),
+    )
+    if not ok:
+        return display, None, None, None
+    low = _decimal_from_text(matched.group("low"))
+    if low is None:
         return display, None, None, currency
-    return display, None, None, currency
+    high_text = matched.group("high")
+    if high_text is None:
+        return display, low, low, currency
+    high = _decimal_from_text(high_text)
+    if high is None or low > high:
+        return display, None, None, currency
+    return display, low, high, currency
 
 
 def map_alibaba_item(raw: object) -> AlibabaProduct | None:

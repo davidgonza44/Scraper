@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from bera_price_tracker.application.alibaba_score import score_alibaba_listings
 from bera_price_tracker.application.alibaba_statistics import (
+    ALIBABA_DECIMAL_WORK_PRECISION_CAP,
     UNAVAILABLE_DISPLAY,
     _bounded_precision,
     _calculation_context,
@@ -23,8 +24,10 @@ from bera_price_tracker.domain.alibaba import AlibabaProduct
 from bera_price_tracker.gui.services import alibaba_product_to_row, run_alibaba_search
 from bera_price_tracker.infrastructure.providers.alibaba import map_alibaba_item
 
-_OVER_EXPONENT = MAX_PREC - 2
-_AT_MAX_EXPONENT = MAX_PREC - 3
+_WORK_CAP = ALIBABA_DECIMAL_WORK_PRECISION_CAP
+_OVER_EXPONENT = _WORK_CAP - 2
+_AT_CAP_EXPONENT = _WORK_CAP - 3
+_BELOW_CAP_EXPONENT = _WORK_CAP - 4
 
 
 def _huge(exponent: int) -> Decimal:
@@ -48,22 +51,53 @@ def _usd_product(title: str, min_price: Decimal) -> AlibabaProduct:
     )
 
 
-def test_bounded_precision_uses_decimal_max_prec() -> None:
+def test_compact_exponent_above_work_cap_is_unavailable_without_huge_work() -> None:
+    compact = Decimal("1E+10001")
+    required = max(50, compact.adjusted() + 3)
+    assert required == 10004
+    assert _bounded_precision(required) is None
+    assert _quantize_cents(compact) is None
+    product = map_alibaba_item({"title": "huge", "price": "1e10001", "currency": "USD"})
+    assert product is not None
+    assert product.price_display == "1e10001"
+    assert alibaba_price_bounds(product) is None
+    assert alibaba_representative_price(product) is None
+    sibling = map_alibaba_item({"title": "ok", "price": "$4.00", "currency": "USD"})
+    assert sibling is not None
+    payload = run_alibaba_search(
+        "mouse",
+        10,
+        search_service=SearchAlibabaProducts(FakeAlibabaProvider([product, sibling])),
+    )
+    assert payload["ui_status"] == "SUCCESS"
+    assert [row["title"] for row in payload["results"]] == ["huge", "ok"]
+    stats = calculate_alibaba_price_statistics([product, sibling])
+    assert stats.priced_products == 1
+    assert stats.minimum == Decimal("4.00")
+    scores = score_alibaba_listings([product, sibling])
+    assert scores[0].price_score == 0
+    assert scores[1].price_score >= 0
+    row = alibaba_product_to_row(product)
+    assert isinstance(row["price"], str)
+
+
+def test_bounded_precision_uses_technical_work_cap() -> None:
     assert _bounded_precision(1) == 1
-    assert _bounded_precision(MAX_PREC) == MAX_PREC
-    assert _bounded_precision(MAX_PREC + 1) is None
+    assert _bounded_precision(_WORK_CAP) == _WORK_CAP
+    assert _bounded_precision(_WORK_CAP + 1) is None
+    assert _bounded_precision(MAX_PREC) is None
     assert _bounded_precision(0) is None
-    at_max = _decimal_context(MAX_PREC)
-    assert at_max is not None
-    assert at_max.prec == MAX_PREC
-    assert _decimal_context(MAX_PREC + 1) is None
+    at_cap = _decimal_context(_WORK_CAP)
+    assert at_cap is not None
+    assert at_cap.prec == _WORK_CAP
+    assert _decimal_context(_WORK_CAP + 1) is None
+    assert _decimal_context(MAX_PREC) is None
 
 
 def test_quantize_cents_survives_documented_extreme_decimals() -> None:
     for value in (
         Decimal("1E+100"),
         Decimal("1E+500"),
-        Decimal("1E+999999"),
         Decimal("1E-20"),
         Decimal("4.03"),
     ):
@@ -74,14 +108,18 @@ def test_quantize_cents_survives_documented_extreme_decimals() -> None:
         assert format_alibaba_money(value) != ""
 
 
-def test_quantize_cents_fail_closes_above_max_prec() -> None:
+def test_quantize_cents_fail_closes_above_work_cap() -> None:
+    below = _huge(_BELOW_CAP_EXPONENT)
+    at_cap = _huge(_AT_CAP_EXPONENT)
     over = _huge(_OVER_EXPONENT)
-    assert max(50, over.adjusted() + 3) == MAX_PREC + 1
+    assert max(50, below.adjusted() + 3) == _WORK_CAP - 1
+    assert max(50, at_cap.adjusted() + 3) == _WORK_CAP
+    assert max(50, over.adjusted() + 3) == _WORK_CAP + 1
+    assert _quantize_cents(below) is not None
+    assert _quantize_cents(at_cap) is not None
     assert _quantize_cents(over) is None
     assert format_alibaba_listing_price(over, over, "USD") == ""
     assert format_alibaba_money(over) == UNAVAILABLE_DISPLAY
-    at_limit = _huge(_AT_MAX_EXPONENT)
-    assert max(50, at_limit.adjusted() + 3) == MAX_PREC
 
 
 def test_calculation_context_does_not_raise_for_unrepresentable_precision() -> None:
@@ -95,7 +133,7 @@ def test_calculation_context_does_not_raise_for_unrepresentable_precision() -> N
         [normal, over, normal],
     ):
         context = _calculation_context(group)
-        assert context is None or context.prec <= MAX_PREC
+        assert context is None or context.prec <= _WORK_CAP
 
 
 def test_textual_near_max_exponent_does_not_crash_rows() -> None:

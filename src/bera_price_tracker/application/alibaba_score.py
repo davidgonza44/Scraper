@@ -86,7 +86,8 @@ def extract_moq_quantity(moq: object) -> Decimal | None:
     match = _MOQ_NUMBER.search(moq)
     if match is None:
         return None
-    if match.start() > 0 and moq[match.start() - 1] == "-":
+    prefix = moq[: match.start()].rstrip()
+    if prefix.endswith("-"):
         return None
     try:
         quantity = Decimal(match.group(1).replace(",", ""))

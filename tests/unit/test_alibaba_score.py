@@ -196,6 +196,37 @@ def test_scientific_and_negative_moq_are_not_fabricated() -> None:
     assert extract_moq_quantity("-5 pieces") is None
 
 
+def test_separated_negative_moq_does_not_receive_points() -> None:
+    for raw in ("- 5 pieces", "-    5 pieces"):
+        product = map_alibaba_item({"title": "neg", "minOrder": raw, "price": "$8.00"})
+        assert product is not None
+        assert extract_moq_quantity(product.moq) is None
+        five = map_alibaba_item({"title": "five", "minOrder": "5 pieces", "price": "$8.00"})
+        ten = map_alibaba_item({"title": "ten", "minOrder": "10 pieces", "price": "$8.00"})
+        assert five is not None
+        assert ten is not None
+        assert extract_moq_quantity(five.moq) == Decimal("5")
+        assert extract_moq_quantity(ten.moq) == Decimal("10")
+        scores = _scores([product, five, ten])
+        assert scores[0].moq_score == 0
+        assert scores[1].moq_score == 25
+        assert scores[2].moq_score == 0
+        payload = _payload([product, five, ten])
+        assert payload["results"][0]["score_moq"] == "0/25"
+        assert [row["title"] for row in payload["results"]] == ["neg", "five", "ten"]
+
+    for raw in (
+        "5 pieces",
+        "Min. order: 5 pieces",
+        "MOQ: 5",
+        "1.5 kg",
+        "1,000 pieces",
+    ):
+        quantity = extract_moq_quantity(raw)
+        assert quantity is not None
+        assert quantity > 0
+
+
 def test_exponent_min_order_does_not_win_moq_score() -> None:
     products = [
         _product(title="sci", minOrder=1e100, moq=None),

@@ -16,6 +16,7 @@ from decimal import (
 )
 
 _MINIMUM_CALCULATION_PRECISION = 50
+ALIBABA_DECIMAL_WORK_PRECISION_CAP = 10_000
 _DISPLAY_CENTS = Decimal("0.01")
 _TWO = Decimal("2")
 _ONE_POINT_FIVE = Decimal("1.5")
@@ -67,9 +68,16 @@ def _empty_statistics(total: int) -> AlibabaPriceStatistics:
 
 
 def _bounded_precision(required: int) -> int | None:
-    """Return ``required`` only when it is a legal ``Context.prec`` value."""
+    """Return ``required`` only when it is a safe ``Context.prec`` value.
 
-    if required < 1 or required > MAX_PREC:
+    ``MAX_PREC`` is only Decimal's legal upper bound. Provider-controlled
+    exponents can still request prohibitive coefficient work below that
+    limit. ``ALIBABA_DECIMAL_WORK_PRECISION_CAP`` is a deterministic
+    computational cap, not a commercial price maximum.
+    """
+
+    cap = min(MAX_PREC, ALIBABA_DECIMAL_WORK_PRECISION_CAP)
+    if required < 1 or required > cap:
         return None
     return required
 
