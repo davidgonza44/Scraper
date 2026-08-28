@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from collections.abc import Sequence
@@ -2504,6 +2505,195 @@ def test_search_and_tracked_currencies_propagate_into_negotiation_catalog() -> N
     assert state.alibaba_negotiation_plan_payload["currency"] == "EUR"
     assert "EUR" in state.alibaba_negotiation_public
     assert "$" not in state.alibaba_negotiation_public
+
+
+def test_switching_negotiation_product_discards_prior_plan_before_supplier_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A leftover plan for product A must not classify a quote for product B."""
+
+    state = TrackerState()
+    state.alibaba_results = [
+        AlibabaResultRow(
+            product_id="mouse-A",
+            title="Budget mouse",
+            price_min="4.30",
+            price_max="4.30",
+            representative="4.30",
+            currency="USD",
+        ),
+        AlibabaResultRow(
+            product_id="headset-B",
+            title="Studio headset",
+            price_min="48.00",
+            price_max="48.00",
+            representative="48.00",
+            currency="USD",
+        ),
+    ]
+    state.set_alibaba_negotiation_product_key("s:mouse-A")
+    state.alibaba_negotiation_quantity = "40"
+    state.calculate_alibaba_negotiation()
+    assert state.alibaba_negotiation_has_plan is True
+    assert state.alibaba_negotiation_plan_payload["product_id"] == "mouse-A"
+    assert state.alibaba_negotiation_ceiling != ""
+
+    analyze_calls: list[dict[str, str]] = []
+
+    def fake_analyze(plan_row: dict[str, str], supplier_text: str) -> dict[str, str]:
+        analyze_calls.append(dict(plan_row))
+        del supplier_text
+        return {
+            "response_summary": "stale",
+            "decision": "ABOVE_CEILING",
+            "notes": "classified against leftover product A bounds",
+            "quoted_unit_price": "$45.00",
+            "authorized_price": state.alibaba_negotiation_ceiling,
+        }
+
+    monkeypatch.setattr(gui_services, "analyze_alibaba_supplier_reply", fake_analyze)
+
+    state.alibaba_negotiation_supplier_text = "We can do $45 per unit"
+    state.set_alibaba_negotiation_product_key("s:headset-B")
+    asyncio.run(cast(Any, TrackerState.analyze_alibaba_supplier_reply).fn(state))
+
+    assert state.alibaba_negotiation_product_key == "s:headset-B"
+    assert analyze_calls == []
+    assert state.alibaba_negotiation_has_plan is False
+    assert state.alibaba_negotiation_plan_payload == {}
+    assert state.alibaba_negotiation_opening == ""
+    assert state.alibaba_negotiation_target == ""
+    assert state.alibaba_negotiation_ceiling == ""
+    assert state.alibaba_negotiation_message == ""
+    assert state.alibaba_negotiation_analysis_decision == ""
+    assert state.alibaba_negotiation_supplier_text == ""
+
+    state.set_alibaba_negotiation_product_key("s:headset-B · Studio headset · búsqueda")
+    assert state.alibaba_negotiation_has_plan is False
+    state.calculate_alibaba_negotiation()
+    assert state.alibaba_negotiation_has_plan is True
+    assert state.alibaba_negotiation_plan_payload["product_id"] == "headset-B"
+    payload_after_recalc = dict(state.alibaba_negotiation_plan_payload)
+    state.set_alibaba_negotiation_product_key("s:headset-B")
+    assert state.alibaba_negotiation_has_plan is True
+    assert state.alibaba_negotiation_plan_payload == payload_after_recalc
+    asyncio.run(cast(Any, TrackerState.analyze_alibaba_supplier_reply).fn(state))
+    assert [row.get("product_id") for row in analyze_calls] == ["headset-B"]
+    assert state.alibaba_negotiation_analysis_decision == "ABOVE_CEILING"
+
+
+def test_late_negotiation_analysis_is_discarded_after_product_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    state = TrackerState()
+    state.alibaba_results = [
+        AlibabaResultRow(
+            product_id="mouse-A",
+            title="Budget mouse",
+            price_min="4.30",
+            price_max="4.30",
+            representative="4.30",
+            currency="USD",
+        ),
+        AlibabaResultRow(
+            product_id="headset-B",
+            title="Studio headset",
+            price_min="48.00",
+            price_max="48.00",
+            representative="48.00",
+            currency="USD",
+        ),
+    ]
+    state.set_alibaba_negotiation_product_key("s:mouse-A")
+    state.alibaba_negotiation_quantity = "40"
+    state.calculate_alibaba_negotiation()
+    assert state.alibaba_negotiation_has_plan is True
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_analyze(plan_row: dict[str, str], supplier_text: str) -> dict[str, str]:
+        del supplier_text
+        started.set()
+        release.wait(5)
+        return {
+            "response_summary": "stale A",
+            "decision": "ABOVE_CEILING",
+            "notes": str(plan_row.get("product_id") or ""),
+            "quoted_unit_price": "$45.00",
+            "authorized_price": "$4.30",
+        }
+
+    def fake_opening(plan_row: dict[str, str]) -> str:
+        started.set()
+        release.wait(5)
+        return f"stale opening for {plan_row.get('product_id')}"
+
+    monkeypatch.setattr(gui_services, "analyze_alibaba_supplier_reply", fake_analyze)
+    monkeypatch.setattr(gui_services, "generate_alibaba_negotiation_opening", fake_opening)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(cast(Any, TrackerState.analyze_alibaba_supplier_reply).fn(state))
+        await asyncio.to_thread(started.wait, 5)
+        assert started.is_set()
+        state.set_alibaba_negotiation_product_key("s:headset-B")
+        release.set()
+        await task
+
+    asyncio.run(scenario())
+    assert state.alibaba_negotiation_has_plan is False
+    assert state.alibaba_negotiation_analysis_decision == ""
+    assert state.alibaba_negotiation_is_drafting is False
+
+    started.clear()
+    release.clear()
+    state.set_alibaba_negotiation_product_key("s:mouse-A")
+    state.calculate_alibaba_negotiation()
+    assert state.alibaba_negotiation_has_plan is True
+
+    async def opening_scenario() -> None:
+        task = asyncio.create_task(
+            cast(Any, TrackerState.generate_alibaba_negotiation_opening).fn(state)
+        )
+        await asyncio.to_thread(started.wait, 5)
+        assert started.is_set()
+        state.set_alibaba_negotiation_product_key("s:headset-B")
+        release.set()
+        await task
+
+    asyncio.run(opening_scenario())
+    assert state.alibaba_negotiation_message == ""
+    assert state.alibaba_negotiation_is_drafting is False
+
+    started.clear()
+    release.clear()
+    state.set_alibaba_negotiation_product_key("s:mouse-A")
+    state.calculate_alibaba_negotiation()
+
+    def boom_reply(plan_row: dict[str, str], supplier_text: str) -> str:
+        del plan_row, supplier_text
+        started.set()
+        release.wait(5)
+        raise RuntimeError("minimax-token=secret")
+
+    monkeypatch.setattr(gui_services, "generate_alibaba_negotiation_reply", boom_reply)
+
+    async def error_scenario() -> None:
+        task = asyncio.create_task(
+            cast(Any, TrackerState.generate_alibaba_negotiation_reply).fn(state)
+        )
+        await asyncio.to_thread(started.wait, 5)
+        assert started.is_set()
+        state.set_alibaba_negotiation_product_key("s:headset-B")
+        release.set()
+        await task
+
+    asyncio.run(error_scenario())
+    assert state.alibaba_negotiation_error == ""
+    assert "secret" not in state.alibaba_negotiation_error
+    assert state.alibaba_negotiation_is_drafting is False
 
 
 def test_profitability_ceiling_fails_closed_on_currency_mismatch() -> None:
