@@ -117,3 +117,128 @@ because it was discovered during adversarial review.
 Never change OpenSpec merely to redefine an implementation defect as valid.
 
 Every confirmed bug that is fixed must remain covered by a permanent regression test.
+
+## GitNexus adversarial review
+
+If GitNexus MCP is available, use it for every non-trivial implementation
+or review task.
+
+Automatically injected [GitNexus] hook context is advisory context only.
+It does NOT satisfy the explicit GitNexus review requirements below.
+
+### Before implementation
+
+For architecturally significant changes:
+
+- use GitNexus context and/or impact on the main symbols/contracts expected
+  to change;
+- inspect affected processes when the change crosses application layers;
+- treat graph results as a lower bound, never as proof of no consumers.
+
+### After implementation and before declaring completion
+
+1. Verify the exact GitNexus repository, worktree, checkout, and index identity.
+   - bind the intended repository explicitly when more than one repository is indexed;
+   - when the MCP server is attached to a different checkout/worktree, pass the
+     reviewed worktree explicitly to GitNexus instead of relying on auto-detection;
+   - never treat zero changed symbols as a clean result until the reviewed checkout
+     and diff surface have been confirmed.
+
+2. Verify the index is usable for the reviewed checkout.
+   If GitNexus reports the index as stale, reindex with the repository-approved
+   index-only workflow before relying on graph results.
+
+3. Run detect_changes on the exact review surface:
+
+   - PR/branch review:
+     use compare scope with the actual merge-base SHA as base_ref and the reviewed
+     HEAD/worktree as the target checkout;
+
+   - local uncommitted implementation:
+     inspect all relevant staged and unstaged changes;
+
+   - when the MCP server is attached elsewhere, pass the intended worktree explicitly;
+
+   - never silently review main when the implementation lives in another
+     branch/worktree.
+
+4. Run upstream impact with includeTests=true on every behaviorally changed
+   architectural symbol.
+
+   Prioritize:
+   - public/domain contracts
+   - shared state
+   - provider boundaries
+   - control flow
+   - persistence
+   - error handling
+   - async ownership
+   - security-sensitive boundaries
+
+5. Inspect every direct d=1 dependent outside the diff.
+
+   A d=1 dependent is a mandatory inspection lead, not automatically a bug.
+   Verify its source behavior before classifying a defect.
+
+6. Use context / trace / query where execution flow or ownership is ambiguous.
+
+7. If GitNexus returns partial, truncated, unknown, unresolved, or no-path
+   results, treat them as incomplete evidence, not as proof of no impact.
+
+8. Supplement GitNexus with repository search for analysis gaps including:
+
+   - dynamic dispatch
+   - Protocol / structural typing
+   - Reflex events/computed state
+   - asyncio / to_thread
+   - monkeypatching
+   - dependency injection
+   - factory construction
+   - runtime callbacks
+
+9. Where relevant, classify consumers as:
+
+   - setup / next-search configuration
+   - active generic-session consumer
+   - specialized-view consumer
+
+10. Convert every confirmed in-scope defect into a fail-first regression and
+    re-run impact/repository search for sibling manifestations of the same
+    broken invariant.
+
+### GitNexus failure handling
+
+If GitNexus is expected to be available but:
+
+- the index cannot be matched to the reviewed worktree,
+- reindexing fails,
+- detect_changes is partial/truncated,
+- or an important graph query cannot be completed,
+
+do not silently claim that the blast-radius review passed.
+
+Continue with repository search/tests where possible and explicitly report the
+GitNexus limitation as UNKNOWN / incomplete evidence.
+
+### Required final report
+
+The final task report must explicitly include:
+
+- GitNexus repository/worktree/index identity reviewed;
+- reviewed base and HEAD/worktree;
+- detect_changes result;
+- behaviorally changed symbols inspected;
+- impacted symbols/processes;
+- direct d=1 consumers inspected;
+- graph gaps / UNKNOWN areas;
+- regressions added from GitNexus findings;
+- whether GitNexus changed the implementation or test plan.
+
+GitNexus does not replace:
+
+- fail-first tests
+- repository search
+- adversarial reasoning
+- full pytest
+- Quality Gate
+- Codex exhaustive review.
