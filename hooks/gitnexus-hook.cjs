@@ -239,9 +239,43 @@ function detectSearchTool(token) {
   return null;
 }
 
+// Pattern occupancy is a three-state candidate, not a nullable string:
+//   unseen   -> no PATTERN token has been identified yet
+//   unusable -> a PATTERN token was seen but is ineligible (empty/too short)
+//   usable   -> a PATTERN token was seen and may be used for augmentation
+// Unusable must not collapse back to unseen; later paths or later -e/--regexp
+// values must not replace the first identified candidate.
+const PATTERN_CANDIDATE_UNSEEN = 'unseen';
+const PATTERN_CANDIDATE_UNUSABLE = 'unusable';
+const PATTERN_CANDIDATE_USABLE = 'usable';
+
+function unseenPatternCandidate() {
+  return { kind: PATTERN_CANDIDATE_UNSEEN, value: null };
+}
+
 function cleanPatternToken(token) {
   const pattern = String(token).replace(/['"]/g, '');
   return pattern.length >= 3 ? pattern : null;
+}
+
+function recordPatternCandidate(state, raw) {
+  if (state.kind !== PATTERN_CANDIDATE_UNSEEN) return;
+  const usable = cleanPatternToken(raw);
+  if (usable) {
+    state.kind = PATTERN_CANDIDATE_USABLE;
+    state.value = usable;
+    return;
+  }
+  state.kind = PATTERN_CANDIDATE_UNUSABLE;
+  state.value = null;
+}
+
+function patternCandidateSeen(state) {
+  return state.kind !== PATTERN_CANDIDATE_UNSEEN;
+}
+
+function resolvedPatternCandidate(state) {
+  return state.kind === PATTERN_CANDIDATE_USABLE ? state.value : null;
 }
 
 function valueLongSet(tool) {
@@ -262,13 +296,13 @@ function parseRgGrepPattern(cmd) {
   //   value          -> next token is a non-pattern option argument
   //   optional-color -> ripgrep --color WHEN, only when WHEN is a known value
   let pending = null;
-  let explicitPattern = null;
-  let positionalPattern = null;
+  const explicitPattern = unseenPatternCandidate();
+  const positionalPattern = unseenPatternCandidate();
   let patternFile = false;
   let noPatternMode = false;
 
   const takeExplicit = (raw) => {
-    if (!explicitPattern) explicitPattern = cleanPatternToken(raw);
+    recordPatternCandidate(explicitPattern, raw);
   };
 
   for (const token of tokens) {
@@ -299,7 +333,14 @@ function parseRgGrepPattern(cmd) {
       continue;
     }
     if (token === '--') {
-      if (noPatternMode || explicitPattern || patternFile || positionalPattern) break;
+      if (
+        noPatternMode ||
+        patternCandidateSeen(explicitPattern) ||
+        patternFile ||
+        patternCandidateSeen(positionalPattern)
+      ) {
+        break;
+      }
       pending = 'pattern';
       continue;
     }
@@ -369,13 +410,15 @@ function parseRgGrepPattern(cmd) {
       }
       continue;
     }
-    if (!positionalPattern) positionalPattern = cleanPatternToken(token);
+    if (!patternCandidateSeen(positionalPattern)) {
+      recordPatternCandidate(positionalPattern, token);
+    }
   }
 
   if (noPatternMode) return null;
-  if (explicitPattern) return explicitPattern;
+  if (patternCandidateSeen(explicitPattern)) return resolvedPatternCandidate(explicitPattern);
   if (patternFile) return null;
-  return positionalPattern;
+  return resolvedPatternCandidate(positionalPattern);
 }
 
 /**
@@ -410,9 +453,15 @@ function extractPattern(toolName, toolInput) {
       toolInput.search,
       toolInput.searchQuery,
     ];
+    let seenUnusableAlias = false;
     for (const a of aliases) {
-      if (typeof a === 'string' && a.length >= 3) return a;
+      if (typeof a !== 'string') continue;
+      if (a.length >= 3) return a;
+      seenUnusableAlias = true;
     }
+    // A present but unusable pattern alias occupies the pattern slot.
+    // Do not fall through to non-pattern tool_input fields (paths, globs).
+    if (seenUnusableAlias) return null;
     // Last resort: scan tool_input for any reasonable-looking string value.
     return pickLongestStringValue(toolInput);
   }

@@ -105,6 +105,45 @@ test('ordinary patterns and value-bearing flags remain supported', () => {
   assert.equal(hook.extractPattern('Shell', { command: "rg --glob '*.py' validateUser src/" }), 'validateUser');
 });
 
+test('a seen but unusable pattern candidate never falls through to a later operand', () => {
+  const cases = [
+    ['rg id src/', null],
+    ['grep id file', null],
+    ['rg -e ok src/', null],
+    ['grep --regexp=x file', null],
+    ['rg --regexp= src/', null],
+    ['rg -e ok -e validateUser src/', null],
+    ['rg --hidden id src/', null],
+    ["rg id --glob '*.py' src/", null],
+    ['rg identifier src/', 'identifier'],
+    ['rg -e validateUser file.py', 'validateUser'],
+    ['rg -f patterns.txt src/', null],
+    ['rg --files src/', null],
+    ['rg -eok src/', null],
+    ['rg -- id src/', null],
+    ['rg id -- src/', null],
+    ['rg -e ok -- src/', null],
+    ['rg src/ -e ok', null],
+    ['rg -e first -e ok src/', 'first'],
+    ['grep -e ok file', null],
+    ['rg --regexp=ok src/', null],
+    ['rg src/ -e validateUser', 'validateUser'],
+    ['rg id -e validateUser', 'validateUser'],
+    ['rg -e ok identifier src/', null],
+    ["rg --glob '*.py' id src/", null],
+  ];
+  for (const [command, expected] of cases) {
+    assert.equal(hook.extractPattern('Shell', { command }), expected, command);
+  }
+  assert.equal(hook.extractPattern('Grep', { pattern: 'id', path: 'src/' }), null);
+  assert.equal(hook.extractPattern('Grep', { query: 'ok', path: 'file.py' }), null);
+  assert.equal(hook.extractPattern('Grep', { pattern: 'identifier' }), 'identifier');
+  assert.equal(
+    hook.extractPattern('Grep', { query: 'id', pattern: 'validateUser' }),
+    'validateUser',
+  );
+});
+
 test('value-bearing rg/grep options are skipped in both space and attached forms', () => {
   const cases = [
     ['grep --exclude-dir cache validateUser .', 'validateUser'],
