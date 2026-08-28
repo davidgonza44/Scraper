@@ -433,8 +433,13 @@ def _alibaba_search_actor_env() -> str:
     return "_".join(("BERA_TRACKER", "APIFY", "ALIBABA", "ACTOR"))
 
 
-def _legacy_alibaba_search_actor() -> str:
-    return "/".join(("scraper-engine", "alibaba-scraper"))
+def _legacy_alibaba_search_actor(*, tilde: bool = False) -> str:
+    separator = "~" if tilde else "/"
+    return separator.join(("scraper-engine", "alibaba-scraper"))
+
+
+def _memo23_tilde_search_actor() -> str:
+    return "~".join(("memo23", "alibaba-scraper"))
 
 
 def test_default_actor_config() -> None:
@@ -482,6 +487,59 @@ def test_explicit_memo23_search_actor_uses_memo23_schema() -> None:
         "maxItems": 5,
     }
     assert products[0].title == "Iphone 15 Protective Case"
+
+
+def test_memo23_tilde_alias_canonicalizes_before_actor_call() -> None:
+    tilde = _memo23_tilde_search_actor()
+    settings = Settings.from_env({_alibaba_search_actor_env(): f"  {tilde}  "})
+    fake = FakeApify([memo23_actor_item()])
+    client = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=settings.apify_alibaba_actor,
+        client_factory=lambda _token: fake,
+    )
+    products = client.search("Iphone 15", 5)
+    assert settings.apify_alibaba_actor == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert client.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert fake.actor_id != tilde
+    assert len(fake.calls) == 1
+    assert products[0].title == "Iphone 15 Protective Case"
+
+    direct = FakeApify([memo23_actor_item()])
+    constructed = ApifyAlibabaClient(
+        _api_token="token",
+        actor_id=f"  {tilde}  ",
+        client_factory=lambda _token: direct,
+    )
+    constructed.search("Iphone 15", 1)
+    assert constructed.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+    assert direct.actor_id == MEMO23_ALIBABA_SEARCH_ACTOR
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        _legacy_alibaba_search_actor(),
+        _legacy_alibaba_search_actor(tilde=True),
+        "/".join(("other", "alibaba-scraper")),
+        "~".join(("other", "alibaba-scraper")),
+        "/".join(("memo23", "other")),
+        "a1b2c3d4e5f6g7h8i9j0",
+    ],
+)
+def test_unsupported_search_actor_forms_never_reach_client_actor(actor: str) -> None:
+    fake = FakeApify([memo23_actor_item()])
+    with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
+        Settings.from_env({_alibaba_search_actor_env(): actor})
+    with pytest.raises(ApifyConfigurationError, match="Unsupported Alibaba SEARCH Actor"):
+        ApifyAlibabaClient(
+            _api_token="token",
+            actor_id=actor,
+            client_factory=lambda _token: fake,
+        )
+    assert fake.calls == []
+    assert fake.actor_id == ""
 
 
 def test_legacy_search_actor_override_never_reaches_memo23_run_input(

@@ -340,6 +340,14 @@ def normalize_brightdata_base_url(value: str) -> str:
     return f"https://{parsed.netloc}".rstrip("/")
 
 
+_SUPPORTED_ALIBABA_SEARCH_ACTOR_ALIASES = frozenset(
+    {
+        DEFAULT_APIFY_ALIBABA_ACTOR,
+        "memo23~alibaba-scraper",
+    }
+)
+
+
 def normalize_alibaba_search_actor(value: str) -> str:
     """Accept only the memo23 SEARCH Actor. Reject leftover or custom overrides."""
 
@@ -348,12 +356,12 @@ def normalize_alibaba_search_actor(value: str) -> str:
     actor = value.strip()
     if not actor:
         raise ValueError("apify_alibaba_actor must not be blank")
-    if actor != DEFAULT_APIFY_ALIBABA_ACTOR:
+    if actor not in _SUPPORTED_ALIBABA_SEARCH_ACTOR_ALIASES:
         raise ValueError(
             "Unsupported Alibaba SEARCH Actor "
             f"{actor!r}; only {DEFAULT_APIFY_ALIBABA_ACTOR} is supported"
         )
-    return actor
+    return DEFAULT_APIFY_ALIBABA_ACTOR
 
 
 def _positive_finite(value: float, field_name: str) -> float:

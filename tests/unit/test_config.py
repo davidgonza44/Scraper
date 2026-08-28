@@ -296,6 +296,15 @@ def test_blank_deepl_key_is_not_configured() -> None:
     assert settings.deepl_translator_configured() is False
 
 
+def _memo23_tilde_search_actor() -> str:
+    return "~".join(("memo23", "alibaba-scraper"))
+
+
+def _legacy_alibaba_search_actor(*, tilde: bool = False) -> str:
+    separator = "~" if tilde else "/"
+    return separator.join(("scraper-engine", "alibaba-scraper"))
+
+
 def test_normalize_alibaba_search_actor_accepts_only_memo23() -> None:
     assert (
         normalize_alibaba_search_actor(f"  {DEFAULT_APIFY_ALIBABA_ACTOR}  ")
@@ -307,6 +316,36 @@ def test_normalize_alibaba_search_actor_accepts_only_memo23() -> None:
         normalize_alibaba_search_actor("custom/incompatible-alibaba-actor")
     with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
         Settings.from_env({_alibaba_search_actor_env(): "custom/incompatible-alibaba-actor"})
+
+
+def test_normalize_alibaba_search_actor_canonicalizes_supported_tilde_alias() -> None:
+    tilde = _memo23_tilde_search_actor()
+    assert normalize_alibaba_search_actor(tilde) == DEFAULT_APIFY_ALIBABA_ACTOR
+    assert normalize_alibaba_search_actor(f"  {tilde}  ") == DEFAULT_APIFY_ALIBABA_ACTOR
+    settings = Settings.from_env({_alibaba_search_actor_env(): f"  {tilde}  "})
+    assert settings.apify_alibaba_actor == DEFAULT_APIFY_ALIBABA_ACTOR
+    assert settings.apify_alibaba_actor != tilde
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        _legacy_alibaba_search_actor(),
+        _legacy_alibaba_search_actor(tilde=True),
+        "/".join(("other", "alibaba-scraper")),
+        "~".join(("other", "alibaba-scraper")),
+        "/".join(("memo23", "other")),
+        "a1b2c3d4e5f6g7h8i9j0",
+        "",
+        "  ",
+    ],
+)
+def test_normalize_alibaba_search_actor_rejects_unsupported_forms(actor: str) -> None:
+    with pytest.raises(ValueError, match="apify_alibaba_actor must not be blank|Unsupported"):
+        normalize_alibaba_search_actor(actor)
+    if actor.strip():
+        with pytest.raises(ValueError, match="Unsupported Alibaba SEARCH Actor"):
+            Settings.from_env({_alibaba_search_actor_env(): actor})
 
 
 def test_alibaba_refresh_actor_override_does_not_change_search_actor() -> None:
