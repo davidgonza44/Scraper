@@ -21,7 +21,7 @@ The system SHALL interpret each supported positive UI value, including 10, as `d
 
 ### Requirement: Canonical session results are the frozen displayed prefix
 
-The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. After Z4, Alibaba SEARCH SHALL insert one provider-internal semantic-validation batch after safe mapping and before the usable pool freezes; only RELEVANT Alibaba Zen listings enter that pool. The acquisition buffer SHALL exist only to improve the chance of filling the display maximum. `usable` SHALL count the ordered usable pool; `displayed` SHALL count the canonical session result prefix. Comparison, summaries, totals, and export SHALL consume only that frozen prefix.
+The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. After Z5, Alibaba SEARCH SHALL insert one provider-internal semantic-validation batch after safe mapping and before the usable pool freezes when `mapped > 0`; mapped-zero runs make zero validator calls. Only RELEVANT Alibaba Zen listings enter that pool. The acquisition buffer SHALL exist only to improve the chance of filling the display maximum. `usable` SHALL count the ordered usable pool; `displayed` SHALL count the canonical session result prefix. Comparison, summaries, totals, and export SHALL consume only that frozen prefix.
 
 #### Scenario: Over-acquisition produces only three session results
 - **GIVEN** `display_limit = 3`

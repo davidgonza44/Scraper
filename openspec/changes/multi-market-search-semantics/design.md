@@ -22,7 +22,7 @@ The redesign introduces explicit boundaries between acquisition, canonical provi
 3. A centralized acquisition-budget policy computes and returns `acquisition_budget(provider, display_limit, requested_geographic_scope)`, the finite ceiling for the aggregate strategy. `acquisition_requested` is measured later from executed internal acquisitions.
 4. The orchestrator starts one logical search operation for each selected provider. The provider strategy may perform multiple bounded internal acquisitions to cover scope, partitions, or pagination, but the orchestrator does not start a replacement logical operation when mapping or policy rejects candidates.
 5. Each adapter returns or is wrapped into a `ProviderRunResult` containing the deterministically ordered usable pool, with deduplication only where truthful stable identity exists, plus consolidated metrics, coverage, provenance, and execution outcome.
-6. The pipeline is explicitly: acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. After Z4, Alibaba SEARCH inserts one provider-internal semantic-validation batch after safe mapping and before the usable pool freezes: RELEVANT enters that pool; REVIEW is a separate **Requiere revisión** projection; IRRELEVANT is excluded with reason. The acquisition buffer exists only to improve the chance of filling the display maximum; extra usable buffer candidates are not canonical session results.
+6. The pipeline is explicitly: acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. After Z5, Alibaba SEARCH inserts one provider-internal semantic-validation batch after safe mapping and before the usable pool freezes when `mapped > 0`; `mapped == 0` makes zero validator calls. RELEVANT enters that pool; REVIEW is a separate **Requiere revisión** projection; IRRELEVANT is excluded with reason. The acquisition buffer exists only to improve the chance of filling the display maximum; extra usable buffer candidates are not canonical session results.
 7. Generic comparison constructs positional rows. Exact-product workflows continue to use their separate identity-checked context.
 8. UI summaries, diagnostics, CSV export, and session status read the current generation's canonical session snapshot. Late results from older generations are discarded.
 
@@ -33,7 +33,7 @@ Explanatory PlantUML for Implementation PR A lives in the repository and must be
 - `docs/architecture/multi-market-search-core.puml`
 - `docs/architecture/multi-market-search-sequence.puml`
 
-See `docs/architecture/README.md` for source-of-truth precedence. OpenSpec remains authoritative for staged implementation scope (PRs A–E). Diagrams must never justify behavior that contradicts this design or existing provider contracts. They must distinguish the PR A core that is implemented now, existing `TrackerState`/provider boundaries, and deferred integration edges that are not wired yet. Later-phase components (PRs C–E and Z1–Z5) and unwired GUI orchestration must not be shown as current architecture. The Alibaba Zen SEARCH cutover is Z4, not current runtime behavior.
+See `docs/architecture/README.md` for source-of-truth precedence. OpenSpec remains authoritative for staged implementation scope (PRs A–E). Diagrams must never justify behavior that contradicts this design or existing provider contracts. They must distinguish the PR A core that is implemented now, existing `TrackerState`/provider boundaries, and deferred integration edges that are not wired yet. Later-phase components (PRs C–E and Z1–Z5) and unwired GUI orchestration must not be shown as current architecture. The Alibaba Zen SEARCH cutover is Z5 and may start only after Z4's offline quality gate passes. It is not current runtime behavior.
 
 ## Core models
 
@@ -83,7 +83,7 @@ The repository's existing `ProviderAcquisitionMetrics` and provider-specific Fac
 - `rejected`: acquired or mapped candidates rejected by provider-specific policy, only where the stage boundary makes the aggregate truthful. Provider-specific reason counters state their counting boundary.
 - `usable`: size of the ordered usable pool after provider-integrity policy, Alibaba Zen semantic RELEVANT membership when that contract applies, deduplication only where truthful stable identity exists, and canonical ordering; identity-less valid candidates remain included.
 - `displayed`: exactly `min(usable, display_requested)`; always known for a completed execution. Weaker inequalities such as `displayed <= usable` are not sufficient; inconsistent values are rejected by the contract itself.
-- Alibaba Zen SEARCH additionally records `semantic_relevant`, `semantic_irrelevant`, `semantic_review`, and `semantic_validation_status` (`completed`, `unavailable`, or `invalid_response`). These MUST NOT reuse `coverage_status`. When the validator does not complete a valid batch, semantic counts stay unknown rather than fabricated completed totals.
+- Alibaba Zen SEARCH additionally records `semantic_relevant`, `semantic_irrelevant`, `semantic_review`, and `semantic_validation_status` (`completed`, `unavailable`, or `invalid_response`). These MUST NOT reuse `coverage_status`. If a known-size mapped batch exists and the validator is unavailable or returns an invalid response, the counts are `semantic_relevant = 0`, `semantic_irrelevant = 0`, and `semantic_review =` that known batch size. Semantic counts stay unknown only when the failure occurs before a known-size batch is constructed.
 
 Each adapter/instrumentation point SHALL document the measurement boundary for every emitted counter. `mapped` and `rejected` need not be disjoint: rejection can happen before or after narrow mapping, stages may overlap, and some records may be unobservable. Therefore neither `fetched = mapped + rejected` nor `mapped = usable + rejected` is required. Unobservable counters remain unknown. Safe reason counts may be included only with documented, deterministic definitions.
 
@@ -98,8 +98,8 @@ For example, `display_limit = 3`, `acquisition_requested = 10`, and an ordered u
 The result contract also rejects internally inconsistent values: `metrics.usable` must equal `len(ordered_usable_pool)`, `metrics.displayed` must equal `len(canonical_session_results)`, and `canonical_session_results` must be the frozen prefix `ordered_usable_pool[:metrics.displayed]`. `status` must be a `ProviderStatus` member and `coverage_status` must be `None` or a `CoverageStatus` member. String lookalikes such as `"SUCCESS"`, `"ERROR"`, or `"PARTIAL"` are rejected at construction; Python type hints are not runtime enforcement.
 
 - `SUCCESS`: logical provider operation completed and `usable >= 1`.
-- `EMPTY`: logical provider operation completed normally and `usable == 0`. After Z4, a completed Alibaba Zen validator with zero RELEVANT is `EMPTY` even if REVIEW or IRRELEVANT rows exist.
-- `ERROR`: the logical provider operation failed with an actual exception/failure outcome. ERROR exposes empty canonical pools and `metrics.usable == metrics.displayed == 0`. After Z4, an Alibaba Zen validator outage or wholly invalid batch with zero validated RELEVANT candidates is `ERROR`, never a silent `SUCCESS`. Mapped candidates from that failure may appear only in the REVIEW projection.
+- `EMPTY`: logical provider operation completed normally and `usable == 0`. After Z5, a completed Alibaba Zen validator with zero RELEVANT is `EMPTY` even if REVIEW or IRRELEVANT rows exist.
+- `ERROR`: the logical provider operation failed with an actual exception/failure outcome. ERROR exposes empty canonical pools and `metrics.usable == metrics.displayed == 0`. After Z5, an Alibaba Zen validator outage or wholly invalid batch with zero validated RELEVANT candidates is `ERROR`, never a silent `SUCCESS`. Mapped candidates from that failure may appear only in the REVIEW projection.
 
 Presentation filters do not change provider status. A successfully completed logical operation whose internal acquisition(s) return no records, or records that cannot map, is `EMPTY`, not `ERROR`.
 
@@ -124,7 +124,7 @@ After that strategy completes, the orchestrator MUST NOT launch a second logical
 
 This budget is scoped to generic **Búsquedas**. It does not change existing CLI collect, tracking, supplier refresh, history, exact-product, or other specialized workflow semantics or provider-library transport handling.
 
-After Z4, Alibaba SEARCH is a one-execution Zen operation: `acquisition_budget = min(display_limit * 2, 20)`, `maximum_internal_acquisitions = 1`, Actor input `maxResults` and client `max_items` both equal that budget, and no second execution exists to refill mapping or semantic loss. Refresh remains `xtracto/alibaba-product-scraper`. The exact Zen build MUST be pinned from the five existing benchmark runs; Z0 cannot invent it, and `latest`/`default` are forbidden.
+After Z5, Alibaba SEARCH is a one-execution Zen operation: `acquisition_budget = min(display_limit * 2, 20)`, `maximum_internal_acquisitions = 1`, Actor input `maxResults` and client `max_items` both equal that budget, client `build` equals the exact pinned `buildNumber`, and `restart_on_error=False`. BERA SHALL NOT restart, retry, resurrect, or reboot that Actor. No second execution exists to refill mapping or semantic loss. A mapped-zero run makes zero validator calls. Refresh remains `xtracto/alibaba-product-scraper`. The exact Zen build MUST be pinned from the five existing benchmark runs; Z0 cannot invent it, and `latest`/`default` are forbidden.
 
 ### SearchPositionComparisonRow
 
@@ -154,18 +154,14 @@ Subsequent presentation sorting, price filtering, relevance filtering, ranking-p
 
 **Total de resultados** is the sum of displayed marketplace listings, not the number of positional rows. For displayed counts Alibaba 1, Facebook 1, Mercado Libre 0, total is 2.
 
-Session labels derive from provider statuses and coverage outcomes:
+Session labels use one exclusive precedence. Evaluate the first matching rule and stop:
 
-| Condition | Copy |
-|---|---|
-| At least one `SUCCESS`, no `ERROR`, all applicable coverage `COMPLETE` | `Búsqueda completada` |
-| All selected providers `EMPTY`, all applicable coverage `COMPLETE` | `Búsqueda completada · Sin resultados` |
-| Any selected provider coverage `PARTIAL` | `Búsqueda completada con incidencias` |
-| Alibaba Zen `SUCCESS` with at least one REVIEW candidate | `Búsqueda completada con incidencias` |
-| At least one `ERROR` and at least one other `SUCCESS` or `EMPTY` | `Búsqueda completada con incidencias` |
-| All selected providers `ERROR` | `Búsqueda con error` |
+1. All selected providers `ERROR` → `Búsqueda con error`
+2. Any selected provider is `ERROR` while another is `SUCCESS` or `EMPTY`, or any applicable coverage is `PARTIAL`, or `semantic_review > 0` → `Búsqueda completada con incidencias`
+3. All selected providers `EMPTY` and `semantic_review = 0` → `Búsqueda completada · Sin resultados`
+4. At least one `SUCCESS` and none of the incidence conditions above → `Búsqueda completada`
 
-Not-applicable coverage is excluded from coverage conditions, so Alibaba-only `SUCCESS` and `EMPTY` sessions complete normally. Unavailable coverage on an `ERROR` provider does not alter error rules. Where geographic scope applies, `SUCCESS` and `EMPTY` require established `COMPLETE` or `PARTIAL` coverage.
+`semantic_review` is the session sum of known Alibaba Zen REVIEW counts. A provider without that metric contributes `0`. Not-applicable coverage is excluded from coverage conditions. Unavailable coverage on an `ERROR` provider does not alter error rules. Where geographic scope applies, `SUCCESS` and `EMPTY` require established `COMPLETE` or `PARTIAL` coverage. An Alibaba-only completed validator with `usable = 0` and `semantic_review > 0` is therefore `Búsqueda completada con incidencias`, never `Búsqueda completada · Sin resultados`.
 
 The comparison table shows concise disclosure such as **Comparables de la misma búsqueda · identidad exacta no confirmada**. Implementation may refine wording but may not suggest exact matching.
 
@@ -177,7 +173,7 @@ Alibaba opportunity remains attached only to an Alibaba candidate. Rows containi
 
 - **Facebook:** aggregate truthful reasons for Free/Gratis, invalid price, missing ID, duplicate ID, rejected location, missing title, and malformed URL/other currently measurable policy rejection. Priced-only is mandatory; an image never bypasses price validation.
 - **Mercado Libre:** where observable, aggregate missing ID, missing title, missing Venezuela evidence, explicit foreign marketplace evidence, and mapped successfully. `fetched > 0 && mapped == 0` displays a sanitized schema/mapping-loss explanation distinct from `fetched == 0`.
-- **Alibaba:** successful run with `fetched == 0` is `EMPTY`; `fetched > 0 && mapped == 0` is `EMPTY` with mapping diagnostic; mapped/usable results produce `SUCCESS`. Only an actual provider failure is `ERROR`. After Z4, add semantic counts and `semantic_validation_status`. Completed validation with zero RELEVANT is `EMPTY`. Validator outage or wholly invalid response with zero RELEVANT is `ERROR`. RELEVANT plus REVIEW is `SUCCESS` with semantic incidence, not geographic `PARTIAL`.
+- **Alibaba:** successful run with `fetched == 0` is `EMPTY`; `fetched > 0 && mapped == 0` is `EMPTY` with mapping diagnostic; both make zero validator calls. Mapped/usable RELEVANT results produce `SUCCESS`. Only an actual provider failure is `ERROR`. After Z5, add semantic counts and `semantic_validation_status`. Completed validation with zero RELEVANT is `EMPTY`. A known-size mapped batch that is unavailable or invalid is `ERROR` with `semantic_relevant = 0`, `semantic_irrelevant = 0`, and `semantic_review =` that batch size. RELEVANT plus REVIEW is `SUCCESS` with semantic incidence, not geographic `PARTIAL`. EMPTY plus REVIEW uses incidence copy.
 
 Schema-drift observability consists only of aggregate counters and sanitized copy. Raw payload persistence/UI, actor JSON, cookies, tokens, and sensitive query parameters are prohibited.
 
@@ -211,7 +207,7 @@ For Facebook, prefer one genuine nationwide provider search when supported. Othe
 
 Mercado Libre continues requiring truthful Venezuela evidence such as `siteId == MLV`, a Venezuela domain/permalink, Venezuela country evidence, or MLV product-ID evidence according to current policy; explicit foreign evidence is rejected. Result volume never justifies weakening provenance.
 
-Money remains fail-closed: `$` alone is not USD, bare `US` is not USD, and no implicit FX is introduced. Alibaba USD aggregates use only explicit compatible USD evidence. Explicit ISO `USD` remains valid evidence. For the pre-Z4 SEARCH Actor `memo23/alibaba-scraper`, its documented provider-native marker `US $` / `US$` in the raw `price` field is authorized as explicit USD evidence and is normalized internally to ISO `USD`. That authorization is actor- and field-specific and SHALL NOT be reused for Zen SEARCH. After Z4, Zen SEARCH uses distinct `localized_currency`, `source_currency`, `price_provenance`, and `ship_to_country` fields. Proposed localized-USD precedence is `detail.price.productLadderPrices[*].dollarPrice`, then `detail.price.productRangePrices.dollarPriceRangeLow/High`; `product.price` is display/fallback only; `detail.currency` is source currency, not automatic localized currency. Without sufficient structured evidence, localized currency is `None` and the price does not enter USD statistics. Bare `$`, bare `US`, locale, supplier country, and other indirect signals do not prove USD. `soldOrder=null` stays unknown. Product ratings and supplier `serviceScore` remain distinct. Facebook uses only its existing authorized Venezuela normalization; Mercado Libre combines only genuine compatible currency values.
+Money remains fail-closed: `$` alone is not USD, bare `US` is not USD, and no implicit FX is introduced. Alibaba USD aggregates use only explicit compatible USD evidence. Explicit ISO `USD` remains valid evidence. For the pre-Z5 SEARCH Actor `memo23/alibaba-scraper`, its documented provider-native marker `US $` / `US$` in the raw `price` field is authorized as explicit USD evidence and is normalized internally to ISO `USD`. That authorization is actor- and field-specific and SHALL NOT be reused for Zen SEARCH. After Z5, Zen SEARCH uses distinct `localized_currency`, `source_currency`, `price_provenance`, and `ship_to_country` fields. Proposed localized-USD precedence is `detail.price.productLadderPrices[*].dollarPrice`, then `detail.price.productRangePrices.dollarPriceRangeLow/High`; `product.price` is display/fallback only; `detail.currency` is source currency, not automatic localized currency. Without sufficient structured evidence, localized currency is `None` and the price does not enter USD statistics. Bare `$`, bare `US`, locale, supplier country, and other indirect signals do not prove USD. `soldOrder=null` stays unknown. Product ratings and supplier `serviceScore` remain distinct. Facebook uses only its existing authorized Venezuela normalization; Mercado Libre combines only genuine compatible currency values.
 
 An Alibaba listing with an unconfirmed source currency may remain visible, but USD aggregate fields stay unavailable. UI copy explains **Precio publicado disponible; moneda no confirmada.** and **Estadísticas USD no disponibles: moneda fuente no confirmada.** Any display fallback that labels unknown Alibaba currency as USD must be removed.
 
@@ -231,7 +227,7 @@ Single-market generic **Búsquedas** follows the identical pipeline, configurabl
 
 This section is the Z-track contract. Implementation PRs A and B remain on `main`. PRs C–E remain unimplemented. Z0 is OpenSpec only. Z1–Z5 MUST NOT start from this task.
 
-After Z4, generic Alibaba SEARCH migrates from `memo23/alibaba-scraper` to `zen-studio/alibaba-scraper`. Exact product refresh stays on `xtracto/alibaba-product-scraper`. The production cutover is atomic: one logical SEARCH uses only the pinned Zen build, never both SEARCH Actors and never a floating `latest`/`default` build.
+After Z5, generic Alibaba SEARCH migrates from `memo23/alibaba-scraper` to `zen-studio/alibaba-scraper`. Exact product refresh stays on `xtracto/alibaba-product-scraper`. The production cutover is atomic and may start only after Z4's offline quality gate passes: one logical SEARCH uses only the pinned Zen build, never both SEARCH Actors and never a floating `latest`/`default` build. The production Actor MUST NOT change during Z1–Z4.
 
 The exact build is **blocked** at Z0. The five existing benchmark runs and files
 
@@ -241,11 +237,11 @@ The exact build is **blocked** at Z0. The five existing benchmark runs and files
 - `zen-benchmark-04-lifepo4-battery.json.json`
 - `zen-benchmark-05-impact-driver.json.json`
 
-are not in this repository. Apify MCP is unauthenticated, so those run metadata cannot be read. Public store/OpenAPI pointers, including any currently advertised build id, are not a validated pin. Z1 MUST NOT invent a build.
+are not in this repository. Apify MCP is unauthenticated, so those run metadata cannot be read. Public store/OpenAPI pointers, including any currently advertised build id, are not a validated pin. Z1 MUST NOT invent a build. Z1 incorporates sanitized structural fixtures without labels when those files are supplied. Independent human labels and the offline quality gate belong to Z4. Z5 cannot start until Z4 passed completely.
 
-Local category resolution happens before the single Zen execution. Category is sent only when the resolver produces an exact and sufficiently safe category; otherwise the field is omitted. Category is an acquisition hint, not a candidate-rejection rule.
+Local category resolution happens before the single Zen execution. "Exact and sufficiently safe" is operationally the deterministic resolver in `alibaba-zen-semantic-validation`: a versioned snapshot of the Zen category enum for the pinned build, audited exact aliases, no LLM/embeddings/fuzzy matching, send `category` only on one unambiguous snapshot member, otherwise omit. Category is an acquisition hint, not a candidate-rejection rule, identity, or final semantic criterion. The resolver SHALL NOT rewrite `keywords`.
 
-The post-mapping validator is a dedicated port/adapter, independent of H0019 / `AIProductClassifier` / `classification.py`. One batch, no retries. Decisions are `RELEVANT`, `IRRELEVANT`, or `REVIEW` with the closed reason-code set in `alibaba-zen-semantic-validation`. No numeric confidence. The model receives only sanitized query, title, resolved category, `categoryPath`, a bounded spec set, and an ephemeral `candidate_ref`. HTML, full descriptions, URLs, tokens, tracking, contacts, and the raw Zen payload are forbidden. A valid response is exactly one decision per `candidate_ref`; any missing, duplicate, or extra ref invalidates the whole batch into REVIEW.
+The post-mapping validator is a dedicated port/adapter, independent of H0019 / `AIProductClassifier` / `classification.py`. Zero real validator calls when `mapped == 0`. Exactly one batch when `mapped > 0`. No retries and no second Zen run. Decisions are `RELEVANT`, `IRRELEVANT`, or `REVIEW` with the closed reason-code set in `alibaba-zen-semantic-validation`. No numeric confidence. The model receives only the documented sanitized-and-bounded fields. HTML, full descriptions, URLs, tokens, tracking, contacts, and the raw Zen payload are forbidden. A valid tool response contains only `candidate_ref`, `decision`, and `reason_code`; any extra, missing, duplicate, extra-ref, or mistyped field invalidates the whole batch into REVIEW.
 
 The authorized exception to the generic no-semantic-rejection rule is strictly **provider-internal compatibility validation between the user query and a listing acquired by Alibaba Zen**. It does not authorize cross-market identity, association by title/image/brand/model, landed cost / negotiation / tracking without explicit IDs, filtering other marketplaces, or treating RELEVANT as authenticity.
 
@@ -270,6 +266,7 @@ Implementation-evidence details that remain open, without weakening the settled 
 - centralized Facebook/ML limits and the complete Facebook nationwide partition set plus aliases
 - final compact Spanish diagnostic/coverage/semantic-incidence copy
 - the exact validated Zen build recovered from the five existing benchmark runs
-- sanitized benchmark payloads and human-reviewed golden semantic labels
+- sanitized structural benchmark payloads, recovered at Z1 without labels
+- independent human-reviewed golden semantic labels, added at Z4
 
-Z0 cannot invent those last two items. All other Alibaba Zen SEARCH, validator, currency, and canonical-membership rules in this design are final.
+Z0 cannot invent those last two items. All other Alibaba Zen SEARCH, validator, currency, label-precedence, and canonical-membership rules in this design are final.
