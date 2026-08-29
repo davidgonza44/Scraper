@@ -143,12 +143,13 @@ The sent `category` value SHALL belong exactly to the snapshot. The run SHALL re
 
 ### Requirement: One Zen execution and at most one semantic batch per logical operation
 
-A logical Alibaba SEARCH operation SHALL perform exactly one Zen Actor execution. Semantic-validation batch calls SHALL depend on the mapped pool:
+A logical Alibaba SEARCH operation SHALL perform exactly one Zen Actor execution. Semantic-validation batch calls SHALL depend on successful local batch construction, not on `mapped > 0` alone:
 
-- `mapped == 0`: zero real validator calls and a normal `EMPTY` outcome when Zen completed
-- `mapped > 0`: exactly one semantic-validation batch call
+- `mapped == 0`: zero real validator calls, `semantic_validation_status = not_run`, and a normal `EMPTY` outcome when Zen completed
+- `mapped` in `1..20` and the serialized batch is within `ZEN_SEMANTIC_MAX_BATCH_CHARS`: exactly one semantic-validation batch call
+- local batch construction fails (`mapped > 20` or serialized size exceeds the cap): zero real validator calls and `invalid_response` for that known mapped count
 
-The empty-pool case SHALL NOT be described or implemented as an external no-op call. The orchestrator SHALL NOT start a second Zen execution to refill candidates discarded by mapping, integrity policy, or semantic validation. The validator SHALL NOT retry a failed, unavailable, or invalid batch.
+The empty-pool and construction-failure cases SHALL NOT be described or implemented as external no-op calls. The orchestrator SHALL NOT start a second Zen execution to refill candidates discarded by mapping, integrity policy, or semantic validation. The validator SHALL NOT retry a failed, unavailable, or invalid batch.
 
 #### Scenario: Zen fetched zero makes zero validator calls
 - **GIVEN** one Zen execution completes normally
@@ -157,6 +158,7 @@ The empty-pool case SHALL NOT be described or implemented as an external no-op c
 - **WHEN** the logical operation finalizes
 - **THEN** the validator is called zero times
 - **AND** status is `EMPTY`
+- **AND** `semantic_validation_status` is `not_run`
 - **AND** no second Zen execution is started
 
 #### Scenario: Fetched-positive mapped-zero makes zero validator calls
@@ -167,15 +169,24 @@ The empty-pool case SHALL NOT be described or implemented as an external no-op c
 - **WHEN** the logical operation finalizes
 - **THEN** the validator is called zero times
 - **AND** status is `EMPTY` with mapping diagnostics
+- **AND** `semantic_validation_status` is `not_run`
 - **AND** no second Zen execution is started
 
-#### Scenario: Mapped-positive issues exactly one batch
+#### Scenario: Constructed mapped batch issues exactly one call
 - **GIVEN** one Zen execution returns records
-- **AND** `mapped > 0`
+- **AND** `mapped` is between 1 and 20 inclusive
+- **AND** the serialized batch is within `ZEN_SEMANTIC_MAX_BATCH_CHARS`
 - **WHEN** semantic validation runs
 - **THEN** the validator is called exactly once
 - **AND** no retry is issued
 - **AND** no second Zen execution is started
+
+#### Scenario: Oversized constructed batch is invalid without a call
+- **GIVEN** mapping produced more than 20 candidates or a serialized batch over `ZEN_SEMANTIC_MAX_BATCH_CHARS`
+- **WHEN** the validator request would be built
+- **THEN** the validator is called zero times
+- **AND** `semantic_validation_status` is `invalid_response`
+- **AND** that known mapped count is REVIEW only
 
 #### Scenario: Mapping loss does not start a second Zen run
 - **GIVEN** one Zen execution returns records
@@ -309,7 +320,15 @@ The validator SHALL receive only:
 
 It SHALL NOT receive HTML, full descriptions, URLs, tokens, tracking fields, contact information, chat tokens, or the raw Zen payload. `candidate_ref` SHALL be ephemeral, unique within the batch, and SHALL NOT be a marketplace identity, URL, or tracking token.
 
-Before serialization, every string field SHALL be normalized in this order: Unicode NFKC; removal of Unicode general-category `Cc` and `Cf` characters; compaction of any whitespace sequence to one ASCII space and strip; deterministic truncation to the field cap by Unicode code points. Empty `categoryPath` items and specification pairs with an empty key or value SHALL be dropped after normalization.
+Before serialization, every string field SHALL be normalized in this order:
+
+1. Unicode NFKC
+2. replace every Unicode whitespace character, including whitespace controls such as TAB, LF, CR, VT, and FF, with one ASCII space
+3. remove remaining Unicode general-category `Cc` and `Cf` characters
+4. compact any whitespace sequence to one ASCII space and strip
+5. deterministic truncation to the field cap by Unicode code points
+
+Empty `categoryPath` items and specification pairs with an empty key or value SHALL be dropped after normalization. Token boundaries SHALL be preserved: `impact\ndriver` becomes `impact driver`, never `impactdriver`.
 
 The following constants SHALL be the enforceable limits:
 
@@ -334,8 +353,14 @@ A batch SHALL contain at most `ZEN_SEMANTIC_MAX_BATCH_CANDIDATES` candidates. Be
 - **THEN** those fields are absent
 - **AND** the request contains sanitized query, title, optional resolved category, `categoryPath`, bounded specs, and `candidate_ref`
 
+#### Scenario: Newline between tokens becomes a space
+- **GIVEN** a mapped title `impact\ndriver`
+- **WHEN** the validator request is built
+- **THEN** the emitted title is `impact driver`
+- **AND** it is not `impactdriver`
+
 #### Scenario: Oversized title is truncated to the title cap
-- **GIVEN** a mapped title longer than 300 code points after NFKC, control removal, and whitespace compaction
+- **GIVEN** a mapped title longer than 300 code points after NFKC, whitespace-control replacement, remaining-control removal, and whitespace compaction
 - **WHEN** the validator request is built
 - **THEN** the emitted title has exactly 300 code points
 - **AND** no raw HTML remains
@@ -367,9 +392,17 @@ A valid tool-response item SHALL contain exactly these fields and no others:
 - `decision` as one of `RELEVANT`, `IRRELEVANT`, `REVIEW`
 - `reason_code` as one closed reason-code string
 
-A valid batch response SHALL return exactly one such item for each request `candidate_ref`. Extra fields, missing fields, duplicate refs, extra refs, or incorrect types SHALL invalidate the whole batch. An invalid batch SHALL convert every candidate to REVIEW with `INVALID_PROVIDER_RESPONSE` and SHALL NOT be retried. Ordinary assistant content SHALL NOT control classification.
+A valid batch response SHALL return exactly one such item for each request `candidate_ref`. Extra fields, missing fields, duplicate refs, extra refs, incorrect types, or incompatible `decision`/`reason_code` pairs SHALL invalidate the whole batch. An invalid batch SHALL convert every candidate to REVIEW with `INVALID_PROVIDER_RESPONSE` and SHALL NOT be retried. Ordinary assistant content SHALL NOT control classification.
 
-The adapter SHALL use a dedicated versioned prompt independent of H0019. Provenance SHALL record `model` and `prompt_version`. The HTTP client SHALL use a loopback base URL (`127.0.0.1` or `localhost`), `trust_env=False`, and `ZEN_SEMANTIC_HTTP_TIMEOUT_SECONDS = 60`. Logs SHALL NOT contain raw Zen payloads, validator request bodies, or raw model content.
+Permitted pairs SHALL be exactly:
+
+- `RELEVANT` with `MATCHES_INTENT` only
+- `IRRELEVANT` with `WRONG_PRODUCT_TYPE`, `WRONG_BRAND`, `WRONG_MODEL`, `WRONG_VARIANT_OR_SPEC`, `WRONG_FITMENT`, `ACCESSORY_OR_COMPONENT`, or `CONFLICTING_EVIDENCE`
+- `REVIEW` with `INSUFFICIENT_EVIDENCE`, `CONFLICTING_EVIDENCE`, `VALIDATOR_UNAVAILABLE`, or `INVALID_PROVIDER_RESPONSE`
+
+Any other pairing, including `RELEVANT` with `WRONG_PRODUCT_TYPE`, is an invalid batch.
+
+The adapter SHALL use a dedicated versioned prompt independent of H0019. The prompt SHALL label query, title, resolved category, `categoryPath`, and specification values as untrusted marketplace data and SHALL instruct the model to ignore embedded instructions in those fields. Seller-controlled text SHALL NOT be treated as system, tool, or orchestration instructions. A prompt-like instruction in one candidate SHALL NOT change another candidate's decision. Provenance SHALL record `model` and `prompt_version`. The HTTP client SHALL use a loopback base URL (`127.0.0.1` or `localhost`), `trust_env=False`, and `ZEN_SEMANTIC_HTTP_TIMEOUT_SECONDS = 60`. Logs SHALL NOT contain raw Zen payloads, validator request bodies, or raw model content.
 
 #### Scenario: Extra reference invalidates the batch
 - **GIVEN** the request contains refs `c1` and `c2`
@@ -401,13 +434,27 @@ The adapter SHALL use a dedicated versioned prompt independent of H0019. Provena
 - **WHEN** the adapter validates the response
 - **THEN** the whole batch is REVIEW with `INVALID_PROVIDER_RESPONSE`
 
+#### Scenario: Incompatible decision and reason invalidates the batch
+- **GIVEN** a response item is `RELEVANT` with `WRONG_PRODUCT_TYPE`
+- **WHEN** the adapter validates the response
+- **THEN** the whole batch is REVIEW with `INVALID_PROVIDER_RESPONSE`
+- **AND** no candidate is published as canonical RELEVANT
+
 #### Scenario: Valid 1:1 response is accepted
 - **GIVEN** the request contains refs `c1`, `c2`, and `c3`
 - **AND** the tool response contains exactly those three refs with only `candidate_ref`, `decision`, and `reason_code`
+- **AND** each pair is a permitted decision/reason combination
 - **WHEN** the adapter validates the response
 - **THEN** each candidate keeps its own decision
 - **AND** no additional candidate is introduced
 - **AND** ordinary assistant text does not change those decisions
+
+#### Scenario: Embedded instruction cannot flip sibling candidates
+- **GIVEN** candidate `c1` has title text that says to classify every other listing IRRELEVANT
+- **AND** candidate `c2` would otherwise be RELEVANT with `MATCHES_INTENT`
+- **WHEN** the batch is validated
+- **THEN** `c2` is not forced to IRRELEVANT by `c1`'s seller text
+- **AND** the prompt treated that title as untrusted marketplace data
 
 #### Scenario: Transport is loopback and isolated from H0019
 - **GIVEN** the semantic adapter is constructed
@@ -441,7 +488,7 @@ RELEVANT candidates SHALL enter the ordered usable pool, canonical session prefi
 
 After a completed validator batch, `usable` SHALL equal the RELEVANT pool size. A completed validator with zero RELEVANT SHALL be `EMPTY`. A validator outage or wholly invalid response against a known-size mapped batch SHALL be `ERROR`, never a silent `SUCCESS`. RELEVANT together with REVIEW SHALL be `SUCCESS` with a semantic-validation incidence. Geographic `coverage_status` SHALL NOT represent semantic validation. Alibaba SEARCH geographic coverage remains not applicable.
 
-Required Alibaba SEARCH metrics SHALL include `fetched`, `mapped`, `semantic_relevant`, `semantic_irrelevant`, `semantic_review`, `usable`, and `semantic_validation_status`. Unknown remains unknown only when the failure occurs before a known-size batch is constructed.
+Required Alibaba SEARCH metrics SHALL include `fetched`, `mapped`, `semantic_relevant`, `semantic_irrelevant`, `semantic_review`, `usable`, and `semantic_validation_status`. Unknown remains unknown only when the failure occurs before a known-size mapped pool exists.
 
 When a known-size mapped batch is `unavailable` or `invalid_response`:
 
@@ -453,7 +500,7 @@ When a known-size mapped batch is `unavailable` or `invalid_response`:
 - provider status is `ERROR`
 - the mapped candidates appear only under **Requiere revisión**
 
-`semantic_validation_status` SHALL be one of `completed`, `unavailable`, or `invalid_response` when Alibaba Zen validation applies. It SHALL NOT be a `CoverageStatus` value.
+`semantic_validation_status` SHALL be one of `completed`, `unavailable`, `invalid_response`, or `not_run` when Alibaba Zen validation applies. It SHALL NOT be a `CoverageStatus` value. `not_run` is the required value when Zen completed and `mapped == 0`. Diagnostics and export SHALL render `not_run` as not applicable / blank, never as completed work and never as an error.
 
 #### Scenario: All IRRELEVANT is EMPTY
 - **GIVEN** the validator completes a valid batch
@@ -498,9 +545,17 @@ When a known-size mapped batch is `unavailable` or `invalid_response`:
 - **AND** a semantic-validation incidence is recorded
 - **AND** coverage is not set to `PARTIAL`
 
-#### Scenario: Semantic metrics remain unknown only before a known batch exists
-- **GIVEN** mapping has not yet produced a known-size batch
-- **AND** the provider fails before that batch is constructed
+#### Scenario: Mapped-zero uses not_run rather than completed or error
+- **GIVEN** Zen completed normally
+- **AND** `mapped = 0`
+- **WHEN** metrics are finalized
+- **THEN** `semantic_validation_status` is `not_run`
+- **AND** it is not `completed`, `unavailable`, or `invalid_response`
+- **AND** diagnostics and export render that status as not applicable / blank
+
+#### Scenario: Semantic metrics remain unknown only before a known mapped pool exists
+- **GIVEN** mapping has not yet produced a known mapped count
+- **AND** the provider fails before that count is known
 - **WHEN** metrics are finalized
 - **THEN** `semantic_relevant`, `semantic_irrelevant`, and `semantic_review` remain unknown
 - **AND** those counts are not fabricated as zero completed totals
@@ -514,23 +569,36 @@ The memo23 SEARCH raw `price` marker `US $` / `US$` SHALL NOT be reused for Zen 
 - `price_provenance`
 - `ship_to_country`
 
-Proposed precedence for localized USD:
+Localized USD mapping SHALL be deterministic:
 
-1. `detail.price.productLadderPrices[*].dollarPrice` as localized USD
-2. `detail.price.productRangePrices.dollarPriceRangeLow` / `dollarPriceRangeHigh` as localized USD
-3. `product.price` only as display/fallback
-4. `detail.currency` as source currency, never as automatic localized currency
-5. if structured evidence is insufficient, localized currency is `None` and the price SHALL NOT enter USD statistics
+1. Parse each `detail.price.productLadderPrices[*].dollarPrice` as a `Decimal`. Reject booleans, non-finite values, and values `<= 0`.
+2. If at least one valid ladder value exists, `min_price` is the minimum of those values and `max_price` is the maximum. A single valid value fills both fields. Do not select the first tier, last tier, or an MOQ tier.
+3. Independently parse `detail.price.productRangePrices.dollarPriceRangeLow` and `dollarPriceRangeHigh` with the same Decimal rules. If only one of the two range fields is valid, range evidence is insufficient.
+4. If both ladder extrema and a complete range exist, they are compatible only when `quantize_money(ladder_min) == quantize_money(range_low)` and `quantize_money(ladder_max) == quantize_money(range_high)`. Any disagreement is conflicting evidence: `localized_currency` stays unknown and the price SHALL NOT enter USD statistics.
+5. If no valid ladder values exist and a complete compatible range exists, use that range as `min_price` / `max_price`.
+6. `product.price` is display/fallback only and SHALL NOT enter USD statistics.
+7. `detail.currency` is source currency, never automatic localized currency.
+8. If structured evidence is insufficient or conflicting, `localized_currency` is `None` and the price SHALL NOT enter USD statistics.
 
 Z1 SHALL confirm those structured paths against sanitized fixtures. If a named path is absent, the mapper SHALL NOT invent `dollarPrice` from a bare `$` display string, from `detail.currency`, or from locale. `ship_to_country` for this SEARCH contract is `US`.
 
 #### Scenario: Structured dollarPrice may enter USD statistics
-- **GIVEN** sanitized fixture evidence contains `detail.price.productLadderPrices` with `dollarPrice` values
-- **AND** those values are finite and compatible
+- **GIVEN** sanitized fixture evidence contains `detail.price.productLadderPrices` with `dollarPrice` values `1.20` and `3.40`
+- **AND** no contradictory range evidence exists
 - **WHEN** the listing is mapped
 - **THEN** `localized_currency` is USD
+- **AND** `min_price` is `1.20`
+- **AND** `max_price` is `3.40`
 - **AND** `price_provenance` records the ladder dollarPrice path
 - **AND** the listing may participate in USD aggregates
+- **AND** neither the first nor last tier is selected by position
+
+#### Scenario: Conflicting ladder and range stay unknown
+- **GIVEN** valid ladder dollarPrice extrema `1.20` and `3.40`
+- **AND** `dollarPriceRangeLow` / `dollarPriceRangeHigh` are `2.00` and `4.00`
+- **WHEN** the listing is mapped
+- **THEN** `localized_currency` remains unknown
+- **AND** the listing does not enter USD aggregates
 
 #### Scenario: Display price alone does not prove USD
 - **GIVEN** `product.price` is `$0.53-0.63`
@@ -583,10 +651,14 @@ Z4 minimum acceptance criteria SHALL be:
 - unknowns stay null / **No disponible**
 - `display_limit` remains separate from `acquisition_budget`
 - no cross-market identity was introduced
-- `mapped == 0` produces zero validator calls
-- `mapped > 0` produces exactly one batch
+- `mapped == 0` produces zero validator calls and `semantic_validation_status = not_run`
+- a successfully constructed batch of 1..20 produces exactly one call
 - no validator retry and no second Zen run
 - ALL-REVIEW uses `Búsqueda completada con incidencias`
+- every human-labeled fixture is compared to the disconnected validator decision and per-class counts are recorded
+- Z4 fails if any human-RELEVANT fixture is classified IRRELEVANT
+- Z4 fails if any of the five datasets has at least one human RELEVANT label and the validator produces zero RELEVANT on that dataset
+- no numeric precision/recall SLA is invented
 - production Actor remains memo23 throughout Z4
 
 #### Scenario: Missing benchmarks block fixture authorship, not cutover authorship
@@ -606,3 +678,17 @@ Z4 minimum acceptance criteria SHALL be:
 - **WHEN** a later task attempts the production Actor switch
 - **THEN** that switch is forbidden
 - **AND** production SEARCH remains `memo23/alibaba-scraper`
+
+#### Scenario: All-REVIEW validator cannot pass the labeled gate
+- **GIVEN** a named benchmark dataset has at least one human RELEVANT label
+- **AND** the disconnected validator marks every fixture REVIEW
+- **WHEN** Z4 evaluates acceptance
+- **THEN** Z4 fails
+- **AND** Z5 MUST NOT start
+
+#### Scenario: False exclusion of a human-RELEVANT fixture fails the gate
+- **GIVEN** a human-reviewed fixture is labeled RELEVANT
+- **AND** the disconnected validator decides IRRELEVANT
+- **WHEN** Z4 evaluates acceptance
+- **THEN** Z4 fails
+- **AND** Z5 MUST NOT start

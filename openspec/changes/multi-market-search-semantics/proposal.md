@@ -29,7 +29,7 @@ This change defines one coherent, bounded, observable search-session contract fo
 - `provider-search-diagnostics`: compact safe diagnostics, provider rejection counters, schema-drift signals, session status copy, and unknown-currency explanations.
 - `marketplace-query-routing`: original/provider query provenance, shared Venezuela query generation, fallback behavior, and configurable deterministic Venezuela scope.
 - `search-session-export-safety`: current-session CSV semantics, query/metric provenance, stale-response clearing, and preserved export safety.
-- `alibaba-zen-semantic-validation`: pinned Zen SEARCH Actor input, one execution, validator called only when `mapped > 0`, deterministic category resolver, concrete validator limits, RELEVANT/REVIEW/IRRELEVANT split, closed reason codes, Zen currency provenance, and sanitized offline fixtures.
+- `alibaba-zen-semantic-validation`: pinned Zen SEARCH Actor input, one execution, validator called only after a constructed 1..20 batch, deterministic category resolver, concrete validator limits, RELEVANT/REVIEW/IRRELEVANT split, closed reason codes, Zen currency provenance, and sanitized offline fixtures.
 
 ### Modified capabilities
 
@@ -54,7 +54,7 @@ Implementation MUST remain compatible with current marketplace provider adapters
 
 - Generic **Búsquedas** logical provider search operations: exactly one per selected provider per search generation when configured and startable.
 - Orchestrator-started second logical operations after rejection/mapping loss: zero. Bounded internal acquisitions within the original provider strategy are permitted and are not retries.
-- After Z5, Alibaba SEARCH internal acquisitions: exactly one Zen Actor execution. Semantic-validation batch calls are exactly one when `mapped > 0` and zero when `mapped == 0`. Zero refill executions. Zero validator retries. Zero second Zen runs.
+- After Z5, Alibaba SEARCH internal acquisitions: exactly one Zen Actor execution. Semantic-validation batch calls are exactly one after a local 1..20 batch is constructed within the size cap, and zero when `mapped == 0` or local construction fails. Zero refill executions. Zero validator retries. Zero second Zen runs.
 - Provider executions during implementation and automated tests: zero.
 - DeepL calls during automated tests and implementation: zero.
 - MiniMax calls: zero.
