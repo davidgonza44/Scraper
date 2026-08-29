@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Idempotent GitNexus 1.6.10 install for Cursor Cloud Agents.
+# Uses the Node version from .nvmrc via NVM, never PATH's default node.
+set -euo pipefail
+
+GITNEXUS_VERSION="1.6.10"
+NPM_GLOBAL="${HOME}/.npm-global"
+CLI_JS="${NPM_GLOBAL}/lib/node_modules/gitnexus/dist/cli/index.js"
+USER_LAUNCHER="${NPM_GLOBAL}/bin/gitnexus"
+SYSTEM_LAUNCHER="/usr/local/bin/gitnexus"
+
+log() {
+    echo "[gitnexus] $*"
+}
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
+log "install starting in ${REPO_ROOT}"
+
+if [[ ! -f .nvmrc ]]; then
+    log "ERROR: .nvmrc is missing at ${REPO_ROOT}/.nvmrc"
+    exit 1
+fi
+
+NODE_VERSION="$(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' .nvmrc)"
+if [[ -z "${NODE_VERSION}" ]]; then
+    log "ERROR: .nvmrc did not contain a Node version"
+    exit 1
+fi
+log "nvmrc Node version: ${NODE_VERSION}"
+
+export NVM_DIR="${HOME}/.nvm"
+if [[ ! -s "${NVM_DIR}/nvm.sh" ]]; then
+    log "ERROR: NVM not found at ${NVM_DIR}/nvm.sh"
+    exit 1
+fi
+# shellcheck disable=SC1091
+. "${NVM_DIR}/nvm.sh"
+
+log "installing Node ${NODE_VERSION} via nvm if needed"
+nvm install "${NODE_VERSION}"
+nvm use "${NODE_VERSION}"
+
+NODE_BIN="$(nvm which "${NODE_VERSION}")"
+if [[ -z "${NODE_BIN}" || ! -x "${NODE_BIN}" ]]; then
+    log "ERROR: nvm did not provide a Node binary for ${NODE_VERSION}"
+    exit 1
+fi
+if [[ "${NODE_BIN}" != "${NVM_DIR}/"* ]]; then
+    log "ERROR: Node binary is not under NVM: ${NODE_BIN}"
+    exit 1
+fi
+NPM_BIN="$(dirname "${NODE_BIN}")/npm"
+if [[ ! -x "${NPM_BIN}" ]]; then
+    log "ERROR: npm not found next to Node at ${NPM_BIN}"
+    exit 1
+fi
+log "using Node ${NODE_BIN} ($("${NODE_BIN}" --version))"
+log "using npm ${NPM_BIN} ($("${NPM_BIN}" --version))"
+
+mkdir -p "${NPM_GLOBAL}/bin" "${NPM_GLOBAL}/lib"
+log "installing gitnexus@${GITNEXUS_VERSION} under ${NPM_GLOBAL}"
+"${NPM_BIN}" install -g --prefix "${NPM_GLOBAL}" "gitnexus@${GITNEXUS_VERSION}"
+
+if [[ ! -f "${CLI_JS}" ]]; then
+    log "ERROR: GitNexus CLI missing at ${CLI_JS}"
+    exit 1
+fi
+log "CLI entrypoint: ${CLI_JS}"
+
+log "writing stable launcher ${USER_LAUNCHER}"
+cat > "${USER_LAUNCHER}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec $(printf '%q' "${NODE_BIN}") $(printf '%q' "${CLI_JS}") "\$@"
+EOF
+chmod 0755 "${USER_LAUNCHER}"
+
+log "exposing launcher at ${SYSTEM_LAUNCHER}"
+sudo install -m 0755 "${USER_LAUNCHER}" "${SYSTEM_LAUNCHER}"
+
+EXCLUDE_FILE=".git/info/exclude"
+if [[ ! -d .git ]]; then
+    log "ERROR: ${REPO_ROOT} is not a git repository"
+    exit 1
+fi
+mkdir -p .git/info
+touch "${EXCLUDE_FILE}"
+if grep -qxF '.gitnexus/' "${EXCLUDE_FILE}"; then
+    log ".gitnexus/ already listed in ${EXCLUDE_FILE}"
+else
+    echo '.gitnexus/' >> "${EXCLUDE_FILE}"
+    log "added .gitnexus/ to ${EXCLUDE_FILE}"
+fi
+
+log "verifying ${SYSTEM_LAUNCHER} --version == ${GITNEXUS_VERSION}"
+VERSION_RAW="$("${SYSTEM_LAUNCHER}" --version 2>&1)"
+VERSION="$(printf '%s\n' "${VERSION_RAW}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+if [[ "${VERSION}" != "${GITNEXUS_VERSION}" ]]; then
+    log "ERROR: expected GitNexus ${GITNEXUS_VERSION}, got: ${VERSION_RAW}"
+    exit 1
+fi
+log "version ok: ${VERSION}"
+
+log "running analyze --skip-agents-md --skip-skills"
+"${SYSTEM_LAUNCHER}" analyze --skip-agents-md --skip-skills
+
+log "install complete"
