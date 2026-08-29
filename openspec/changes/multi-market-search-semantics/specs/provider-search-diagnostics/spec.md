@@ -110,7 +110,7 @@ A selected provider unable to execute because required configuration or credenti
 
 ### Requirement: Unknown Alibaba currency is explained without USD inference
 
-An Alibaba listing with a published price and unconfirmed source currency MAY remain visible, but USD aggregates SHALL remain unavailable. The UI SHALL explain that the published price is available while source currency is unconfirmed and USD statistics are unavailable for that reason. No fallback SHALL label the unknown currency as USD.
+An Alibaba listing with a published price and unconfirmed source currency MAY remain visible, but USD aggregates SHALL remain unavailable. The UI SHALL explain that the published price is available while source currency is unconfirmed and USD statistics are unavailable for that reason. No fallback SHALL label the unknown currency as USD. An authorized `memo23/alibaba-scraper` SEARCH raw `price` marker `US $` / `US$` is confirmed USD evidence after this contract and SHALL NOT be classified as unknown.
 
 #### Scenario: Unknown currency listing remains truthful
 - **GIVEN** an Alibaba listing has price range 4.78–9.78
@@ -120,3 +120,28 @@ An Alibaba listing with a published price and unconfirmed source currency MAY re
 - **AND** USD aggregate is unavailable
 - **AND** no `$`-to-USD inference occurs
 - **AND** explanatory copy is present
+
+#### Scenario: memo23 authorized US-dollar marker enters USD statistics
+- **GIVEN** the configured Alibaba SEARCH Actor is `memo23/alibaba-scraper`
+- **AND** the raw `price` field contains `US $3.20-$3.60`
+- **AND** no contradictory provider evidence invalidates the price
+- **WHEN** the listing is mapped
+- **THEN** the raw/display price remains truthful
+- **AND** min_price is 3.20
+- **AND** max_price is 3.60
+- **AND** normalized currency is USD
+- **AND** the listing may participate in existing USD aggregates
+
+#### Scenario: ambiguous dollar marker remains unconfirmed
+- **GIVEN** the raw `price` field is `$3.20-$3.60`
+- **WHEN** the listing is mapped
+- **THEN** numeric amounts may remain available
+- **AND** currency remains unknown
+- **AND** the listing does not enter USD aggregates
+
+#### Scenario: bare US prefix remains unconfirmed
+- **GIVEN** the raw `price` field is `US 3.20`
+- **WHEN** the listing is mapped
+- **THEN** numeric amounts may remain available
+- **AND** currency remains unknown
+- **AND** the listing does not enter USD aggregates

@@ -16,7 +16,7 @@ This change defines one coherent, bounded, observable search-session contract fo
 - Freeze the displayed prefix of the ordered usable pool as canonical session results; derive comparison, summary cards, total results, exports, and session labels from that prefix rather than the extra acquisition buffer or presentation projections.
 - Route provider-specific queries while retaining query provenance plus separate requested geographic scope, truthful effective scope, and coverage status (`COMPLETE`, `PARTIAL`, or unavailable when coverage was not established). Partial fulfillment remains useful but becomes an incidence; unavailable coverage never overrides `ERROR`.
 - Define configurable provider geographic scope. **Toda Venezuela** is used only for a genuine nationwide search or the complete finite configured nationwide partition set; bounded subsets use accurate partial/broad-scope copy. Supported narrower city/market scopes include Caracas.
-- Preserve fail-closed currency behavior and add truthful UX for visible Alibaba prices whose source currency is unknown.
+- Preserve fail-closed currency behavior (no implicit FX, no generic `$`→USD, no generic unknown-currency→USD) while authorizing the configured Alibaba SEARCH Actor `memo23/alibaba-scraper` raw `price` marker `US $` / `US$` as provider-specific USD evidence, and add truthful UX for visible Alibaba prices whose source currency is unknown.
 - Preserve marketplace-specific ordering, images, ratings, CSV security, stale-response protection, and exact-product workflows.
 
 ## Capabilities
@@ -59,7 +59,7 @@ Implementation MUST remain compatible with current marketplace provider adapters
 ## Non-goals
 
 - A second logical generic-search operation used to refill candidate loss, unbounded/deep pagination, or Alibaba's maximum 500 as a routine pool. Bounded provider-internal acquisition strategies and unrelated workflow retry/transport semantics are not redesigned away.
-- Implicit foreign exchange or interpreting `$` alone as USD.
+- Implicit foreign exchange, interpreting `$` alone as USD, or treating bare `US` as USD. The authorized memo23 SEARCH raw `price` marker `US $` / `US$` is a deliberate provider-specific exception, not a generic dollar inference.
 - Weakening Mercado Libre Venezuela provenance or Facebook priced-only policy.
 - A global cross-market score or AI-, fuzzy-title-, rank-, or image-based exact-product identity.
 - Redesigning landed cost, negotiation, tracking, profitability, or the dashboard shell.

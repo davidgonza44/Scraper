@@ -158,6 +158,13 @@ def _decimal_from_numeric_scalar(raw: int | float) -> Decimal | None:
 
 
 def _marker_iso(raw: str | None) -> str | None:
+    """Resolve one raw ``price`` marker to an explicit ISO code.
+
+    This helper lives only in the memo23 SEARCH adapter. For
+    ``memo23/alibaba-scraper``, the provider-native ``US $`` / ``US$``
+    marker is authorized USD evidence. Bare ``$`` and bare ``US`` are not.
+    """
+
     if raw is None:
         return None
     token = re.sub(r"[\s$]", "", raw).upper()

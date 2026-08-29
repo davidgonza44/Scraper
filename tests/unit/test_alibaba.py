@@ -2497,6 +2497,57 @@ def test_parse_scientific_us_dollar_requires_dollar_sign() -> None:
     assert compact[3] == "USD"
 
 
+def test_pricemin_alone_does_not_authorize_usd() -> None:
+    product = map_alibaba_item(
+        memo23_actor_item(
+            price="$3.20-$3.60",
+            priceMin="US $3.20",
+        )
+    )
+    assert product is not None
+    assert product.price_display == "$3.20-$3.60"
+    assert product.min_price == Decimal("3.20")
+    assert product.max_price == Decimal("3.60")
+    assert product.currency is None
+    assert infer_alibaba_currency(product) is None
+    stats = calculate_alibaba_price_statistics([product])
+    assert stats.priced_products == 0
+    assert stats.currency is None
+
+
+def test_quantity_prices_do_not_authorize_usd() -> None:
+    product = map_alibaba_item(
+        memo23_actor_item(
+            price="$3.20-$3.60",
+            quantityPrices=[
+                {"price": 3.6, "localPrice": "$3.60", "quantityMin": 5},
+                {"price": 3.2, "localPrice": "$3.20", "quantityMin": 100},
+            ],
+        )
+    )
+    assert product is not None
+    assert product.currency is None
+    assert infer_alibaba_currency(product) is None
+    stats = calculate_alibaba_price_statistics([product])
+    assert stats.priced_products == 0
+
+
+def test_supplier_country_does_not_authorize_usd() -> None:
+    product = map_alibaba_item(
+        memo23_actor_item(
+            price="$3.20-$3.60",
+            supplierCountry="United States",
+            supplierCountryCode="US",
+        )
+    )
+    assert product is not None
+    assert product.supplier_country == "US"
+    assert product.currency is None
+    assert infer_alibaba_currency(product) is None
+    stats = calculate_alibaba_price_statistics([product])
+    assert stats.priced_products == 0
+
+
 def test_map_memo23_us_dollar_range_preserves_display_and_sets_usd() -> None:
     product = map_alibaba_item(
         memo23_actor_item(
