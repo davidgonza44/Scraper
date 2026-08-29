@@ -6,7 +6,7 @@
 
 Generic multi-market search SHALL build `SearchPositionComparisonRow` values by one-based position. A genuine single acquisition MUST preserve provider acquisition/result order after required integrity validation and deduplication only when truthful stable identity exists. Identity-less candidates remain distinct. Only multiple acquisitions lacking truthful global native order use documented deterministic BERA aggregate ordering. BERA controls MUST NOT reorder frozen generic results. Missing cells remain empty and candidates are never fabricated.
 
-Generic comparison SHALL be purely positional. Cross-market similarity, relatedness, equivalence, compatibility, category, title, or image comparisons SHALL NOT filter, discard, promote, demote, reorder, or replace valid candidates in any provider list. Any future identical-product/high-confidence matching flow SHALL be separate from generic search and SHALL NOT mutate its provider lists.
+Generic comparison SHALL be purely positional. Cross-market similarity, relatedness, equivalence, compatibility, category, title, or image comparisons SHALL NOT filter, discard, promote, demote, reorder, or replace valid candidates in any provider list. After Z4, only Alibaba Zen RELEVANT listings occupy Alibaba comparison cells; REVIEW listings occupy the separate **Requiere revisión** projection and SHALL NOT fill positional cells. Alibaba semantic decisions SHALL NOT discard, promote, or replace Facebook or Mercado Libre candidates. Any future identical-product/high-confidence matching flow SHALL be separate from generic search and SHALL NOT mutate its provider lists.
 
 #### Scenario: Uneven three-two-one results
 - **GIVEN** Alibaba displays A1, A2, A3
@@ -38,6 +38,14 @@ Generic comparison SHALL be purely positional. Cross-market similarity, relatedn
 - **THEN** all three remain in `Resultado #1` in their respective columns
 - **AND** none is discarded or reordered for cross-market relatedness
 - **AND** the row implies neither identity, equivalence, nor compatibility
+
+#### Scenario: Alibaba REVIEW does not occupy a positional cell
+- **GIVEN** the first Alibaba Zen listing is REVIEW
+- **AND** the second Alibaba Zen listing is RELEVANT
+- **WHEN** generic comparison is built
+- **THEN** the Alibaba cell in `Resultado #1` is the RELEVANT listing
+- **AND** the REVIEW listing is absent from comparison and export
+- **AND** Facebook and Mercado Libre cells are unchanged by that REVIEW decision
 
 ### Requirement: Positional comparison has a distinct non-identity model
 

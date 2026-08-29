@@ -16,7 +16,8 @@ This change defines one coherent, bounded, observable search-session contract fo
 - Freeze the displayed prefix of the ordered usable pool as canonical session results; derive comparison, summary cards, total results, exports, and session labels from that prefix rather than the extra acquisition buffer or presentation projections.
 - Route provider-specific queries while retaining query provenance plus separate requested geographic scope, truthful effective scope, and coverage status (`COMPLETE`, `PARTIAL`, or unavailable when coverage was not established). Partial fulfillment remains useful but becomes an incidence; unavailable coverage never overrides `ERROR`.
 - Define configurable provider geographic scope. **Toda Venezuela** is used only for a genuine nationwide search or the complete finite configured nationwide partition set; bounded subsets use accurate partial/broad-scope copy. Supported narrower city/market scopes include Caracas.
-- Preserve fail-closed currency behavior (no implicit FX, no generic `$`→USD, no generic unknown-currency→USD) while authorizing the configured Alibaba SEARCH Actor `memo23/alibaba-scraper` raw `price` marker `US $` / `US$` as provider-specific USD evidence, and add truthful UX for visible Alibaba prices whose source currency is unknown.
+- Preserve fail-closed currency behavior (no implicit FX, no generic `$`→USD, no generic unknown-currency→USD). The memo23 SEARCH raw `price` marker `US $` / `US$` remains the pre-Z4 SEARCH exception only. After Z4, Alibaba SEARCH uses a separate Zen currency contract (`localized_currency`, `source_currency`, `price_provenance`, `ship_to_country`) and SHALL NOT reuse the memo23 marker rule.
+- After Z4, migrate Alibaba SEARCH from `memo23/alibaba-scraper` to a pinned build of `zen-studio/alibaba-scraper`, keep `xtracto/alibaba-product-scraper` for exact refresh, and apply one provider-internal semantic-validation batch to Alibaba Zen listings before freezing the canonical pool.
 - Preserve marketplace-specific ordering, images, ratings, CSV security, stale-response protection, and exact-product workflows.
 
 ## Capabilities
@@ -27,7 +28,8 @@ This change defines one coherent, bounded, observable search-session contract fo
 - `positional-market-comparison`: position-based generic rows, canonical summaries and totals, disclosure, and strict separation from exact-product identity.
 - `provider-search-diagnostics`: compact safe diagnostics, provider rejection counters, schema-drift signals, session status copy, and unknown-currency explanations.
 - `marketplace-query-routing`: original/provider query provenance, shared Venezuela query generation, fallback behavior, and configurable deterministic Venezuela scope.
-- `search-session-export-safety`: current-session CSV semantics, query/metric provenance, stale-response clearing, and preserved export security.
+- `search-session-export-safety`: current-session CSV semantics, query/metric provenance, stale-response clearing, and preserved export safety.
+- `alibaba-zen-semantic-validation`: pinned Zen SEARCH Actor input, one execution and one semantic batch, RELEVANT/REVIEW/IRRELEVANT split, closed reason codes, Zen currency provenance, and sanitized offline fixtures.
 
 ### Modified capabilities
 
@@ -37,20 +39,22 @@ This change defines one coherent, bounded, observable search-session contract fo
 
 - **Domain/application models:** add requested scope to search/query intent and effective scope plus coverage outcome to provider/session results, alongside consolidated metrics, frozen snapshot, and positional comparison types.
 - **Generic search orchestration:** start one logical provider search operation per selected provider and generation. Its centralized strategy may perform bounded internal acquisitions, deterministically deduplicate/aggregate them, and stop early only when doing so preserves truthful declared geographic coverage. Explicit **Toda Venezuela** requires a genuine nationwide search or the complete finite configured nationwide partition set.
-- **Provider adapters/mappers:** expose safe aggregate counts and truthful rejection reasons without exposing or retaining raw actor payloads.
+- **Provider adapters/mappers:** expose safe aggregate counts and truthful rejection reasons without exposing or retaining raw actor payloads. After Z4, Alibaba SEARCH mapping and Actor input follow the Zen contract; refresh remains xtracto.
+- **Alibaba semantic validation:** a dedicated port/adapter, independent of H0019, may exclude only Alibaba Zen listings that explicitly contradict the user query. REVIEW stays in a separate projection. This exception does not authorize cross-market identity, association by title/image/brand/model, or filtering other marketplaces.
 - **Generic Reflex UI:** rename the limit control, render truthful provider-owned listing fields in positional cells, use canonical counts/statuses, add compact diagnostics, and explain unknown Alibaba currency. Missing optional fields render blank/`—` and never trigger fabrication.
 - **Export:** require stable query/session/scope and defined provider-metric columns on every export row; unknown or non-applicable values remain blank/explicitly unavailable, never fabricated, and export waits for all selected providers to settle.
 - **Tests:** add offline unit/integration fixtures and 1440x900 Playwright coverage; no live provider or translation calls.
-- **Cost:** `AcquisitionBudgetPolicy` computes finite `acquisition_budget`; executed internal calls accumulate separate `acquisition_requested`. Larger limits/scopes can increase actual work, but all ceilings remain centralized/testable and Alibaba 500 is not a routine budget.
+- **Cost:** `AcquisitionBudgetPolicy` computes finite `acquisition_budget`; executed internal calls accumulate separate `acquisition_requested`. Larger limits/scopes can increase actual work, but all ceilings remain centralized/testable and Alibaba 500 is not a routine budget. After Z4 the proposed Alibaba SEARCH budget is `min(display_limit * 2, 20)` with one Zen execution.
 
 ## Compatibility
 
-Implementation MUST remain compatible with current marketplace provider adapters, exact-product workflows, Alibaba tracking, landed cost, negotiation, profitability, the Facebook H0019 specialized flow, Facebook generic priced-only filtering, marketplace-owned images, genuine rating rules, CSV injection protection and UTF-8 BOM, monetary provenance, the search-generation guard, and the Reflex-native frontend. Deterministic rules SHOULD live in small pure application/GUI modules where practical; `TrackerState` orchestrates and serializes them rather than becoming a replacement domain/service layer.
+Implementation MUST remain compatible with current marketplace provider adapters, exact-product workflows, Alibaba tracking, landed cost, negotiation, profitability, the Facebook H0019 specialized flow, Facebook generic priced-only filtering, marketplace-owned images, genuine rating rules, CSV injection protection and UTF-8 BOM, monetary provenance, the search-generation guard, and the Reflex-native frontend. The Alibaba Zen validator MUST remain independent of H0019. Deterministic rules SHOULD live in small pure application/GUI modules where practical; `TrackerState` orchestrates and serializes them rather than becoming a replacement domain/service layer. Before Z4, production Alibaba SEARCH remains `memo23/alibaba-scraper`.
 
 ## External-call budget
 
 - Generic **Búsquedas** logical provider search operations: exactly one per selected provider per search generation when configured and startable.
 - Orchestrator-started second logical operations after rejection/mapping loss: zero. Bounded internal acquisitions within the original provider strategy are permitted and are not retries.
+- After Z4, Alibaba SEARCH internal acquisitions: exactly one Zen Actor execution and exactly one semantic-validation batch. Zero refill executions. Zero validator retries.
 - Provider executions during implementation and automated tests: zero.
 - DeepL calls during automated tests and implementation: zero.
 - MiniMax calls: zero.
@@ -59,7 +63,10 @@ Implementation MUST remain compatible with current marketplace provider adapters
 ## Non-goals
 
 - A second logical generic-search operation used to refill candidate loss, unbounded/deep pagination, or Alibaba's maximum 500 as a routine pool. Bounded provider-internal acquisition strategies and unrelated workflow retry/transport semantics are not redesigned away.
-- Implicit foreign exchange, interpreting `$` alone as USD, or treating bare `US` as USD. The authorized memo23 SEARCH raw `price` marker `US $` / `US$` is a deliberate provider-specific exception, not a generic dollar inference.
+- Implicit foreign exchange, interpreting `$` alone as USD, or treating bare `US` as USD. The memo23 SEARCH `US $` / `US$` marker is a pre-Z4 SEARCH exception only and SHALL NOT be reused for Zen SEARCH.
+- Using Alibaba semantic validation as cross-market identity, authenticity proof, landed-cost/negotiation/tracking authorization, or a filter on Facebook or Mercado Libre.
+- A second Zen execution or validator retry to refill discarded Alibaba candidates.
+- Pinning `latest`/`default` or inventing a Zen build when the five existing benchmark run metadata are unavailable.
 - Weakening Mercado Libre Venezuela provenance or Facebook priced-only policy.
 - A global cross-market score or AI-, fuzzy-title-, rank-, or image-based exact-product identity.
 - Redesigning landed cost, negotiation, tracking, profitability, or the dashboard shell.
@@ -74,3 +81,5 @@ Fundamental semantics are settled. Only these implementation-evidence details ma
 1. The exact initial supported display options, finite `MAX_DISPLAY_LIMIT` value (at least 10), scaling function, provider caps, maximum internal acquisitions, and aggregate budgets needed without excessive cost.
 2. The complete finite Facebook partition set that can truthfully support **Toda Venezuela**, and which narrower or explicitly partial/broad scopes and reviewed aliases current adapters/fixtures support.
 3. Final compact Spanish diagnostic wording, provided it preserves every specified distinction and does not imply unavailable metrics are zero.
+4. The exact validated `zen-studio/alibaba-scraper` build recovered from the five existing benchmark runs. Z0 cannot invent it. Public store/OpenAPI pointers are not a pin.
+5. Sanitized contents and human-reviewed golden labels for the five named Zen benchmark files, which are not in this repository at Z0.

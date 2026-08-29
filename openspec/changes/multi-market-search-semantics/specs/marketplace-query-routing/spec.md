@@ -43,7 +43,7 @@ Each session SHALL retain `requested_geographic_scope`; provider results separat
 
 ### Requirement: Query routing is marketplace-specific
 
-Alibaba SHALL receive either the original query or an independently derived safe international query using existing query-generation infrastructure. Facebook Venezuela and Mercado Libre Venezuela SHALL receive a safely available Spanish marketplace query when appropriate. A Venezuela-localized query SHALL NOT leak into or silently translate Alibaba solely because Venezuela providers use it. Alibaba's actual query and origin SHALL be retained.
+Alibaba SHALL receive either the original query or an independently derived safe international query using existing query-generation infrastructure. After Z4, that Alibaba query is the single normalized `keywords` value sent to Zen; local category resolution may add `category` only when exact and sufficiently safe, and SHALL NOT replace or silently rewrite the query. Facebook Venezuela and Mercado Libre Venezuela SHALL receive a safely available Spanish marketplace query when appropriate. A Venezuela-localized query SHALL NOT leak into or silently translate Alibaba solely because Venezuela providers use it. Alibaba's actual query and origin SHALL be retained.
 
 #### Scenario: Shared Spanish Venezuela query
 - **GIVEN** original query `baseball glove`
@@ -51,6 +51,15 @@ Alibaba SHALL receive either the original query or an independently derived safe
 - **WHEN** all providers are selected
 - **THEN** Alibaba receives `baseball glove`
 - **AND** Facebook and Mercado Libre may both receive `guante de béisbol`
+
+#### Scenario: Alibaba Zen keywords stay independent of Venezuela localization
+- **GIVEN** original query `baseball glove`
+- **AND** Facebook/ML receive `guante de béisbol`
+- **AND** the Alibaba category resolver does not produce an exact safe category
+- **WHEN** the Zen SEARCH input is built after Z4
+- **THEN** `keywords` is the independently routed Alibaba query
+- **AND** `category` is omitted
+- **AND** the Venezuela-localized query is not sent to Zen
 
 ### Requirement: Existing translation infrastructure is reused once with fallback
 

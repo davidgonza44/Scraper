@@ -21,7 +21,7 @@ The system SHALL interpret each supported positive UI value, including 10, as `d
 
 ### Requirement: Canonical session results are the frozen displayed prefix
 
-The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. The acquisition buffer SHALL exist only to improve the chance of filling the display maximum. `usable` SHALL count the ordered usable pool; `displayed` SHALL count the canonical session result prefix. Comparison, summaries, totals, and export SHALL consume only that frozen prefix.
+The provider pipeline SHALL be acquired candidates → mapped/policy-evaluated candidates → ordered usable pool → canonical session results (`ordered_usable_pool[:display_limit]`) → presentation projections. After Z4, Alibaba SEARCH SHALL insert one provider-internal semantic-validation batch after safe mapping and before the usable pool freezes; only RELEVANT Alibaba Zen listings enter that pool. The acquisition buffer SHALL exist only to improve the chance of filling the display maximum. `usable` SHALL count the ordered usable pool; `displayed` SHALL count the canonical session result prefix. Comparison, summaries, totals, and export SHALL consume only that frozen prefix.
 
 #### Scenario: Over-acquisition produces only three session results
 - **GIVEN** `display_limit = 3`
@@ -154,6 +154,22 @@ The system SHALL classify a completed logical provider operation with at least o
 - **THEN** status is `EMPTY`
 - **AND** it is not `ERROR`
 
+#### Scenario: Completed Alibaba Zen validator with zero RELEVANT is EMPTY
+- **GIVEN** Alibaba Zen mapping completed
+- **AND** the semantic validator completed a valid batch
+- **AND** `semantic_relevant = 0`
+- **WHEN** status is derived
+- **THEN** status is `EMPTY`
+- **AND** coverage is not set to `PARTIAL`
+
+#### Scenario: Alibaba Zen validator outage is ERROR
+- **GIVEN** mapped Alibaba Zen candidates exist
+- **AND** the semantic validator is unavailable or returns a wholly invalid batch
+- **AND** no candidate is validated as RELEVANT
+- **WHEN** status is derived
+- **THEN** status is `ERROR`
+- **AND** it is not a silent `SUCCESS`
+
 #### Scenario: Presentation filter hides a usable result
 - **GIVEN** Mercado Libre completed with `usable = 1`
 - **AND** a relevance presentation filter hides that listing in another view
@@ -169,7 +185,7 @@ The system SHALL classify a completed logical provider operation with at least o
 
 ### Requirement: Provider-specific validation remains fail-closed
 
-Generic search SHALL reject candidates only for documented deterministic provider-integrity/safety policy. A missing field rejects only when required by that provider's existing generic mapper/integrity contract. Alibaba may accept a title-bearing product without ID, URL, image, rating, or reputation; Mercado Libre retains required external ID/title and MLV evidence without making permalink universal; Facebook retains priced-only and its required integrity fields. Malformed/unmappable records, explicit foreign evidence, stable-identity duplicates, and existing justified violations remain rejectable. Cross-market similarity, category/title similarity, price attractiveness, reputation, opportunity, or relevance thresholds SHALL NOT reject. Optional metadata absence SHALL NOT reject.
+Generic search SHALL reject candidates only for documented deterministic provider-integrity/safety policy. A missing field rejects only when required by that provider's existing generic mapper/integrity contract. Alibaba may accept a title-bearing product without ID, URL, image, rating, or reputation; Mercado Libre retains required external ID/title and MLV evidence without making permalink universal; Facebook retains priced-only and its required integrity fields. Malformed/unmappable records, explicit foreign evidence, stable-identity duplicates, and existing justified violations remain rejectable. Cross-market similarity, category/title similarity, price attractiveness, reputation, opportunity, or relevance thresholds SHALL NOT reject. Optional metadata absence SHALL NOT reject. The sole exception is provider-internal compatibility validation between the user query and a listing acquired by Alibaba Zen, as specified in `alibaba-zen-semantic-validation`. That exception SHALL NOT reject Facebook or Mercado Libre candidates, SHALL NOT infer cross-market identity, and SHALL NOT treat RELEVANT as authenticity.
 
 #### Scenario: Alibaba optional identity and URL are absent
 - **GIVEN** an Alibaba product has the title required by its existing mapper
@@ -209,6 +225,19 @@ Generic search SHALL reject candidates only for documented deterministic provide
 - **GIVEN** a valid provider candidate has low similarity or relevance to candidates from another marketplace
 - **WHEN** generic-search validity is determined
 - **THEN** it remains usable in its provider's canonical order
+
+#### Scenario: Alibaba Zen explicit contradiction may be excluded
+- **GIVEN** a mapped Alibaba Zen listing explicitly contradicts the user query
+- **AND** the dedicated semantic validator returns IRRELEVANT with a closed reason code
+- **WHEN** the usable pool is frozen
+- **THEN** that listing is excluded from canonical results
+- **AND** Facebook and Mercado Libre candidates are unchanged
+
+#### Scenario: Alibaba title-token score still cannot reject
+- **GIVEN** a mapped Alibaba Zen listing has a low deterministic title-token relevance score
+- **AND** the semantic validator did not return IRRELEVANT
+- **WHEN** generic-search validity is determined
+- **THEN** the low score alone does not reject the listing
 
 ### Requirement: External-call budgets are enforced by implementation and tests
 

@@ -79,7 +79,7 @@ Where technically observable, Mercado Libre SHALL aggregate missing ID, missing 
 
 ### Requirement: Alibaba diagnostics distinguish empty, mapping loss, and failure
 
-A normally completed Alibaba run with `fetched = 0` SHALL be `EMPTY` with received count zero. A normally completed run with `fetched > 0 && mapped = 0` SHALL be `EMPTY` with schema/mapping diagnostics. A run with usable records SHALL be `SUCCESS`. Only an actual provider execution failure SHALL be `ERROR`.
+A normally completed Alibaba run with `fetched = 0` SHALL be `EMPTY` with received count zero. A normally completed run with `fetched > 0 && mapped = 0` SHALL be `EMPTY` with schema/mapping diagnostics. A run with usable records SHALL be `SUCCESS`. Only an actual provider execution failure SHALL be `ERROR`. After Z4, compact details SHALL also expose `semantic_relevant`, `semantic_irrelevant`, `semantic_review`, and `semantic_validation_status` when those values are known. A completed validator with zero RELEVANT is `EMPTY`. A validator outage or wholly invalid response with zero RELEVANT is `ERROR`. RELEVANT plus REVIEW is `SUCCESS` with semantic incidence and MUST NOT set geographic coverage to `PARTIAL`.
 
 #### Scenario: Alibaba mapping loss
 - **GIVEN** Alibaba execution completes normally with records received
@@ -87,6 +87,15 @@ A normally completed Alibaba run with `fetched = 0` SHALL be `EMPTY` with receiv
 - **WHEN** outcome is derived
 - **THEN** it is `EMPTY`, not `ERROR`
 - **AND** the schema/mapping diagnostic is available
+
+#### Scenario: Alibaba Zen semantic incidence is not coverage
+- **GIVEN** Alibaba status is `SUCCESS`
+- **AND** at least one REVIEW candidate exists
+- **AND** geographic coverage is not applicable
+- **WHEN** session copy and diagnostics render
+- **THEN** the session uses incidence copy
+- **AND** coverage is not `PARTIAL`
+- **AND** semantic counts are shown when known
 
 ### Requirement: Schema-drift observability is aggregate and safe
 
@@ -110,7 +119,7 @@ A selected provider unable to execute because required configuration or credenti
 
 ### Requirement: Unknown Alibaba currency is explained without USD inference
 
-An Alibaba listing with a published price and unconfirmed source currency MAY remain visible, but USD aggregates SHALL remain unavailable. The UI SHALL explain that the published price is available while source currency is unconfirmed and USD statistics are unavailable for that reason. No fallback SHALL label the unknown currency as USD. An authorized `memo23/alibaba-scraper` SEARCH raw `price` marker `US $` / `US$` is confirmed USD evidence after this contract and SHALL NOT be classified as unknown.
+An Alibaba listing with a published price and unconfirmed source currency MAY remain visible, but USD aggregates SHALL remain unavailable. The UI SHALL explain that the published price is available while source currency is unconfirmed and USD statistics are unavailable for that reason. No fallback SHALL label the unknown currency as USD. Before Z4, an authorized `memo23/alibaba-scraper` SEARCH raw `price` marker `US $` / `US$` is confirmed USD evidence and SHALL NOT be classified as unknown. After Z4, that memo23 marker SHALL NOT be reused for Zen SEARCH; Zen uses `localized_currency`, `source_currency`, `price_provenance`, and `ship_to_country` as specified in `alibaba-zen-semantic-validation`.
 
 #### Scenario: Unknown currency listing remains truthful
 - **GIVEN** an Alibaba listing has price range 4.78–9.78
@@ -122,7 +131,7 @@ An Alibaba listing with a published price and unconfirmed source currency MAY re
 - **AND** explanatory copy is present
 
 #### Scenario: memo23 authorized US-dollar marker enters USD statistics
-- **GIVEN** the configured Alibaba SEARCH Actor is `memo23/alibaba-scraper`
+- **GIVEN** the configured Alibaba SEARCH Actor is still `memo23/alibaba-scraper` before Z4
 - **AND** the raw `price` field contains `US $3.20-$3.60`
 - **AND** no contradictory provider evidence invalidates the price
 - **WHEN** the listing is mapped
@@ -131,6 +140,15 @@ An Alibaba listing with a published price and unconfirmed source currency MAY re
 - **AND** max_price is 3.60
 - **AND** normalized currency is USD
 - **AND** the listing may participate in existing USD aggregates
+
+#### Scenario: Zen SEARCH does not inherit the memo23 marker rule
+- **GIVEN** the configured Alibaba SEARCH Actor is `zen-studio/alibaba-scraper` after Z4
+- **AND** `product.price` contains `US $3.20-$3.60` or `$3.20-$3.60`
+- **AND** no structured `dollarPrice` evidence exists
+- **WHEN** the listing is mapped
+- **THEN** the display price may remain visible
+- **AND** `localized_currency` remains unknown
+- **AND** the listing does not enter USD aggregates
 
 #### Scenario: ambiguous dollar marker remains unconfirmed
 - **GIVEN** the raw `price` field is `$3.20-$3.60`
