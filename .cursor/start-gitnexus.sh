@@ -4,7 +4,7 @@
 set -euo pipefail
 
 GITNEXUS_VERSION="1.6.10"
-SYSTEM_LAUNCHER="/usr/local/bin/gitnexus"
+SYSTEM_LAUNCHER="${GITNEXUS_SYSTEM_LAUNCHER:-/usr/local/bin/gitnexus}"
 
 log() {
     echo "[gitnexus] $*"
@@ -16,6 +16,33 @@ discard_index() {
     log "removing .gitnexus and continuing"
     rm -rf .gitnexus
     exit 0
+}
+
+# Read lastCommit from gitnexus.json. Nonzero means the metadata is unusable.
+# Callers must invoke this in a context where set -e cannot abort the script
+# before discard_index can run (for example `if ! ...`).
+read_index_last_commit() {
+    local meta_path="$1"
+    python3 -c '
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception:
+    sys.exit(1)
+
+if not isinstance(payload, dict):
+    sys.exit(1)
+
+last_commit = payload.get("lastCommit")
+if not isinstance(last_commit, str) or not last_commit.strip():
+    sys.exit(1)
+
+print(last_commit)
+' "${meta_path}"
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -83,9 +110,10 @@ if [[ ! -f "${META}" ]]; then
 fi
 
 HEAD_SHA="$(git rev-parse HEAD)"
-INDEXED_SHA="$(
-    python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("lastCommit") or "")' "${META}"
-)"
+INDEXED_SHA=""
+if ! INDEXED_SHA="$(read_index_last_commit "${META}")"; then
+    discard_index "unusable metadata in ${META}"
+fi
 if [[ -z "${INDEXED_SHA}" ]]; then
     discard_index "${META} has empty lastCommit"
 fi

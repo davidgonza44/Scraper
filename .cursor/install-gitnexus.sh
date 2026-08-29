@@ -13,9 +13,36 @@ log() {
     echo "[gitnexus] $*"
 }
 
+ensure_git_worktree() {
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        log "ERROR: ${REPO_ROOT} is not a git worktree"
+        exit 1
+    fi
+}
+
+ensure_gitnexus_exclude() {
+    local exclude_file exclude_parent
+    exclude_file="$(git rev-parse --git-path info/exclude)"
+    exclude_parent="$(dirname "${exclude_file}")"
+    mkdir -p "${exclude_parent}"
+    touch "${exclude_file}"
+    if grep -qxF '.gitnexus/' "${exclude_file}"; then
+        log ".gitnexus/ already listed in ${exclude_file}"
+    else
+        echo '.gitnexus/' >> "${exclude_file}"
+        log "added .gitnexus/ to ${exclude_file}"
+    fi
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
+
+if [[ "${GITNEXUS_CLOUD_PHASE:-}" == "ensure-exclude" ]]; then
+    ensure_git_worktree
+    ensure_gitnexus_exclude
+    exit 0
+fi
 
 log "install starting in ${REPO_ROOT}"
 
@@ -71,7 +98,7 @@ log "installing gitnexus@${GITNEXUS_VERSION} under ${NPM_GLOBAL}"
 # follow npm's bin -> dist/cli/index.js link and overwrite the CLI.
 rm -f "${USER_LAUNCHER}"
 "${NPM_BIN}" uninstall -g --prefix "${NPM_GLOBAL}" gitnexus >/dev/null 2>&1 || true
-"${NPM_BIN}" install -g --prefix "${NPM_GLOBAL}" --dangerously-allow-all-scripts \
+"${NPM_BIN}" install -g --prefix "${NPM_GLOBAL}" \
     "gitnexus@${GITNEXUS_VERSION}"
 
 if [[ ! -f "${CLI_JS}" ]]; then
@@ -108,19 +135,8 @@ fi
 log "exposing launcher at ${SYSTEM_LAUNCHER}"
 sudo install -m 0755 "${USER_LAUNCHER}" "${SYSTEM_LAUNCHER}"
 
-EXCLUDE_FILE=".git/info/exclude"
-if [[ ! -d .git ]]; then
-    log "ERROR: ${REPO_ROOT} is not a git repository"
-    exit 1
-fi
-mkdir -p .git/info
-touch "${EXCLUDE_FILE}"
-if grep -qxF '.gitnexus/' "${EXCLUDE_FILE}"; then
-    log ".gitnexus/ already listed in ${EXCLUDE_FILE}"
-else
-    echo '.gitnexus/' >> "${EXCLUDE_FILE}"
-    log "added .gitnexus/ to ${EXCLUDE_FILE}"
-fi
+ensure_git_worktree
+ensure_gitnexus_exclude
 
 log "verifying ${SYSTEM_LAUNCHER} --version == ${GITNEXUS_VERSION}"
 VERSION_RAW="$("${SYSTEM_LAUNCHER}" --version 2>&1)"
