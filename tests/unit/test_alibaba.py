@@ -2447,6 +2447,56 @@ def test_parse_conflicting_us_dollar_and_iso_markers_remain_invalid() -> None:
         assert currency is None
 
 
+def test_parse_bare_us_prefix_does_not_infer_usd() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("US 3.20")
+    assert display == "US 3.20"
+    assert min_price == Decimal("3.20")
+    assert max_price == Decimal("3.20")
+    assert currency is None
+
+    ranged = parse_alibaba_price("US 3.20-3.60")
+    assert ranged == ("US 3.20-3.60", Decimal("3.20"), Decimal("3.60"), None)
+
+    lowered = parse_alibaba_price("us 3.20")
+    assert lowered == ("us 3.20", Decimal("3.20"), Decimal("3.20"), None)
+
+
+def test_parse_compact_us_dollar_single_value_is_usd() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("US$3.20")
+    assert display == "US$3.20"
+    assert min_price == Decimal("3.20")
+    assert max_price == Decimal("3.20")
+    assert currency == "USD"
+
+
+def test_parse_bare_dollar_single_value_remains_unknown_currency() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("$3.20")
+    assert display == "$3.20"
+    assert min_price == Decimal("3.20")
+    assert max_price == Decimal("3.20")
+    assert currency is None
+
+
+def test_parse_scientific_us_dollar_requires_dollar_sign() -> None:
+    with_dollar = parse_alibaba_price("US $3e2")
+    assert with_dollar[0] == "US $3e2"
+    assert with_dollar[1] == Decimal("3e2")
+    assert with_dollar[2] == Decimal("3e2")
+    assert with_dollar[3] == "USD"
+
+    bare = parse_alibaba_price("US 3e2")
+    assert bare[0] == "US 3e2"
+    assert bare[1] == Decimal("3e2")
+    assert bare[2] == Decimal("3e2")
+    assert bare[3] is None
+
+    compact = parse_alibaba_price("US$3e2")
+    assert compact[0] == "US$3e2"
+    assert compact[1] == Decimal("3e2")
+    assert compact[2] == Decimal("3e2")
+    assert compact[3] == "USD"
+
+
 def test_map_memo23_us_dollar_range_preserves_display_and_sets_usd() -> None:
     product = map_alibaba_item(
         memo23_actor_item(
