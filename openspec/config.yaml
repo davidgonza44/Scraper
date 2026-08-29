@@ -7,9 +7,13 @@ context: |
   Do not migrate to React, Next.js, or Vite.
   Before generic search changes, read context.md for orientation only, then
   AGENTS.md, OpenSpec, repository contracts, architecture docs, and
-  docs/ai-contracts/. The change multi-market-search-semantics is planned as
-  staged PRs A-E. Implementation PRs A and B are currently implemented on
-  main. PRs C-E remain unimplemented. Source of truth: OpenSpec > repository
+  docs/ai-contracts/.   The change multi-market-search-semantics is planned as
+  staged PRs A-E plus Alibaba Zen SEARCH PRs Z0-Z5. Implementation PRs A
+  and B are currently implemented on main. PRs C-E remain unimplemented.
+  Z0 is OpenSpec only. Do not implement Z1-Z5 or later-stage C-E work
+  early. After Z5, Alibaba SEARCH uses a pinned zen-studio/alibaba-scraper
+  build and a dedicated semantic validator; refresh stays on
+  xtracto/alibaba-product-scraper. Source of truth: OpenSpec > repository
   implementation/contracts > architecture docs > AI schemas/golden fixtures >
   context.md / implementation convenience.
 

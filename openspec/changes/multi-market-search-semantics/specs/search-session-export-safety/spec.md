@@ -4,12 +4,18 @@
 
 ### Requirement: CSV exports one row per real canonical marketplace listing
 
-CSV SHALL contain one row per real listing in each provider's frozen canonical session result prefix. Extra usable candidates remaining in the acquisition buffer SHALL NOT be exported. CSV SHALL NOT merge positionally aligned candidates into a single identity record, and presentation projections SHALL neither remove nor add canonical session results. Marketplace identity SHALL remain explicit.
+CSV SHALL contain one row per real listing in each provider's frozen canonical session result prefix. Extra usable candidates remaining in the acquisition buffer SHALL NOT be exported. After Z5, Alibaba REVIEW and IRRELEVANT listings SHALL NOT be exported. CSV SHALL NOT merge positionally aligned candidates into a single identity record, and presentation projections SHALL neither remove nor add canonical session results. Marketplace identity SHALL remain explicit.
 
 #### Scenario: Positional row has three candidates
 - **GIVEN** one positional comparison row contains Alibaba, Facebook, and Mercado Libre listings
 - **WHEN** CSV is exported
 - **THEN** it contains three marketplace listing rows rather than one merged identity row
+
+#### Scenario: Alibaba REVIEW listing is not exported
+- **GIVEN** an Alibaba Zen run produced one RELEVANT listing and one REVIEW listing
+- **WHEN** CSV is exported
+- **THEN** only the RELEVANT canonical listing is exported
+- **AND** the REVIEW listing is absent
 
 #### Scenario: Acquisition buffer has more usable candidates than display maximum
 - **GIVEN** `acquisition_requested = 10`
@@ -22,7 +28,7 @@ CSV SHALL contain one row per real listing in each provider's frozen canonical s
 
 ### Requirement: Exported provenance and metrics are truthful
 
-Every CSV row SHALL contain columns `original_user_query`, `provider_query`, `provider_query_origin`, `requested_geographic_scope`, `effective_geographic_scope`, `coverage_status`, `generation`, `display_requested`, `acquisition_budget`, and `acquisition_requested`. The defined provider metric columns `provider_fetched`, `provider_mapped`, `provider_rejected`, `provider_usable`, and `provider_displayed` SHALL also remain present. Unknown/unobservable values are blank/unavailable, never numeric zero. Geographic columns remain present for non-applicable providers and use the documented blank/not-applicable representation.
+Every CSV row SHALL contain columns `original_user_query`, `provider_query`, `provider_query_origin`, `requested_geographic_scope`, `effective_geographic_scope`, `coverage_status`, `generation`, `display_requested`, `acquisition_budget`, and `acquisition_requested`. The defined provider metric columns `provider_fetched`, `provider_mapped`, `provider_rejected`, `provider_usable`, and `provider_displayed` SHALL also remain present. After Z5, Alibaba SEARCH export SHALL also retain `semantic_relevant`, `semantic_irrelevant`, `semantic_review`, and `semantic_validation_status` when the contract applies; unknown values and `not_run` stay blank/unavailable. Unknown/unobservable values are blank/unavailable, never numeric zero. Geographic columns remain present for non-applicable providers and use the documented blank/not-applicable representation. Semantic-validation columns MUST NOT reuse `coverage_status`.
 
 #### Scenario: Alibaba-only export retains required provenance columns
 - **GIVEN** an Alibaba-only settled session where geographic coverage is not applicable
