@@ -161,6 +161,8 @@ def _marker_iso(raw: str | None) -> str | None:
     if raw is None:
         return None
     token = re.sub(r"[\s$]", "", raw).upper()
+    if token == "US":
+        return "USD"
     if token in _SUPPORTED_PRICE_ISO:
         return token
     return None

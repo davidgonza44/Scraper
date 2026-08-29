@@ -42,6 +42,7 @@ from bera_price_tracker.config import (
     Settings,
 )
 from bera_price_tracker.domain.alibaba import AlibabaProduct
+from bera_price_tracker.gui import search_export
 from bera_price_tracker.gui import services as gui_services
 from bera_price_tracker.gui.state import AlibabaResultRow, AlibabaTrackedRow, TrackerState
 from bera_price_tracker.infrastructure.providers.alibaba import (
@@ -674,7 +675,7 @@ def test_memo23_schema_maps_truthful_public_fields() -> None:
     assert product.price_display == "US $1.00-$9.00"
     assert product.min_price == Decimal("1.00")
     assert product.max_price == Decimal("9.00")
-    assert product.currency is None
+    assert product.currency == "USD"
     assert product.moq == "10 pieces"
     assert product.supplier_name == "Shenzhen Example Co., Ltd."
     assert product.supplier_country == "CN"
@@ -693,33 +694,34 @@ def test_supplier_years_does_not_become_gold_supplier_years() -> None:
     assert "supplierYears" not in dumped
 
 
-def test_dollar_price_range_does_not_invent_usd_currency() -> None:
+def test_memo23_us_dollar_range_is_explicit_usd() -> None:
     product = map_alibaba_item(memo23_actor_item(price="US $1.00-$9.00"))
     assert product is not None
     assert product.price_display == "US $1.00-$9.00"
     assert product.min_price == Decimal("1.00")
     assert product.max_price == Decimal("9.00")
-    assert product.currency is None
+    assert product.currency == "USD"
 
 
-def test_memo23_documented_us_dollar_prefix_does_not_enter_usd_statistics() -> None:
+def test_memo23_documented_us_dollar_prefix_enters_usd_statistics() -> None:
     product = map_alibaba_item(memo23_actor_item(price="US $0.71-$0.78"))
     assert product is not None
     assert product.price_display == "US $0.71-$0.78"
     assert product.min_price == Decimal("0.71")
     assert product.max_price == Decimal("0.78")
-    assert product.currency is None
-    assert infer_alibaba_currency(product) is None
+    assert product.currency == "USD"
+    assert infer_alibaba_currency(product) == "USD"
+    assert alibaba_representative_price(product) == Decimal("0.745")
     stats = calculate_alibaba_price_statistics([product])
-    assert stats.priced_products == 0
-    assert stats.average is None
-    assert stats.median is None
-    assert stats.minimum is None
-    assert stats.maximum is None
-    assert stats.currency is None
+    assert stats.priced_products == 1
+    assert stats.average == Decimal("0.745")
+    assert stats.median == Decimal("0.745")
+    assert stats.minimum == Decimal("0.71")
+    assert stats.maximum == Decimal("0.78")
+    assert stats.currency == "USD"
 
 
-def test_memo23_documented_us_dollar_prefix_caps_opportunity_below_50() -> None:
+def test_memo23_documented_us_dollar_prefix_scores_as_explicit_usd() -> None:
     product = map_alibaba_item(
         memo23_actor_item(
             price="US $0.71-$0.78",
@@ -730,11 +732,12 @@ def test_memo23_documented_us_dollar_prefix_caps_opportunity_below_50() -> None:
     scores = score_alibaba_listings([product])
     assert len(scores) == 1
     score = scores[0]
-    assert score.price_score == 0
+    # Single explicit-USD listing: relative fraction is 0.5, so 45 * 0.5 = 22.5 → 22.
+    assert score.price_score == 22
     assert score.information_score == 20
-    assert score.price_clarity_score == 4
-    assert score.moq_score > 0
-    assert score.total < 50
+    assert score.price_clarity_score == 7
+    assert score.moq_score == 12
+    assert score.total == 61
     assert score.total == (
         score.price_score + score.moq_score + score.information_score + score.price_clarity_score
     )
@@ -746,7 +749,7 @@ def test_single_price_and_missing_price_are_truthful() -> None:
     assert single.price_display == "US $4.50"
     assert single.min_price == Decimal("4.50")
     assert single.max_price == Decimal("4.50")
-    assert single.currency is None
+    assert single.currency == "USD"
     missing = map_alibaba_item(memo23_actor_item(price=None, priceMin=None, minOrder="5 pieces"))
     assert missing is not None
     assert missing.price_display is None
@@ -2061,13 +2064,13 @@ def test_textual_prices_do_not_fabricate_from_sign_or_exponent() -> None:
     assert display == "US $1.00-$9.00"
     assert min_price == Decimal("1.00")
     assert max_price == Decimal("9.00")
-    assert currency is None
+    assert currency == "USD"
 
     display, min_price, max_price, currency = parse_alibaba_price("US $4.50")
     assert display == "US $4.50"
     assert min_price == Decimal("4.50")
     assert max_price == Decimal("4.50")
-    assert currency is None
+    assert currency == "USD"
 
     display, min_price, max_price, currency = parse_alibaba_price("$1.00-$9.00")
     assert display == "$1.00-$9.00"
@@ -2164,7 +2167,7 @@ def test_reversed_price_range_numeric_bounds_are_unavailable() -> None:
     assert display == "US $1.00-$9.00"
     assert min_price == Decimal("1.00")
     assert max_price == Decimal("9.00")
-    assert currency is None
+    assert currency == "USD"
     assert min_price <= max_price
 
     for raw, expected_display in (
@@ -2371,8 +2374,8 @@ def test_price_text_does_not_join_unrelated_tokens_or_invent_iso() -> None:
         _assert_search_row_survives(product)
 
     for raw, expected_min, expected_max, expected_currency in (
-        ("US $1.00-$9.00", Decimal("1.00"), Decimal("9.00"), None),
-        ("US $4.50", Decimal("4.50"), Decimal("4.50"), None),
+        ("US $1.00-$9.00", Decimal("1.00"), Decimal("9.00"), "USD"),
+        ("US $4.50", Decimal("4.50"), Decimal("4.50"), "USD"),
         ("$1.00-$9.00", Decimal("1.00"), Decimal("9.00"), None),
         ("USD 1.00-9.00", Decimal("1.00"), Decimal("9.00"), "USD"),
         ("USD 4.50", Decimal("4.50"), Decimal("4.50"), "USD"),
@@ -2387,6 +2390,150 @@ def test_price_text_does_not_join_unrelated_tokens_or_invent_iso() -> None:
         assert product.min_price == expected_min
         assert product.max_price == expected_max
         _assert_search_row_survives(product)
+
+
+def test_parse_explicit_us_dollar_range_is_usd() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("US $3.20-$3.60")
+    assert display == "US $3.20-$3.60"
+    assert min_price == Decimal("3.20")
+    assert max_price == Decimal("3.60")
+    assert currency == "USD"
+
+
+def test_parse_explicit_us_dollar_single_value_is_usd() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("US $3.20")
+    assert display == "US $3.20"
+    assert min_price == Decimal("3.20")
+    assert max_price == Decimal("3.20")
+    assert currency == "USD"
+
+
+def test_parse_bare_dollar_range_remains_unknown_currency() -> None:
+    display, min_price, max_price, currency = parse_alibaba_price("$3.20-$3.60")
+    assert display == "$3.20-$3.60"
+    assert min_price == Decimal("3.20")
+    assert max_price == Decimal("3.60")
+    assert currency is None
+
+
+def test_parse_explicit_iso_usd_prefix_and_range_remain_usd() -> None:
+    single = parse_alibaba_price("USD 3.20")
+    assert single == ("USD 3.20", Decimal("3.20"), Decimal("3.20"), "USD")
+    ranged = parse_alibaba_price("USD 3.20-3.60")
+    assert ranged == ("USD 3.20-3.60", Decimal("3.20"), Decimal("3.60"), "USD")
+
+
+def test_parse_supported_non_usd_iso_currencies_remain_unchanged() -> None:
+    assert parse_alibaba_price("CNY 4.03") == ("CNY 4.03", Decimal("4.03"), Decimal("4.03"), "CNY")
+    assert parse_alibaba_price("EUR 100") == ("EUR 100", Decimal("100"), Decimal("100"), "EUR")
+    assert parse_alibaba_price("GBP 4.50") == ("GBP 4.50", Decimal("4.50"), Decimal("4.50"), "GBP")
+    assert parse_alibaba_price("4.03 EUR") == ("4.03 EUR", Decimal("4.03"), Decimal("4.03"), "EUR")
+
+
+def test_parse_us_dollar_spacing_and_casing_variants_are_usd() -> None:
+    for raw in ("us $3.20-$3.60", "Us $3.20-$3.60", "US$3.20-$3.60", "US  $3.20"):
+        _display, min_price, max_price, currency = parse_alibaba_price(raw)
+        assert currency == "USD"
+        assert min_price is not None
+        assert max_price is not None
+
+
+def test_parse_conflicting_us_dollar_and_iso_markers_remain_invalid() -> None:
+    for raw in ("US $3.20 EUR", "USD 3.20 EUR", "US $3.20-$3.60 EUR"):
+        display, min_price, max_price, currency = parse_alibaba_price(raw)
+        assert display == raw
+        assert min_price is None
+        assert max_price is None
+        assert currency is None
+
+
+def test_map_memo23_us_dollar_range_preserves_display_and_sets_usd() -> None:
+    product = map_alibaba_item(
+        memo23_actor_item(
+            productId="1601387647131",
+            price="US $3.20-$3.60",
+            priceMin="US $3.20",
+        )
+    )
+    assert product is not None
+    assert product.price_display == "US $3.20-$3.60"
+    assert product.min_price == Decimal("3.20")
+    assert product.max_price == Decimal("3.60")
+    assert product.currency == "USD"
+    assert product.product_id == "1601387647131"
+
+
+def test_real_memo23_us_dollar_listings_enter_usd_statistics() -> None:
+    products = [
+        map_alibaba_item({"title": "Listing A", "price": "US $3.20-$3.60"}),
+        map_alibaba_item({"title": "Listing B", "price": "US $1.00-$9.00"}),
+        map_alibaba_item({"title": "Listing C", "price": "US $77.14-$161.14"}),
+    ]
+    mapped = [product for product in products if product is not None]
+    assert [product.currency for product in mapped] == ["USD", "USD", "USD"]
+    assert [alibaba_representative_price(product) for product in mapped] == [
+        Decimal("3.40"),
+        Decimal("5.00"),
+        Decimal("119.14"),
+    ]
+    stats = calculate_alibaba_price_statistics(mapped)
+    assert stats.priced_products == 3
+    assert stats.currency == "USD"
+    assert stats.minimum == Decimal("1.00")
+    assert stats.maximum == Decimal("161.14")
+    assert format_alibaba_money(stats.minimum) == "$1.00"
+    assert format_alibaba_money(stats.average) == "$42.51"
+    assert format_alibaba_money(stats.median) == "$5.00"
+    assert format_alibaba_money(stats.maximum) == "$161.14"
+    assert format_alibaba_money(stats.p25) == "$4.20"
+    assert format_alibaba_money(stats.p75) == "$62.07"
+    assert format_alibaba_typical_range(stats.p25, stats.p75) == "$4.20 – $62.07"
+    assert stats.outlier_count == 0
+    summary = gui_services.build_alibaba_summary(list(mapped))
+    assert summary["con_precio"] == "3 de 3"
+    assert summary["minimo"] == "$1.00"
+    assert summary["promedio"] == "$42.51"
+    assert summary["mediana"] == "$5.00"
+    assert summary["maximo"] == "$161.14"
+    assert summary["p25"] == "$4.20"
+    assert summary["p75"] == "$62.07"
+    assert summary["rango_tipico"] == "$4.20 – $62.07"
+    assert summary["outliers"] == "0"
+
+
+def test_gui_and_csv_receive_explicit_us_dollar_as_usd() -> None:
+    product = map_alibaba_item({"title": "R-SIM", "price": "US $3.20-$3.60"})
+    assert product is not None
+    payload = gui_services.run_alibaba_search(
+        "Iphone 15",
+        10,
+        search_service=SearchAlibabaProducts(FakeAlibabaProvider([product])),
+    )
+    row = payload["results"][0]
+    assert row["currency"] == "USD"
+    assert row["price"] == "$3.20–$3.60"
+    assert MISSING_CURRENCY_DISPLAY not in row["price"]
+    exported = search_export.listing_rows_for_export(
+        search_query="Iphone 15",
+        searched_at="2026-08-29 03:00",
+        search_mode="Una plataforma",
+        requested_limit=1,
+        alibaba_status="SUCCESS",
+        alibaba_rows=[
+            AlibabaResultRow(
+                title=row["title"],
+                price=row["price"],
+                product_id=row["product_id"],
+                currency=row["currency"],
+                price_min=row["price_min"],
+                price_max=row["price_max"],
+            )
+        ],
+        facebook_status="EMPTY",
+        ml_status="EMPTY",
+    )
+    assert exported[0]["currency"] == "USD"
+    assert exported[0]["price_display"] == "$3.20–$3.60"
 
 
 def test_mapper_keeps_missing_optional_identity_fields() -> None:
