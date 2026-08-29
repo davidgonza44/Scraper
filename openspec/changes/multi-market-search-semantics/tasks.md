@@ -23,6 +23,14 @@
 - [x] B.6 Render truthful provider-owned image, title, price/currency, URL, seller/supplier, genuine rating/reviews, reputation/service metadata, Alibaba MOQ, Mercado Libre condition, and other available fields; blank missing optional fields and fabricate nothing.
 - [x] B.7 Add offline tests for provider-result order, deterministic partition aggregation, immutability under Alibaba/UI rankings, exact association IDs versus native listing IDs, available cell fields, missing optional fields, and no fabricated Facebook seller/rating.
 
+## Maintenance PR after B — memo23 currency marker contract correction
+
+This is a narrow provider-contract maintenance correction after Implementation PR B and before PRs C–E. It is not an early implementation of E.1.
+
+- [x] M.1 Specify that for the configured Alibaba SEARCH Actor `memo23/alibaba-scraper`, the raw `price` marker `US $` / `US$` is authorized explicit USD evidence and is normalized internally to ISO `USD`.
+- [x] M.2 Implement that actor- and field-specific normalization at the memo23 SEARCH provider mapping boundary without weakening statistics, FX, `priceMin`, `quantityPrices`, or other-Actor rules.
+- [x] M.3 Add offline regressions for the observed memo23 `US $` ranges, plus bare `$` and bare `US` remaining unknown.
+
 ## Implementation PR C — Provider instrumentation and compact diagnostics
 
 - [ ] C.1 Instrument Alibaba's truthfully observable fetched/mapped/usable boundaries and distinguish fetched-zero, mapping loss, actual failure, and missing configuration.
@@ -43,7 +51,7 @@
 
 ## Implementation PR E — Currency, export, lifecycle, and browser compatibility gate
 
-- [ ] E.1 Remove Alibaba unknown-currency-as-USD fallbacks, retain visible published prices when allowed, and explain unconfirmed currency/unavailable USD statistics. Regression-test no implicit FX and `$` not proving USD.
+- [ ] E.1 Remove remaining Alibaba unknown-currency-as-USD fallbacks, retain visible published prices when allowed, and explain unconfirmed currency/unavailable USD statistics. Regression-test no implicit FX, that `$` and bare `US` do not prove USD, and that all other unconfirmed Alibaba currency stays out of USD statistics. Preserve the authorized memo23 SEARCH raw `price` marker `US $` / `US$` → internal ISO `USD` contract from the post-B maintenance correction; E.1 MUST NOT remove that provider-specific authorization.
 - [ ] E.2 Require stable query/scope/generation/display/budget/requested-work and provider metric columns on every CSV row; preserve blank/not-applicable values and wait for all providers to become terminal.
 - [ ] E.3 Preserve and regression-test CSV formula-injection protection and UTF-8 BOM.
 - [ ] E.4 Ensure **Nueva búsqueda** clears transient state; reject stale routing, translation, and provider continuations before they mutate provenance, launch downstream work, or change export membership.
