@@ -57,26 +57,53 @@ if [[ ! -x "${NPM_BIN}" ]]; then
     log "ERROR: npm not found next to Node at ${NPM_BIN}"
     exit 1
 fi
+# npm's shebang is `#!/usr/bin/env node`. Without nvm first on PATH it
+# picks /exec-daemon/node (v22.14.0) and skips GitNexus native scripts.
+export PATH="$(dirname "${NODE_BIN}"):${PATH}"
+hash -r
 log "using Node ${NODE_BIN} ($("${NODE_BIN}" --version))"
 log "using npm ${NPM_BIN} ($("${NPM_BIN}" --version))"
+log "PATH node is $(command -v node) ($(node --version))"
 
 mkdir -p "${NPM_GLOBAL}/bin" "${NPM_GLOBAL}/lib"
 log "installing gitnexus@${GITNEXUS_VERSION} under ${NPM_GLOBAL}"
-"${NPM_BIN}" install -g --prefix "${NPM_GLOBAL}" "gitnexus@${GITNEXUS_VERSION}"
+# Replace any previous bin symlink/launcher first so a later write cannot
+# follow npm's bin -> dist/cli/index.js link and overwrite the CLI.
+rm -f "${USER_LAUNCHER}"
+"${NPM_BIN}" uninstall -g --prefix "${NPM_GLOBAL}" gitnexus >/dev/null 2>&1 || true
+"${NPM_BIN}" install -g --prefix "${NPM_GLOBAL}" --dangerously-allow-all-scripts \
+    "gitnexus@${GITNEXUS_VERSION}"
 
 if [[ ! -f "${CLI_JS}" ]]; then
     log "ERROR: GitNexus CLI missing at ${CLI_JS}"
     exit 1
 fi
+if grep -q 'set -euo pipefail' "${CLI_JS}"; then
+    log "ERROR: CLI entrypoint looks like a shell launcher, not JavaScript: ${CLI_JS}"
+    exit 1
+fi
 log "CLI entrypoint: ${CLI_JS}"
 
 log "writing stable launcher ${USER_LAUNCHER}"
-cat > "${USER_LAUNCHER}" <<EOF
+# npm install -g recreates bin/gitnexus as a symlink to the JS CLI. Remove
+# that symlink without following it, then write a regular file.
+LAUNCHER_TMP="$(mktemp)"
+cat > "${LAUNCHER_TMP}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 exec $(printf '%q' "${NODE_BIN}") $(printf '%q' "${CLI_JS}") "\$@"
 EOF
-chmod 0755 "${USER_LAUNCHER}"
+chmod 0755 "${LAUNCHER_TMP}"
+rm -f "${USER_LAUNCHER}"
+mv "${LAUNCHER_TMP}" "${USER_LAUNCHER}"
+if [[ -L "${USER_LAUNCHER}" ]]; then
+    log "ERROR: ${USER_LAUNCHER} is still a symlink; refusing to follow it"
+    exit 1
+fi
+if grep -q 'set -euo pipefail' "${CLI_JS}"; then
+    log "ERROR: writing the launcher overwrote ${CLI_JS}"
+    exit 1
+fi
 
 log "exposing launcher at ${SYSTEM_LAUNCHER}"
 sudo install -m 0755 "${USER_LAUNCHER}" "${SYSTEM_LAUNCHER}"

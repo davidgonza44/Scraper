@@ -46,6 +46,12 @@ fi
 
 nvm use "${NODE_VERSION}"
 NODE_BIN="$(nvm which "${NODE_VERSION}")"
+if [[ -z "${NODE_BIN}" || ! -x "${NODE_BIN}" ]]; then
+    log "ERROR: nvm did not provide a Node binary for ${NODE_VERSION}"
+    exit 1
+fi
+export PATH="$(dirname "${NODE_BIN}"):${PATH}"
+hash -r
 log "using Node ${NODE_BIN} ($("${NODE_BIN}" --version))"
 
 if [[ ! -x "${SYSTEM_LAUNCHER}" ]]; then
