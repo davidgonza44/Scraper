@@ -282,7 +282,7 @@ Reason codes SHALL be exactly this closed set:
 - `VALIDATOR_UNAVAILABLE`
 - `INVALID_PROVIDER_RESPONSE`
 
-No numeric confidence SHALL be invented, stored, or rendered as a validation score. `MATCHES_INTENT` is the only RELEVANT reason. `WRONG_*`, `ACCESSORY_OR_COMPONENT`, and `CONFLICTING_EVIDENCE` may justify IRRELEVANT only with explicit contradiction. `INSUFFICIENT_EVIDENCE`, `VALIDATOR_UNAVAILABLE`, and `INVALID_PROVIDER_RESPONSE` SHALL produce REVIEW, never IRRELEVANT.
+No numeric confidence SHALL be invented, stored, or rendered as a validation score. `MATCHES_INTENT` is the only RELEVANT reason. `WRONG_*`, `ACCESSORY_OR_COMPONENT`, and `CONFLICTING_EVIDENCE` may justify IRRELEVANT only with explicit contradiction. `INSUFFICIENT_EVIDENCE` is a model-emitted REVIEW reason. `VALIDATOR_UNAVAILABLE` and `INVALID_PROVIDER_RESPONSE` SHALL be adapter-synthesized REVIEW reasons only and SHALL never be accepted as model output. Those three codes SHALL produce REVIEW, never IRRELEVANT.
 
 #### Scenario: Explicit wrong product type is IRRELEVANT
 - **GIVEN** the user query names a complete impact driver
@@ -304,7 +304,7 @@ No numeric confidence SHALL be invented, stored, or rendered as a validation sco
 - **AND** the semantic adapter is unavailable
 - **WHEN** the batch is finalized
 - **THEN** every candidate in that batch is REVIEW
-- **AND** the reason is `VALIDATOR_UNAVAILABLE`
+- **AND** the adapter synthesizes `VALIDATOR_UNAVAILABLE`
 - **AND** none is IRRELEVANT solely because the validator failed
 
 ### Requirement: Validator input uses deterministic sanitization and concrete limits
@@ -345,7 +345,9 @@ The following constants SHALL be the enforceable limits:
 | `ZEN_SEMANTIC_MAX_BATCH_CANDIDATES` | 20 |
 | `ZEN_SEMANTIC_MAX_BATCH_CHARS` | 32768 |
 
-A batch SHALL contain at most `ZEN_SEMANTIC_MAX_BATCH_CANDIDATES` candidates. Because `acquisition_budget` and `max_items` are at most 20, a truthful mapped pool cannot exceed 20. A larger mapped count is a contract violation: the validator SHALL NOT be called and the known mapped count SHALL be finalized as `invalid_response`. If a normalized candidate object still exceeds `ZEN_SEMANTIC_MAX_CANDIDATE_CHARS`, trailing specification pairs SHALL be dropped until it fits; if it still exceeds the cap, `title` SHALL be truncated further to fit. If the serialized batch would exceed `ZEN_SEMANTIC_MAX_BATCH_CHARS`, the request SHALL NOT be sent and the known-size batch SHALL be treated as `invalid_response`.
+A batch SHALL contain at most `ZEN_SEMANTIC_MAX_BATCH_CANDIDATES` candidates. Because `acquisition_budget` and `max_items` are at most 20, a truthful mapped pool cannot exceed 20. A larger mapped count is a contract violation: the validator SHALL NOT be called and the known mapped count SHALL be finalized as `invalid_response`.
+
+Specification pairs SHALL keep provider-reported order after empty pairs are dropped. The first `ZEN_SEMANTIC_MAX_SPEC_PAIRS` remaining pairs SHALL be retained. Implementations SHALL NOT sort by key, hash iteration, or another arbitrary order. If a normalized candidate object still exceeds `ZEN_SEMANTIC_MAX_CANDIDATE_CHARS`, trailing retained pairs SHALL be dropped from the end until it fits; if it still exceeds the cap, `title` SHALL be truncated further to fit. If the serialized batch would exceed `ZEN_SEMANTIC_MAX_BATCH_CHARS`, the request SHALL NOT be sent and the known-size batch SHALL be treated as `invalid_response`.
 
 #### Scenario: Raw Zen payload is stripped
 - **GIVEN** a mapped Zen listing whose raw payload contains `descriptionHtml`, `chatToken`, `trackInfo`, `contactSupplier`, and URLs
@@ -367,8 +369,11 @@ A batch SHALL contain at most `ZEN_SEMANTIC_MAX_BATCH_CANDIDATES` candidates. Be
 
 #### Scenario: Specification set is capped
 - **GIVEN** a listing has 12 specification pairs after normalization
+- **AND** those pairs remain in provider-reported order
 - **WHEN** the validator request is built
-- **THEN** at most 8 pairs are emitted
+- **THEN** the first 8 pairs are emitted
+- **AND** pairs 9 through 12 are dropped
+- **AND** the retained pairs are not reordered by key
 - **AND** each key has at most 64 code points
 - **AND** each value has at most 128 code points
 
@@ -386,23 +391,27 @@ A batch SHALL contain at most `ZEN_SEMANTIC_MAX_BATCH_CANDIDATES` candidates. Be
 
 ### Requirement: Tool response accepts only candidate_ref, decision, and reason_code
 
-A valid tool-response item SHALL contain exactly these fields and no others:
+A valid model response SHALL contain exactly one tool call named `classify_alibaba_zen_candidates`. That call's arguments object SHALL contain exactly one key, `decisions`, whose value is an array of items. Each item SHALL contain exactly these fields and no others:
 
 - `candidate_ref` as a string
 - `decision` as one of `RELEVANT`, `IRRELEVANT`, `REVIEW`
-- `reason_code` as one closed reason-code string
+- `reason_code` as one closed model-emitted reason-code string
 
-A valid batch response SHALL return exactly one such item for each request `candidate_ref`. Extra fields, missing fields, duplicate refs, extra refs, incorrect types, or incompatible `decision`/`reason_code` pairs SHALL invalidate the whole batch. An invalid batch SHALL convert every candidate to REVIEW with `INVALID_PROVIDER_RESPONSE` and SHALL NOT be retried. Ordinary assistant content SHALL NOT control classification.
+Zero tool calls, two or more tool calls, a different tool name including H0019's `classify_bera_brake_pad_candidate`, extra top-level argument keys, a missing `decisions` array, or wrapping the items under another key SHALL invalidate the whole batch. Ordinary assistant content SHALL NOT control classification.
 
-Permitted pairs SHALL be exactly:
+A valid `decisions` array SHALL return exactly one item for each request `candidate_ref`. Extra fields, missing fields, duplicate refs, extra refs, incorrect types, or incompatible `decision`/`reason_code` pairs SHALL invalidate the whole batch. An invalid batch SHALL convert every candidate to REVIEW with adapter-synthesized `INVALID_PROVIDER_RESPONSE` and SHALL NOT be retried.
+
+Permitted model-emitted pairs SHALL be exactly:
 
 - `RELEVANT` with `MATCHES_INTENT` only
 - `IRRELEVANT` with `WRONG_PRODUCT_TYPE`, `WRONG_BRAND`, `WRONG_MODEL`, `WRONG_VARIANT_OR_SPEC`, `WRONG_FITMENT`, `ACCESSORY_OR_COMPONENT`, or `CONFLICTING_EVIDENCE`
-- `REVIEW` with `INSUFFICIENT_EVIDENCE`, `CONFLICTING_EVIDENCE`, `VALIDATOR_UNAVAILABLE`, or `INVALID_PROVIDER_RESPONSE`
+- `REVIEW` with `INSUFFICIENT_EVIDENCE` or `CONFLICTING_EVIDENCE` only
+
+`VALIDATOR_UNAVAILABLE` and `INVALID_PROVIDER_RESPONSE` SHALL be synthesized only by the adapter. A model-emitted item that uses either failure reason SHALL invalidate the whole batch. Transport/outage failure SHALL be finalized as `unavailable` with adapter-synthesized `VALIDATOR_UNAVAILABLE`. A structurally or semantically invalid response SHALL be finalized as `invalid_response` with adapter-synthesized `INVALID_PROVIDER_RESPONSE`.
 
 Any other pairing, including `RELEVANT` with `WRONG_PRODUCT_TYPE`, is an invalid batch.
 
-The adapter SHALL use a dedicated versioned prompt independent of H0019. The prompt SHALL label query, title, resolved category, `categoryPath`, and specification values as untrusted marketplace data and SHALL instruct the model to ignore embedded instructions in those fields. Seller-controlled text SHALL NOT be treated as system, tool, or orchestration instructions. A prompt-like instruction in one candidate SHALL NOT change another candidate's decision. Provenance SHALL record `model` and `prompt_version`. The HTTP client SHALL use a loopback base URL (`127.0.0.1` or `localhost`), `trust_env=False`, and `ZEN_SEMANTIC_HTTP_TIMEOUT_SECONDS = 60`. Logs SHALL NOT contain raw Zen payloads, validator request bodies, or raw model content.
+The adapter SHALL use a dedicated versioned prompt independent of H0019. The prompt SHALL label query, title, resolved category, `categoryPath`, and specification values as untrusted marketplace data and SHALL instruct the model to ignore embedded instructions in those fields. Seller-controlled text SHALL NOT be treated as system, tool, or orchestration instructions. A prompt-like instruction in one candidate SHALL NOT change another candidate's decision. Provenance SHALL record `model` and `prompt_version`. Z4 SHALL record the exact loopback `model` identifier and `prompt_version` that passed the quality gate. After Z5, Alibaba SEARCH SHALL use only that recorded pair. A different `BERA_TRACKER_OLLAMA_MODEL`, a floating/default model, or a different `prompt_version` SHALL refuse to run the production validator and SHALL NOT cut over. The HTTP client SHALL use a loopback base URL (`127.0.0.1` or `localhost`), `trust_env=False`, and `ZEN_SEMANTIC_HTTP_TIMEOUT_SECONDS = 60`. Logs SHALL NOT contain raw Zen payloads, validator request bodies, or raw model content.
 
 #### Scenario: Extra reference invalidates the batch
 - **GIVEN** the request contains refs `c1` and `c2`
@@ -415,35 +424,55 @@ The adapter SHALL use a dedicated versioned prompt independent of H0019. The pro
 #### Scenario: Extra field invalidates the batch
 - **GIVEN** a response item contains `candidate_ref`, `decision`, `reason_code`, and `confidence`
 - **WHEN** the adapter validates the response
-- **THEN** the whole batch is REVIEW with `INVALID_PROVIDER_RESPONSE`
+- **THEN** the whole batch is REVIEW with adapter-synthesized `INVALID_PROVIDER_RESPONSE`
 - **AND** no retry occurs
 
 #### Scenario: Missing field invalidates the batch
 - **GIVEN** a response item contains `candidate_ref` and `decision` but no `reason_code`
 - **WHEN** the adapter validates the response
-- **THEN** the whole batch is REVIEW with `INVALID_PROVIDER_RESPONSE`
+- **THEN** the whole batch is REVIEW with adapter-synthesized `INVALID_PROVIDER_RESPONSE`
 
 #### Scenario: Wrong type invalidates the batch
 - **GIVEN** a response item has `decision` as an object or `candidate_ref` as a number
 - **WHEN** the adapter validates the response
-- **THEN** the whole batch is REVIEW with `INVALID_PROVIDER_RESPONSE`
+- **THEN** the whole batch is REVIEW with adapter-synthesized `INVALID_PROVIDER_RESPONSE`
 
 #### Scenario: Duplicate reference invalidates the batch
 - **GIVEN** the request contains refs `c1` and `c2`
 - **AND** the response contains two decisions for `c1` and none for `c2`
 - **WHEN** the adapter validates the response
-- **THEN** the whole batch is REVIEW with `INVALID_PROVIDER_RESPONSE`
+- **THEN** the whole batch is REVIEW with adapter-synthesized `INVALID_PROVIDER_RESPONSE`
 
 #### Scenario: Incompatible decision and reason invalidates the batch
 - **GIVEN** a response item is `RELEVANT` with `WRONG_PRODUCT_TYPE`
 - **WHEN** the adapter validates the response
-- **THEN** the whole batch is REVIEW with `INVALID_PROVIDER_RESPONSE`
+- **THEN** the whole batch is REVIEW with adapter-synthesized `INVALID_PROVIDER_RESPONSE`
 - **AND** no candidate is published as canonical RELEVANT
+
+#### Scenario: Model-emitted failure reason invalidates the batch
+- **GIVEN** a structurally complete item is `REVIEW` with `VALIDATOR_UNAVAILABLE`
+- **WHEN** the adapter validates the response
+- **THEN** the whole batch is REVIEW with adapter-synthesized `INVALID_PROVIDER_RESPONSE`
+- **AND** `semantic_validation_status` is `invalid_response`
+- **AND** the batch is not treated as a completed EMPTY incidence
+
+#### Scenario: Wrong tool name invalidates the batch
+- **GIVEN** the model returns one tool call named `classify_bera_brake_pad_candidate`
+- **AND** the arguments contain a well-shaped `decisions` array
+- **WHEN** the adapter validates the response
+- **THEN** the whole batch is REVIEW with adapter-synthesized `INVALID_PROVIDER_RESPONSE`
+
+#### Scenario: Second tool call invalidates the batch
+- **GIVEN** the model returns two tool calls named `classify_alibaba_zen_candidates`
+- **WHEN** the adapter validates the response
+- **THEN** the whole batch is REVIEW with adapter-synthesized `INVALID_PROVIDER_RESPONSE`
+- **AND** the adapter does not merge or keep the first call
 
 #### Scenario: Valid 1:1 response is accepted
 - **GIVEN** the request contains refs `c1`, `c2`, and `c3`
-- **AND** the tool response contains exactly those three refs with only `candidate_ref`, `decision`, and `reason_code`
-- **AND** each pair is a permitted decision/reason combination
+- **AND** the model returns exactly one `classify_alibaba_zen_candidates` call
+- **AND** its arguments are `{ "decisions": [those three items] }`
+- **AND** each pair is a permitted model-emitted decision/reason combination
 - **WHEN** the adapter validates the response
 - **THEN** each candidate keeps its own decision
 - **AND** no additional candidate is introduced
@@ -466,7 +495,12 @@ The adapter SHALL use a dedicated versioned prompt independent of H0019. The pro
 
 ### Requirement: Canonical membership is RELEVANT-only and preserves Zen order
 
-RELEVANT candidates SHALL enter the ordered usable pool, canonical session prefix, statistics, ranking annotations, export, and positional comparison. IRRELEVANT candidates SHALL be excluded from those surfaces and SHALL retain their reason and semantic metric. REVIEW candidates SHALL be retained only in a separate **Requiere revisión** projection. REVIEW SHALL NOT enter statistics, ranking, export, or positional comparison. Accepted RELEVANT results SHALL preserve Zen acquisition order. The semantic decision SHALL NOT be used as a ranking score.
+RELEVANT candidates SHALL enter the ordered usable pool, canonical session prefix, statistics, ranking annotations, export, and positional comparison. After Z5, Alibaba SEARCH SHALL also persist two immutable generation-bound collections on `ProviderRunResult` and `SearchSessionSnapshot`:
+
+- `review_candidates`: REVIEW listings in Zen order, the only source for **Requiere revisión**
+- `excluded_candidates`: IRRELEVANT listings in Zen order, each retaining its reason
+
+Those collections SHALL be committed only when `result.generation == snapshot.intent.generation`. **Nueva búsqueda** and a newer generation SHALL clear them. GUI, diagnostics, and export SHALL NOT keep review or excluded rows in separate mutable state after a new search. IRRELEVANT candidates SHALL be excluded from canonical surfaces and SHALL retain their reason and semantic metric. REVIEW candidates SHALL NOT enter statistics, ranking, export, or positional comparison. Accepted RELEVANT results SHALL preserve Zen acquisition order. The semantic decision SHALL NOT be used as a ranking score. Non-Alibaba `ProviderRunResult` values SHALL use empty `review_candidates` and `excluded_candidates`.
 
 #### Scenario: Mixed decisions split canonical and review projections
 - **GIVEN** Zen order is A, B, C, D
@@ -474,9 +508,17 @@ RELEVANT candidates SHALL enter the ordered usable pool, canonical session prefi
 - **WHEN** the Alibaba result is committed
 - **THEN** the ordered usable pool is A, D
 - **AND** canonical session results are the `display_limit` prefix of A, D
+- **AND** `review_candidates` is exactly `[C]`
+- **AND** `excluded_candidates` is exactly `[B]`
 - **AND** C appears only under **Requiere revisión**
 - **AND** B is excluded with its IRRELEVANT reason
 - **AND** B and C are absent from export and positional comparison
+
+#### Scenario: Nueva búsqueda clears review and excluded collections
+- **GIVEN** the current snapshot holds Alibaba `review_candidates` from generation `N`
+- **WHEN** **Nueva búsqueda** starts generation `N+1`
+- **THEN** those review and excluded rows are cleared
+- **AND** a late generation-`N` result cannot repopulate them
 
 #### Scenario: Semantic decision does not reorder RELEVANT results
 - **GIVEN** two RELEVANT listings where the later Zen result looks like a closer match
@@ -573,7 +615,7 @@ Localized USD mapping SHALL be deterministic:
 
 1. Parse each `detail.price.productLadderPrices[*].dollarPrice` as a `Decimal`. Reject booleans, non-finite values, and values `<= 0`.
 2. If at least one valid ladder value exists, `min_price` is the minimum of those values and `max_price` is the maximum. A single valid value fills both fields. Do not select the first tier, last tier, or an MOQ tier.
-3. Independently parse `detail.price.productRangePrices.dollarPriceRangeLow` and `dollarPriceRangeHigh` with the same Decimal rules. If only one of the two range fields is valid, range evidence is insufficient.
+3. Independently parse `detail.price.productRangePrices.dollarPriceRangeLow` and `dollarPriceRangeHigh` with the same Decimal rules. If only one of the two range fields is valid, range evidence is insufficient. If both are valid and `range_low > range_high`, the range is inverted and SHALL be treated as conflicting evidence: `localized_currency` stays unknown and the price SHALL NOT enter USD statistics.
 4. If both ladder extrema and a complete range exist, they are compatible only when `quantize_money(ladder_min) == quantize_money(range_low)` and `quantize_money(ladder_max) == quantize_money(range_high)`. Any disagreement is conflicting evidence: `localized_currency` stays unknown and the price SHALL NOT enter USD statistics.
 5. If no valid ladder values exist and a complete compatible range exists, use that range as `min_price` / `max_price`.
 6. `product.price` is display/fallback only and SHALL NOT enter USD statistics.
@@ -598,6 +640,15 @@ Z1 SHALL confirm those structured paths against sanitized fixtures. If a named p
 - **AND** `dollarPriceRangeLow` / `dollarPriceRangeHigh` are `2.00` and `4.00`
 - **WHEN** the listing is mapped
 - **THEN** `localized_currency` remains unknown
+- **AND** the listing does not enter USD aggregates
+
+#### Scenario: Inverted structured range stays unknown
+- **GIVEN** no valid ladder dollarPrice values exist
+- **AND** `dollarPriceRangeLow` is `4.00`
+- **AND** `dollarPriceRangeHigh` is `2.00`
+- **WHEN** the listing is mapped
+- **THEN** `localized_currency` remains unknown
+- **AND** those inverted values are not assigned to `min_price` / `max_price`
 - **AND** the listing does not enter USD aggregates
 
 #### Scenario: Display price alone does not prove USD
@@ -643,7 +694,7 @@ Future offline fixtures SHALL start from these existing benchmark names when the
 - `zen-benchmark-04-lifepo4-battery.json.json`
 - `zen-benchmark-05-impact-driver.json.json`
 
-Those files are not in this repository at Z0. Their contents SHALL NOT be fabricated. Z1 SHALL incorporate sanitized structural fixtures after tokens, HTML, contacts, and tracking are removed, without semantic labels. Z4 SHALL add independent human-reviewed golden labels and SHALL run the complete offline quality gate against those five datasets with zero live Apify, Ollama, DeepL, MiniMax, or marketplace calls. Golden labels SHALL NOT be generated by the same model being evaluated. Z5 MAY start only after every Z4 acceptance criterion passed. The production SEARCH Actor SHALL remain `memo23/alibaba-scraper` until that cutover.
+Those files are not in this repository at Z0. Their contents SHALL NOT be fabricated. Z1 SHALL incorporate sanitized structural fixtures after tokens, HTML, contacts, and tracking are removed, without semantic labels. Z4 SHALL add independent human-reviewed golden labels and SHALL measure the same loopback validator adapter and pinned prompt against those five datasets. That Z4 gate MAY call the pinned loopback model endpoint. It SHALL NOT call Apify, a marketplace, DeepL, MiniMax, or a non-loopback Ollama host, and it SHALL NOT substitute fakes or prerecorded decisions for the labeled benchmark. Automated unit/integration/Playwright suites remain fake/offline. Golden labels SHALL NOT be generated by the same model being evaluated. Z4 SHALL record the exact `model` identifier and `prompt_version` that passed. Z5 MAY start only after every Z4 acceptance criterion passed and SHALL refuse cutover if the configured model or `prompt_version` differs from that pin. The production SEARCH Actor SHALL remain `memo23/alibaba-scraper` until that cutover.
 
 Z4 minimum acceptance criteria SHALL be:
 
@@ -655,11 +706,14 @@ Z4 minimum acceptance criteria SHALL be:
 - a successfully constructed batch of 1..20 produces exactly one call
 - no validator retry and no second Zen run
 - ALL-REVIEW uses `Búsqueda completada con incidencias`
-- every human-labeled fixture is compared to the disconnected validator decision and per-class counts are recorded
+- every human-labeled fixture is compared to the loopback validator decision and per-class counts are recorded
 - Z4 fails if any human-RELEVANT fixture is classified IRRELEVANT
 - Z4 fails if any of the five datasets has at least one human RELEVANT label and the validator produces zero RELEVANT on that dataset
+- Z4 fails if any human-IRRELEVANT fixture is classified RELEVANT
+- Z4 fails if any of the five datasets has at least one human IRRELEVANT label and the validator produces zero IRRELEVANT on that dataset
 - no numeric precision/recall SLA is invented
 - production Actor remains memo23 throughout Z4
+- the passing `model` and `prompt_version` are recorded as the only authorized Z5 pair
 
 #### Scenario: Missing benchmarks block fixture authorship, not cutover authorship
 - **GIVEN** the five named benchmark files are unavailable
@@ -670,8 +724,16 @@ Z4 minimum acceptance criteria SHALL be:
 - **AND** Z5 remains blocked on a fully passing Z4
 
 #### Scenario: Automated tests stay offline
-- **WHEN** future Z1–Z5 automated suites run
+- **WHEN** future Z1–Z5 automated unit, integration, and Playwright suites run
 - **THEN** Apify, Ollama, DeepL, MiniMax, and marketplace network call counts are all zero
+- **AND** those suites use fakes rather than the Z4 quality-gate model
+
+#### Scenario: Z4 quality gate exercises the real loopback validator
+- **GIVEN** the five labeled datasets exist
+- **WHEN** Z4 runs the semantic quality gate
+- **THEN** the same loopback validator adapter and pinned prompt are called
+- **AND** decisions are not replaced by fakes or prerecorded labels
+- **AND** Apify, marketplace, DeepL, MiniMax, and non-loopback Ollama calls remain zero
 
 #### Scenario: Quality gate precedes production cutover
 - **GIVEN** Z4 has not passed every acceptance criterion
@@ -681,14 +743,35 @@ Z4 minimum acceptance criteria SHALL be:
 
 #### Scenario: All-REVIEW validator cannot pass the labeled gate
 - **GIVEN** a named benchmark dataset has at least one human RELEVANT label
-- **AND** the disconnected validator marks every fixture REVIEW
+- **AND** the loopback validator marks every fixture REVIEW
+- **WHEN** Z4 evaluates acceptance
+- **THEN** Z4 fails
+- **AND** Z5 MUST NOT start
+
+#### Scenario: All-RELEVANT validator cannot pass the labeled gate
+- **GIVEN** a named benchmark dataset has at least one human IRRELEVANT label
+- **AND** the loopback validator marks every fixture RELEVANT
 - **WHEN** Z4 evaluates acceptance
 - **THEN** Z4 fails
 - **AND** Z5 MUST NOT start
 
 #### Scenario: False exclusion of a human-RELEVANT fixture fails the gate
 - **GIVEN** a human-reviewed fixture is labeled RELEVANT
-- **AND** the disconnected validator decides IRRELEVANT
+- **AND** the loopback validator decides IRRELEVANT
 - **WHEN** Z4 evaluates acceptance
 - **THEN** Z4 fails
 - **AND** Z5 MUST NOT start
+
+#### Scenario: False inclusion of a human-IRRELEVANT fixture fails the gate
+- **GIVEN** a human-reviewed fixture is labeled IRRELEVANT
+- **AND** the loopback validator decides RELEVANT
+- **WHEN** Z4 evaluates acceptance
+- **THEN** Z4 fails
+- **AND** Z5 MUST NOT start
+
+#### Scenario: Z5 rejects a model or prompt that did not pass Z4
+- **GIVEN** Z4 recorded `model = llama-gate:tag` and `prompt_version = zen-semantic-v1`
+- **AND** production `BERA_TRACKER_OLLAMA_MODEL` is a different identifier
+- **WHEN** Z5 would switch the SEARCH Actor or start production validation
+- **THEN** that switch and validation are refused
+- **AND** production SEARCH remains `memo23/alibaba-scraper`

@@ -38,7 +38,7 @@ This is a narrow provider-contract maintenance correction after Implementation P
 - [ ] C.3 Add Mercado Libre safe mapper counters for missing ID/title, missing Venezuela evidence, explicit foreign evidence, and successful mapping where observable without weakening MLV provenance.
 - [ ] C.4 Add aggregate-only schema-drift observability and verify raw payloads, actor JSON, credentials, cookies, tokens, stack traces, and sensitive parameters are neither persisted nor rendered.
 - [ ] C.5 Implement compact **Ver detalles** with actual-request metrics, **No disponible** for unknowns, sanitized provider-not-configured copy, and mapping-loss copy distinct from zero fetched records.
-- [ ] C.6 Add offline tests for Facebook mixed rejection pool, later valid MLV record, Alibaba fetched zero, fetched-positive/mapped-zero, sanitized configuration error, and relevant EMPTY/ERROR details.
+- [ ] C.6 Add offline tests for Facebook mixed rejection pool, later valid MLV record, sanitized configuration error, and relevant EMPTY/ERROR details. Alibaba `fetched = 0` and `fetched > 0 && mapped = 0` proofs belong to Z5.8 after SEARCH instrumentation exists.
 
 ## Implementation PR D — Query routing and configurable Venezuela scope
 
@@ -76,6 +76,7 @@ Z0 is this revision. Do not implement production code, change `.env` / `.env.exa
 - [x] Z0.10 Specify zero real validator calls when `mapped == 0` or local construction fails, exactly one batch after a constructed 1..20 request, and no empty-batch no-op call.
 - [x] Z0.11 Reorder the Z-track so Z1 incorporates sanitized structural fixtures without labels, Z4 is the offline quality gate, and Z5 is the only production cutover.
 - [x] Z0.12 Reconcile validator call-count with local batch construction, permitted decision/reason pairs, `not_run` for mapped-zero, untrusted marketplace fields, deterministic ladder extrema, whitespace-preserving sanitization, and label-based Z4 fail conditions without a numeric SLA.
+- [x] Z0.13 Reconcile Z4 loopback-validator measurement, Z4/Z5 model-and-prompt pin, adapter-only failure reasons, closed tool envelope, deterministic spec-pair order, generation-bound review/excluded collections, inverted range rejection, all-RELEVANT gate failure, and move Alibaba fetched/mapped-zero proofs from C.6 to Z5.
 
 ## Implementation PR Z1 — Disconnected Zen input/mapper and structural fixtures
 
@@ -86,7 +87,7 @@ Z1 MUST NOT change the production SEARCH Actor, `.env` defaults, or GUI path. Pr
 - [ ] Z1.3 Incorporate sanitized structural versions of the five named benchmark files after tokens, HTML, contacts, and tracking are removed. Do not add semantic labels and do not fabricate missing files.
 - [ ] Z1.4 Add a disconnected Zen mapper from those structural fixtures to the safe Alibaba model, including `localized_currency`, `source_currency`, `price_provenance`, and `ship_to_country`. Do not reuse the memo23 `US $` SEARCH exception.
 - [ ] Z1.5 Prove `soldOrder=null` stays unknown, product ratings stay distinct from supplier `serviceScore`, and raw HTML/tokens/contacts/tracking are not retained.
-- [ ] Z1.6 Add offline tests for omitted category, exact-safe category, one-keyword array, no second execution, deterministic ladder min/max, conflicting ladder/range remaining unknown, and display/fallback price that cannot enter USD statistics.
+- [ ] Z1.6 Add offline tests for omitted category, exact-safe category, one-keyword array, no second execution, deterministic ladder min/max, conflicting ladder/range remaining unknown, inverted `dollarPriceRangeLow > dollarPriceRangeHigh` remaining unknown, and display/fallback price that cannot enter USD statistics.
 - [ ] Z1.7 Keep `xtracto/alibaba-product-scraper` as the refresh Actor.
 
 ## Implementation PR Z2 — Semantic-validation port and batch adapter
@@ -95,10 +96,10 @@ Z2 MUST remain disconnected from production SEARCH and MUST NOT reuse the H0019 
 
 - [ ] Z2.1 Add an independent port/adapter with decisions `RELEVANT`, `IRRELEVANT`, and `REVIEW` and the closed reason-code set. Do not invent numeric confidence.
 - [ ] Z2.2 Restrict model input to the documented sanitized-and-bounded fields and ephemeral `candidate_ref`. Enforce the concrete query/title/categoryPath/spec/candidate/batch limits.
-- [ ] Z2.3 Accept tool-response objects with exactly `candidate_ref`, `decision`, and `reason_code`. Extra, missing, duplicate, extra-ref, mistyped, or incompatible decision/reason pairs invalidate the whole batch to REVIEW with `INVALID_PROVIDER_RESPONSE` and no retry.
+- [ ] Z2.3 Accept exactly one tool call named `classify_alibaba_zen_candidates` whose arguments object is `{ "decisions": [items] }`. Each item has exactly `candidate_ref`, `decision`, and `reason_code`. Model REVIEW reasons are only `INSUFFICIENT_EVIDENCE` or `CONFLICTING_EVIDENCE`. Extra, missing, duplicate, extra-ref, mistyped, extra tool call, wrong tool name, or incompatible pairs invalidate the whole batch. The adapter synthesizes `VALIDATOR_UNAVAILABLE` and `INVALID_PROVIDER_RESPONSE`.
 - [ ] Z2.4 Map validator outage against a known-size batch to REVIEW/`VALIDATOR_UNAVAILABLE`, `semantic_relevant = 0`, `semantic_irrelevant = 0`, `semantic_review = batch_size`, and never to IRRELEVANT.
 - [ ] Z2.5 Record dedicated `model` and `prompt_version` provenance, ignore ordinary assistant content, use a loopback base URL, `trust_env=False`, and `ZEN_SEMANTIC_HTTP_TIMEOUT_SECONDS = 60`.
-- [ ] Z2.6 Add offline fakes proving H0019 / `AIProductClassifier` is not called, title-token relevance cannot reject, untrusted seller text cannot flip sibling decisions, and incompatible decision/reason pairs invalidate the batch.
+- [ ] Z2.6 Add offline fakes proving H0019 / `AIProductClassifier` is not called, title-token relevance cannot reject, untrusted seller text cannot flip sibling decisions, incompatible pairs invalidate the batch, model-emitted `VALIDATOR_UNAVAILABLE`/`INVALID_PROVIDER_RESPONSE` invalidate the batch, and a wrong tool name or second tool call invalidates the batch.
 
 ## Implementation PR Z3 — Category resolver and disconnected orchestration
 
@@ -108,7 +109,7 @@ Z3 stays disconnected from production. It composes Z1 input and Z2 validation in
 - [ ] Z3.2 Send `category` only on one unambiguous snapshot member; omit on unknown, ambiguous, or out-of-snapshot matches. Record `category`, `category_origin`, and `taxonomy_version`. Do not rewrite `keywords`.
 - [ ] Z3.3 Compute `acquisition_budget = min(display_limit * 2, 20)` and `maximum_internal_acquisitions = 1` for Alibaba SEARCH.
 - [ ] Z3.4 Orchestrate exactly one Zen execution. Call the validator exactly once only after a local batch of 1..20 candidates is constructed within the size cap. Call it zero times when `mapped == 0` (`not_run`) or when local construction fails (`invalid_response`). Prove fetched-zero, mapped-zero, constructed-positive, oversized-mapped, and oversized-serialize cases. Prove no retry and no second Zen run.
-- [ ] Z3.5 Split RELEVANT into the usable pool, REVIEW into **Requiere revisión**, and IRRELEVANT into excluded-with-reason storage while preserving Zen order among RELEVANT results.
+- [ ] Z3.5 Split RELEVANT into `ordered_usable_pool`, REVIEW into immutable generation-bound `review_candidates`, and IRRELEVANT into immutable generation-bound `excluded_candidates`, preserving Zen order in each collection.
 - [ ] Z3.6 Derive EMPTY when the validator completed with zero RELEVANT; ERROR when a known-size batch is unavailable or invalid; SUCCESS with semantic incidence when RELEVANT and REVIEW coexist.
 - [ ] Z3.7 Keep `TrackerState` as orchestrator only; do not move budget, validator, or identity rules into it.
 
@@ -117,10 +118,10 @@ Z3 stays disconnected from production. It composes Z1 input and Z2 validation in
 Z4 MUST NOT change the production SEARCH Actor, `.env` defaults, or GUI path. It cannot start until Z1 structural fixtures exist. It adds independent human labels and MUST pass completely before Z5 may start.
 
 - [ ] Z4.1 Add independent human-reviewed golden semantic labels for the five named datasets. Do not generate labels with the model under evaluation.
-- [ ] Z4.2 Benchmark the disconnected validator against those five labeled datasets with zero live Apify, Ollama, DeepL, MiniMax, or marketplace calls.
-- [ ] Z4.3 Run the complete offline format, lint, type-check, unit/integration, and applicable Playwright suites.
-- [ ] Z4.4 Record Apify, Ollama, DeepL, MiniMax, and marketplace live calls as zero.
-- [ ] Z4.5 Confirm the minimum acceptance criteria: identity-less listings remain distinct; unknowns stay null; `display_limit` remains separate from `acquisition_budget`; no cross-market identity; mapped-zero is `not_run` with zero validator calls; a constructed 1..20 batch makes exactly one call; no retry; no second Zen run; ALL-REVIEW is incidencias; every human label is compared to the validator; Z4 fails on any human-RELEVANT→IRRELEVANT or on any labeled dataset with human RELEVANT and zero validator RELEVANT; production Actor remains `memo23/alibaba-scraper`. No numeric accuracy SLA is invented.
+- [ ] Z4.2 Benchmark the same loopback validator adapter and pinned prompt against those five labeled datasets. Permit that pinned loopback model call. Keep Apify, marketplace, DeepL, MiniMax, and non-loopback Ollama at zero. Do not substitute fakes or prerecorded decisions for this gate.
+- [ ] Z4.3 Run the complete offline format, lint, type-check, unit/integration, and applicable Playwright suites. Those automated suites stay fake/offline and make zero live model calls.
+- [ ] Z4.4 Record Apify, marketplace, DeepL, MiniMax, and non-loopback Ollama as zero. Record the exact loopback `model` identifier and `prompt_version` that passed Z4 as the cutover pin.
+- [ ] Z4.5 Confirm the minimum acceptance criteria: identity-less listings remain distinct; unknowns stay null; `display_limit` remains separate from `acquisition_budget`; no cross-market identity; mapped-zero is `not_run` with zero validator calls; a constructed 1..20 batch makes exactly one call; no retry; no second Zen run; ALL-REVIEW is incidencias; every human label is compared to the validator; Z4 fails on any human-RELEVANT→IRRELEVANT, any human-IRRELEVANT→RELEVANT, any labeled dataset with human RELEVANT and zero validator RELEVANT, or any labeled dataset with human IRRELEVANT and zero validator IRRELEVANT; production Actor remains `memo23/alibaba-scraper`. No numeric accuracy SLA is invented.
 - [ ] Z4.6 Treat any unmet Z4 criterion as a hard stop. Z5 SHALL NOT start.
 
 ## Implementation PR Z5 — Atomic production cutover, GUI, diagnostics, and export
@@ -128,9 +129,11 @@ Z4 MUST NOT change the production SEARCH Actor, `.env` defaults, or GUI path. It
 Z5 is the only PR that switches production Alibaba SEARCH. It MAY start only after every Z4 item passed. It MUST NOT run both SEARCH Actors.
 
 - [ ] Z5.1 Switch the production SEARCH Actor and pinned build to Zen. Reject leftover memo23 SEARCH overrides. Leave refresh on xtracto.
-- [ ] Z5.2 Wire GUI generic Búsquedas, diagnostics, session-label precedence, and the **Requiere revisión** projection to the Z3 result contract.
+- [ ] Z5.2 Wire GUI generic Búsquedas, diagnostics, session-label precedence, and **Requiere revisión** to the generation-bound `review_candidates` / `excluded_candidates` collections. Clear those collections with **Nueva búsqueda** and reject stale-generation rows.
 - [ ] Z5.3 Export only RELEVANT canonical listings and include semantic metric columns without reusing `coverage_status`.
 - [ ] Z5.4 Apply the Zen currency contract in production SEARCH statistics. Do not reuse memo23 `US $`.
 - [ ] Z5.5 Sanitize provider errors and persist no raw Zen payload, tokens, HTML, contacts, or tracking.
 - [ ] Z5.6 Prove positional comparison uses only RELEVANT Alibaba cells and that Alibaba decisions cannot mutate Facebook or Mercado Libre lists.
 - [ ] Z5.7 Update AGENTS.md and, at cutover, add the Zen SEARCH/validator flow to architecture diagrams and `docs/architecture/README.md` as then-current architecture. Z0 MUST NOT edit those diagrams.
+- [ ] Z5.8 Prove Alibaba `fetched = 0` and `fetched > 0 && mapped = 0` with the Z5 SEARCH instrumentation. These cases are not C-stage work.
+- [ ] Z5.9 Refuse production semantic validation and the Actor switch unless the configured model identifier and `prompt_version` equal the pair recorded by the passing Z4 gate. A floating `BERA_TRACKER_OLLAMA_MODEL` mismatch is a hard stop.

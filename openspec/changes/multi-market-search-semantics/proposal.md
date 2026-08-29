@@ -29,7 +29,7 @@ This change defines one coherent, bounded, observable search-session contract fo
 - `provider-search-diagnostics`: compact safe diagnostics, provider rejection counters, schema-drift signals, session status copy, and unknown-currency explanations.
 - `marketplace-query-routing`: original/provider query provenance, shared Venezuela query generation, fallback behavior, and configurable deterministic Venezuela scope.
 - `search-session-export-safety`: current-session CSV semantics, query/metric provenance, stale-response clearing, and preserved export safety.
-- `alibaba-zen-semantic-validation`: pinned Zen SEARCH Actor input, one execution, validator called only after a constructed 1..20 batch, deterministic category resolver, concrete validator limits, RELEVANT/REVIEW/IRRELEVANT split, closed reason codes, Zen currency provenance, and sanitized offline fixtures.
+- `alibaba-zen-semantic-validation`: pinned Zen SEARCH Actor input, one execution, validator called only after a constructed 1..20 batch, deterministic category resolver, concrete validator limits, closed `classify_alibaba_zen_candidates` envelope, RELEVANT/REVIEW/IRRELEVANT split with generation-bound collections, closed reason codes, Zen currency provenance, Z4 loopback quality gate, and sanitized offline fixtures.
 
 ### Modified capabilities
 
@@ -58,6 +58,7 @@ Implementation MUST remain compatible with current marketplace provider adapters
 - Provider executions during implementation and automated tests: zero.
 - DeepL calls during automated tests and implementation: zero.
 - MiniMax calls: zero.
+- Z4 quality-gate exception: the same pinned loopback validator may be called against the five labeled datasets. Apify, marketplace, DeepL, MiniMax, and non-loopback Ollama remain zero. Automated unit/integration/Playwright suites do not use this exception.
 - Live smoke calls are prohibited unless explicitly authorized after the implementation PR exists.
 
 ## Non-goals
