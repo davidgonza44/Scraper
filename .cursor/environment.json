@@ -1,6 +1,7 @@
 {
   "name": "BERA Price Tracker",
-  "install": "bash .cursor/install.sh",
+  "install": "bash .cursor/install.sh && bash .cursor/install-gitnexus.sh",
+  "start": "bash .cursor/start-gitnexus.sh",
   "terminals": [
     {
       "name": "reflex",
