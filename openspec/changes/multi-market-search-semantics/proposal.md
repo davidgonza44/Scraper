@@ -29,7 +29,7 @@ This change defines one coherent, bounded, observable search-session contract fo
 - `provider-search-diagnostics`: compact safe diagnostics, provider rejection counters, schema-drift signals, session status copy, and unknown-currency explanations.
 - `marketplace-query-routing`: original/provider query provenance, shared Venezuela query generation, fallback behavior, and configurable deterministic Venezuela scope.
 - `search-session-export-safety`: current-session CSV semantics, query/metric provenance, stale-response clearing, and preserved export safety.
-- `alibaba-zen-semantic-validation`: pinned Zen SEARCH Actor input, one execution, validator called only after a constructed 1..20 batch, deterministic category resolver, concrete validator limits, closed `classify_alibaba_zen_candidates` envelope, RELEVANT/REVIEW/IRRELEVANT split with generation-bound collections, closed reason codes, Zen currency provenance, Z4 loopback quality gate, and sanitized offline fixtures.
+- `alibaba-zen-semantic-validation`: pinned Zen SEARCH Actor input, one startable execution, validator called only after a constructed 1..20 batch, deterministic category resolver, concrete validator limits, closed `classify_alibaba_zen_candidates` envelope, RELEVANT/REVIEW/IRRELEVANT split with generation-bound collections, closed reason codes, Zen currency provenance, Z4 loopback quality gate, and sanitized fixtures.
 
 ### Modified capabilities
 
@@ -44,7 +44,7 @@ This change defines one coherent, bounded, observable search-session contract fo
 - **Generic Reflex UI:** rename the limit control, render truthful provider-owned listing fields in positional cells, use canonical counts/statuses, add compact diagnostics, and explain unknown Alibaba currency. Missing optional fields render blank/`—` and never trigger fabrication.
 - **Export:** require stable query/session/scope and defined provider-metric columns on every export row; unknown or non-applicable values remain blank/explicitly unavailable, never fabricated, and export waits for all selected providers to settle.
 - **Tests:** add offline unit/integration fixtures and 1440x900 Playwright coverage; no live provider or translation calls.
-- **Cost:** `AcquisitionBudgetPolicy` computes finite `acquisition_budget`; executed internal calls accumulate separate `acquisition_requested`. Larger limits/scopes can increase actual work, but all ceilings remain centralized/testable and Alibaba 500 is not a routine budget. After Z5 the proposed Alibaba SEARCH budget is `min(display_limit * 2, 20)` with one Zen execution.
+- **Cost:** `AcquisitionBudgetPolicy` computes finite `acquisition_budget`; executed internal calls accumulate separate `acquisition_requested`. Larger limits/scopes can increase actual work, but all ceilings remain centralized/testable and Alibaba 500 is not a routine budget. After Z5 the proposed Alibaba SEARCH budget is `min(display_limit * 2, 20)` with one startable Zen execution.
 
 ## Compatibility
 
@@ -54,11 +54,11 @@ Implementation MUST remain compatible with current marketplace provider adapters
 
 - Generic **Búsquedas** logical provider search operations: exactly one per selected provider per search generation when configured and startable.
 - Orchestrator-started second logical operations after rejection/mapping loss: zero. Bounded internal acquisitions within the original provider strategy are permitted and are not retries.
-- After Z5, Alibaba SEARCH internal acquisitions: exactly one Zen Actor execution. Semantic-validation batch calls are exactly one after a local 1..20 batch is constructed within the size cap, and zero when `mapped == 0` or local construction fails. Zero refill executions. Zero validator retries. Zero second Zen runs.
+- After Z5, Alibaba SEARCH internal acquisitions: exactly one Zen Actor execution when configuration and preflight are valid. Missing token/build/config or an invalid/oversized query is preflight `ERROR` with zero Zen executions and zero validator calls. No Actor condemned to fail is started. Semantic-validation batch calls are exactly one after a local 1..20 batch is constructed within `ZEN_SEMANTIC_MAX_BATCH_BYTES`, and zero when `mapped == 0` or local construction fails. Zero refill executions. Zero validator retries. Zero second Zen runs.
 - Provider executions during implementation and automated tests: zero.
 - DeepL calls during automated tests and implementation: zero.
-- MiniMax calls: zero.
-- Z4 quality-gate exception: the same pinned loopback validator may be called against the five labeled datasets. Apify, marketplace, DeepL, MiniMax, and non-loopback Ollama remain zero. Automated unit/integration/Playwright suites do not use this exception.
+- Automated unit/integration/Playwright suites: zero Apify, zero marketplaces, zero DeepL, zero Ollama/model inference, fakes only.
+- Controlled Z4 semantic benchmark: zero Apify, zero marketplaces, and zero DeepL. Exactly the inferences required against the evaluated `model` identifier and `prompt_version`, only through loopback Ollama, with model, prompt, and call count recorded. No other model. If the evaluated model is `minimax-m3:cloud` or another cloud-backed identifier, do not claim MiniMax calls were zero and do not describe the benchmark as completely offline.
 - Live smoke calls are prohibited unless explicitly authorized after the implementation PR exists.
 
 ## Non-goals

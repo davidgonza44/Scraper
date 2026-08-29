@@ -4,9 +4,9 @@
 
 ### Requirement: Alibaba SEARCH uses a pinned Zen Actor with a closed input contract
 
-After the Z5 production cutover, generic **Búsquedas** Alibaba SEARCH SHALL acquire candidates only through Actor `zen-studio/alibaba-scraper` (alias `zen-studio~alibaba-scraper`). The Apify client SHALL pin an exact validated Actor build recorded in this change. `latest`, `default`, and any other floating build pointer SHALL be rejected. Until that exact build is recovered from the five existing benchmark runs named in this change, the build remains unpinned and Z1 MUST NOT invent one.
+After the Z5 production cutover, generic **Búsquedas** Alibaba SEARCH SHALL acquire candidates only through Actor `zen-studio/alibaba-scraper` (alias `zen-studio~alibaba-scraper`). The Apify client SHALL pin an exact validated Actor build recorded in this change. `latest`, `default`, and any other floating build pointer SHALL be rejected. Until that exact build is recovered from the five existing benchmark runs named in this change, the build remains unpinned and Z1 MUST NOT invent one. Recovery SHALL collect `runId`, `buildId`, and `buildNumber` from all five runs. Those five runs SHALL share exactly the same `buildId` and `buildNumber`. That single shared build is the only allowed pin for the taxonomy snapshot, structural fixtures, Z4, and Z5. If any run differs, Z1 SHALL NOT choose a majority, last, or default build, SHALL NOT mix fixtures as validation of an arbitrary build, and SHALL block Z1, Z4, and Z5 until a new OpenSpec decision records authoritative benchmarks produced by one build.
 
-One logical Alibaba SEARCH operation SHALL produce exactly one Zen Actor execution. The run input SHALL be:
+When Alibaba is selected, configured, and startable, and the shared Alibaba provider query passes preflight, one logical Alibaba SEARCH operation SHALL produce exactly one Zen Actor execution. Missing token, pinned build, or other required configuration, or an invalid or oversized provider query, SHALL finalize Alibaba as preflight `ERROR` with zero Zen executions, zero validator calls, and a sanitized diagnostic. No Actor condemned to fail SHALL be started. Other selected providers MAY continue normally. The run input SHALL be:
 
 - `resultType="products"`
 - `keywords=[normalized query]` as a one-element array
@@ -81,6 +81,75 @@ The input SHALL NOT include `proxyConfiguration`. Zen manages residential proxie
 - **AND** the exact build remains unpinned
 - **AND** no `latest` or `default` build is recorded as validated
 
+#### Scenario: Conflicting benchmark builds block the pin
+- **GIVEN** the five named benchmark runs expose `runId`, `buildId`, and `buildNumber`
+- **AND** at least one run reports a different `buildId` or `buildNumber`
+- **WHEN** Z1 would recover the validated build
+- **THEN** no majority, last, or default build is selected
+- **AND** fixtures from different builds are not mixed as validation of one pin
+- **AND** Z1, Z4, and Z5 remain blocked
+- **AND** a new OpenSpec decision plus single-build authoritative benchmarks are required
+
+#### Scenario: Missing token or build is preflight ERROR with zero executions
+- **GIVEN** Alibaba is selected
+- **AND** the required token, pinned build, or other configuration is absent
+- **WHEN** the logical operation starts
+- **THEN** Alibaba status is preflight `ERROR`
+- **AND** Zen executions are zero
+- **AND** validator calls are zero
+- **AND** no doomed Actor run is started
+- **AND** the diagnostic is sanitized
+
+### Requirement: Alibaba SEARCH uses one complete normalized query with a 256 code-point limit
+
+The Alibaba provider query SHALL be one shared normalized string. That same complete string SHALL be used for:
+
+- the one-element `keywords` array sent to Zen
+- the category resolver `normalized_query`
+- the semantic validator query field
+
+The enforceable limit is `ZEN_SEMANTIC_MAX_QUERY_CHARS = 256` Unicode code points after the shared normalization below. The limit SHALL be validated before category resolution, Zen, and the validator. Implementations SHALL NOT truncate the query to satisfy the limit. Implementations SHALL NOT send Zen the complete query while sending the validator only its first 256 characters.
+
+Shared normalization SHALL be exactly:
+
+1. Unicode NFKC
+2. replace every Unicode whitespace character, including whitespace controls such as TAB, LF, CR, VT, and FF, with one ASCII space
+3. remove remaining Unicode general-category `Cc` and `Cf` characters
+4. compact any whitespace sequence to one ASCII space and strip
+5. apply Unicode casefold only when matching category-resolver aliases
+
+`impact\ndriver` SHALL become `impact driver`, never `impactdriver`, in the resolver and the validator. Zen `keywords` and the validator query SHALL use the complete string after steps 1–4 and SHALL NOT be casefolded.
+
+If the normalized query exceeds 256 code points:
+
+- Alibaba SHALL terminate as preflight `ERROR`
+- Zen executions SHALL be zero
+- validator calls SHALL be zero
+- the diagnostic SHALL be sanitized
+- the query SHALL NOT be truncated
+- other selected providers MAY continue normally
+- `original_user_query` SHALL be retained as provenance
+
+#### Scenario: Shared query is complete and identical
+- **GIVEN** the normalized Alibaba provider query is `impact driver`
+- **AND** it has at most 256 code points
+- **WHEN** category resolution, Zen input, and the validator request are built
+- **THEN** the resolver input, Zen `keywords[0]`, and the validator query are exactly that complete string
+- **AND** no consumer receives a truncated prefix
+
+#### Scenario: Oversized Alibaba query is preflight ERROR
+- **GIVEN** the normalized Alibaba provider query exceeds 256 code points
+- **AND** Facebook and Mercado Libre are also selected
+- **WHEN** Alibaba preflight runs
+- **THEN** Alibaba status is `ERROR`
+- **AND** no Zen execution is started
+- **AND** the validator is called zero times
+- **AND** category resolution does not run
+- **AND** the query is not truncated for Zen or the validator
+- **AND** the diagnostic exposes no raw oversized payload
+- **AND** Facebook and Mercado Libre may continue
+- **AND** `original_user_query` remains on the snapshot
+
 ### Requirement: Category resolution is a local deterministic snapshot lookup
 
 "Exact and sufficiently safe" SHALL mean this operational contract, not an implementer judgment:
@@ -96,7 +165,15 @@ Resolver inputs SHALL be exactly:
 2. `taxonomy_snapshot` — the frozen allowed category strings for `taxonomy_version`
 3. `alias_rules` — the audited exact-match table for that `taxonomy_version`
 
-Normalization for matching SHALL be NFKC, removal of Unicode `Cc`/`Cf` characters, whitespace compaction to one ASCII space with strip, then case-fold. A rule matches only by exact equality of that normalized form to the rule's documented match key.
+Normalization for matching SHALL use the same shared order as the validator:
+
+1. Unicode NFKC
+2. replace every Unicode whitespace character, including whitespace controls such as TAB, LF, CR, VT, and FF, with one ASCII space
+3. remove remaining Unicode general-category `Cc` and `Cf` characters
+4. compact any whitespace sequence to one ASCII space and strip
+5. apply Unicode casefold only for alias matching
+
+A rule matches only by exact equality of that casefolded form to the rule's documented match key. `impact\ndriver` SHALL become `impact driver`, never `impactdriver`.
 
 Outcomes SHALL be:
 
@@ -141,15 +218,29 @@ The sent `category` value SHALL belong exactly to the snapshot. The run SHALL re
 - **AND** `category_origin` is `omitted_not_in_snapshot`
 - **AND** the out-of-snapshot value is not sent to Zen
 
+#### Scenario: Resolver preserves whitespace token boundaries
+- **GIVEN** the Alibaba provider query is `impact\ndriver`
+- **AND** an audited alias match key is `impact driver`
+- **WHEN** the resolver normalizes the query for matching
+- **THEN** the normalized match form is `impact driver`
+- **AND** it is not `impactdriver`
+
 ### Requirement: One Zen execution and at most one semantic batch per logical operation
 
-A logical Alibaba SEARCH operation SHALL perform exactly one Zen Actor execution. Semantic-validation batch calls SHALL depend on successful local batch construction, not on `mapped > 0` alone:
+When configuration and preflight are valid, a logical Alibaba SEARCH operation SHALL perform exactly one Zen Actor execution. Missing token, pinned build, or other required configuration, or an invalid or oversized provider query, SHALL be preflight `ERROR` with zero Zen executions and zero validator calls. No Actor condemned to fail SHALL be started. Semantic-validation batch calls SHALL depend on successful local batch construction, not on `mapped > 0` alone:
 
 - `mapped == 0`: zero real validator calls, `semantic_validation_status = not_run`, and a normal `EMPTY` outcome when Zen completed
-- `mapped` in `1..20` and the serialized batch is within `ZEN_SEMANTIC_MAX_BATCH_CHARS`: exactly one semantic-validation batch call
+- `mapped` in `1..20` and the canonical serialized envelope is within `ZEN_SEMANTIC_MAX_BATCH_BYTES`: exactly one semantic-validation batch call
 - local batch construction fails (`mapped > 20` or serialized size exceeds the cap): zero real validator calls and `invalid_response` for that known mapped count
 
 The empty-pool and construction-failure cases SHALL NOT be described or implemented as external no-op calls. The orchestrator SHALL NOT start a second Zen execution to refill candidates discarded by mapping, integrity policy, or semantic validation. The validator SHALL NOT retry a failed, unavailable, or invalid batch.
+
+#### Scenario: Startable configured search issues exactly one Zen execution
+- **GIVEN** Alibaba is selected, configured, and startable
+- **AND** the shared provider query passes the 256 code-point preflight
+- **WHEN** the logical operation runs
+- **THEN** exactly one Zen execution is started
+- **AND** no doomed Actor is launched
 
 #### Scenario: Zen fetched zero makes zero validator calls
 - **GIVEN** one Zen execution completes normally
@@ -175,18 +266,20 @@ The empty-pool and construction-failure cases SHALL NOT be described or implemen
 #### Scenario: Constructed mapped batch issues exactly one call
 - **GIVEN** one Zen execution returns records
 - **AND** `mapped` is between 1 and 20 inclusive
-- **AND** the serialized batch is within `ZEN_SEMANTIC_MAX_BATCH_CHARS`
+- **AND** the canonical serialized envelope is within `ZEN_SEMANTIC_MAX_BATCH_BYTES`
 - **WHEN** semantic validation runs
 - **THEN** the validator is called exactly once
 - **AND** no retry is issued
 - **AND** no second Zen execution is started
 
 #### Scenario: Oversized constructed batch is invalid without a call
-- **GIVEN** mapping produced more than 20 candidates or a serialized batch over `ZEN_SEMANTIC_MAX_BATCH_CHARS`
+- **GIVEN** mapping produced more than 20 candidates or a canonical serialized envelope over `ZEN_SEMANTIC_MAX_BATCH_BYTES`
 - **WHEN** the validator request would be built
 - **THEN** the validator is called zero times
 - **AND** `semantic_validation_status` is `invalid_response`
 - **AND** that known mapped count is REVIEW only
+- **AND** provider status is `ERROR`
+- **AND** no retry is issued
 
 #### Scenario: Mapping loss does not start a second Zen run
 - **GIVEN** one Zen execution returns records
@@ -326,9 +419,11 @@ Before serialization, every string field SHALL be normalized in this order:
 2. replace every Unicode whitespace character, including whitespace controls such as TAB, LF, CR, VT, and FF, with one ASCII space
 3. remove remaining Unicode general-category `Cc` and `Cf` characters
 4. compact any whitespace sequence to one ASCII space and strip
-5. deterministic truncation to the field cap by Unicode code points
+5. deterministic truncation to the field cap by Unicode code points for title, category-path items, specification keys, and specification values. The shared query SHALL NOT be truncated here; it already passed the 256 code-point preflight.
 
 Empty `categoryPath` items and specification pairs with an empty key or value SHALL be dropped after normalization. Token boundaries SHALL be preserved: `impact\ndriver` becomes `impact driver`, never `impactdriver`.
+
+`categoryPath` SHALL keep the provider-reported Zen order after empty items are dropped. If more than `ZEN_SEMANTIC_MAX_CATEGORY_PATH_ITEMS` items remain, the implementation SHALL retain exactly the last 8 items. Implementations SHALL NOT sort, pick an arbitrary subset, or keep the first 8. Retaining that trailing suffix preserves the most specific path, including the leaf category.
 
 The following constants SHALL be the enforceable limits:
 
@@ -343,11 +438,30 @@ The following constants SHALL be the enforceable limits:
 | `ZEN_SEMANTIC_MAX_SPEC_VALUE_CHARS` | 128 |
 | `ZEN_SEMANTIC_MAX_CANDIDATE_CHARS` | 1536 |
 | `ZEN_SEMANTIC_MAX_BATCH_CANDIDATES` | 20 |
-| `ZEN_SEMANTIC_MAX_BATCH_CHARS` | 32768 |
+| `ZEN_SEMANTIC_MAX_BATCH_BYTES` | 32768 |
 
 A batch SHALL contain at most `ZEN_SEMANTIC_MAX_BATCH_CANDIDATES` candidates. Because `acquisition_budget` and `max_items` are at most 20, a truthful mapped pool cannot exceed 20. A larger mapped count is a contract violation: the validator SHALL NOT be called and the known mapped count SHALL be finalized as `invalid_response`.
 
-Specification pairs SHALL keep provider-reported order after empty pairs are dropped. The first `ZEN_SEMANTIC_MAX_SPEC_PAIRS` remaining pairs SHALL be retained. Implementations SHALL NOT sort by key, hash iteration, or another arbitrary order. If a normalized candidate object still exceeds `ZEN_SEMANTIC_MAX_CANDIDATE_CHARS`, trailing retained pairs SHALL be dropped from the end until it fits; if it still exceeds the cap, `title` SHALL be truncated further to fit. If the serialized batch would exceed `ZEN_SEMANTIC_MAX_BATCH_CHARS`, the request SHALL NOT be sent and the known-size batch SHALL be treated as `invalid_response`.
+Specification pairs SHALL keep provider-reported order after empty pairs are dropped. The first `ZEN_SEMANTIC_MAX_SPEC_PAIRS` remaining pairs SHALL be retained. Implementations SHALL NOT sort by key, hash iteration, or another arbitrary order. If a normalized candidate object still exceeds `ZEN_SEMANTIC_MAX_CANDIDATE_CHARS`, trailing retained pairs SHALL be dropped from the end until it fits; if it still exceeds the cap, `title` SHALL be truncated further to fit.
+
+The semantic data envelope SHALL be exactly the object with keys `query` and `candidates`, where `query` is the complete shared provider query and `candidates` is the candidate array in existing order. Batch-size measurement SHALL use exclusively the canonical UTF-8 serialization of that complete envelope:
+
+- `ensure_ascii=False`
+- `sort_keys=True`
+- `separators=(",", ":")`
+- `allow_nan=False`
+- `encode("utf-8")`
+- compare `len(bytes)` with `ZEN_SEMANTIC_MAX_BATCH_BYTES`
+
+The measurement SHALL include the complete query+candidates envelope. It SHALL NOT count HTTP headers, the system prompt, or static tool-schema bytes. Arrays SHALL keep their existing order; `sort_keys=True` orders object keys only.
+
+If that byte length exceeds `ZEN_SEMANTIC_MAX_BATCH_BYTES`:
+
+- model calls SHALL be zero
+- the known batch SHALL be `invalid_response`
+- every candidate SHALL be REVIEW
+- provider status SHALL be `ERROR`
+- no retry SHALL occur
 
 #### Scenario: Raw Zen payload is stripped
 - **GIVEN** a mapped Zen listing whose raw payload contains `descriptionHtml`, `chatToken`, `trackInfo`, `contactSupplier`, and URLs
@@ -376,6 +490,24 @@ Specification pairs SHALL keep provider-reported order after empty pairs are dro
 - **AND** the retained pairs are not reordered by key
 - **AND** each key has at most 64 code points
 - **AND** each value has at most 128 code points
+
+#### Scenario: Long root-to-leaf category path keeps the last eight
+- **GIVEN** Zen reports a root-to-leaf `categoryPath` of 10 non-empty items after normalization
+- **WHEN** the validator request is built
+- **THEN** items 3 through 10 are emitted in that same provider-reported order
+- **AND** the first two ancestor items are dropped
+- **AND** the leaf category remains the last emitted item
+- **AND** the path is not sorted or arbitrarily subsampled
+
+#### Scenario: Oversized canonical envelope is invalid without a model call
+- **GIVEN** a constructed 1..20 candidate batch
+- **AND** the canonical UTF-8 serialization of `{"query":"...","candidates":[...]}` exceeds 32768 bytes
+- **WHEN** the validator request would be sent
+- **THEN** the model is called zero times
+- **AND** `semantic_validation_status` is `invalid_response`
+- **AND** every candidate is REVIEW
+- **AND** provider status is `ERROR`
+- **AND** no retry is issued
 
 #### Scenario: Batch larger than twenty is rejected before the call
 - **GIVEN** mapping produced more than 20 candidates
@@ -694,7 +826,18 @@ Future offline fixtures SHALL start from these existing benchmark names when the
 - `zen-benchmark-04-lifepo4-battery.json.json`
 - `zen-benchmark-05-impact-driver.json.json`
 
-Those files are not in this repository at Z0. Their contents SHALL NOT be fabricated. Z1 SHALL incorporate sanitized structural fixtures after tokens, HTML, contacts, and tracking are removed, without semantic labels. Z4 SHALL add independent human-reviewed golden labels and SHALL measure the same loopback validator adapter and pinned prompt against those five datasets. That Z4 gate MAY call the pinned loopback model endpoint. It SHALL NOT call Apify, a marketplace, DeepL, MiniMax, or a non-loopback Ollama host, and it SHALL NOT substitute fakes or prerecorded decisions for the labeled benchmark. Automated unit/integration/Playwright suites remain fake/offline. Golden labels SHALL NOT be generated by the same model being evaluated. Z4 SHALL record the exact `model` identifier and `prompt_version` that passed. Z5 MAY start only after every Z4 acceptance criterion passed and SHALL refuse cutover if the configured model or `prompt_version` differs from that pin. The production SEARCH Actor SHALL remain `memo23/alibaba-scraper` until that cutover.
+Those files are not in this repository at Z0. Their contents SHALL NOT be fabricated. Z1 SHALL incorporate sanitized structural fixtures after tokens, HTML, contacts, and tracking are removed, without semantic labels. Z4 SHALL add independent human-reviewed golden labels and SHALL measure the same loopback validator adapter and pinned prompt against those five datasets.
+
+The Z4 labeled corpus SHALL exercise `RELEVANT`, `IRRELEVANT`, and `REVIEW` with at least one real human label of each class. Labels SHALL NOT be fabricated to satisfy coverage. If any class is missing, Z4 is incomplete and Z5 remains blocked. Golden labels SHALL NOT be generated by the same model being evaluated.
+
+Call-budget classes SHALL stay distinct:
+
+- Automated unit, integration, and Playwright suites: zero Apify, zero marketplaces, zero DeepL, zero Ollama/model inference, fakes only.
+- Controlled Z4 semantic benchmark: zero Apify, zero marketplaces, and zero DeepL. It MAY perform exactly the inferences required against the evaluated `model` identifier and `prompt_version`, only through the loopback Ollama endpoint. It SHALL record `model`, `prompt_version`, and call count. It SHALL NOT call any other model. If the evaluated model has a cloud backend, including `minimax-m3:cloud`, the benchmark SHALL NOT be described as completely offline and SHALL NOT claim "MiniMax calls = 0".
+
+The Z4 benchmark SHALL NOT substitute fakes or prerecorded decisions for the labeled measurement. Z4 SHALL record the exact `model` identifier and `prompt_version` that passed. Z5 MAY start only after every Z4 acceptance criterion passed and SHALL refuse cutover if the configured model or `prompt_version` differs from that pin. The production SEARCH Actor SHALL remain `memo23/alibaba-scraper` until that cutover.
+
+After Z5 integrates the Actor, GUI, diagnostics, currency, and export, Z5 SHALL rerun format check, lint, mypy, unit, integration, applicable Playwright, the E.7-equivalent compatibility gate, and the tracking, refresh, landed-cost, negotiation, H0019, positional-comparison, generation-guard, CSV, and currency-provenance suites. Those automated tests remain fake/offline and SHALL NOT execute Apify or real models. Z5 SHALL NOT complete or merge if that gate fails.
 
 Z4 minimum acceptance criteria SHALL be:
 
@@ -706,11 +849,16 @@ Z4 minimum acceptance criteria SHALL be:
 - a successfully constructed batch of 1..20 produces exactly one call
 - no validator retry and no second Zen run
 - ALL-REVIEW uses `Búsqueda completada con incidencias`
-- every human-labeled fixture is compared to the loopback validator decision and per-class counts are recorded
+- every human-labeled fixture is compared to the loopback validator decision and a complete confusion matrix is recorded
 - Z4 fails if any human-RELEVANT fixture is classified IRRELEVANT
 - Z4 fails if any of the five datasets has at least one human RELEVANT label and the validator produces zero RELEVANT on that dataset
 - Z4 fails if any human-IRRELEVANT fixture is classified RELEVANT
 - Z4 fails if any of the five datasets has at least one human IRRELEVANT label and the validator produces zero IRRELEVANT on that dataset
+- any human-REVIEW fixture SHALL produce validator REVIEW
+- Z4 fails if any human-REVIEW fixture is classified RELEVANT
+- Z4 fails if any human-REVIEW fixture is classified IRRELEVANT
+- an all-REVIEW degenerate result cannot pass datasets that contain human RELEVANT or human IRRELEVANT labels
+- an all-RELEVANT degenerate result cannot pass
 - no numeric precision/recall SLA is invented
 - production Actor remains memo23 throughout Z4
 - the passing `model` and `prompt_version` are recorded as the only authorized Z5 pair
@@ -720,20 +868,25 @@ Z4 minimum acceptance criteria SHALL be:
 - **WHEN** Z0 is recorded
 - **THEN** no synthetic Zen dataset is added to the repository
 - **AND** Z1 remains blocked on sanitized structural fixtures
-- **AND** Z4 remains blocked on independent human labels and a passing offline gate
+- **AND** Z4 remains blocked on independent human labels and a passing labeled quality gate
 - **AND** Z5 remains blocked on a fully passing Z4
 
-#### Scenario: Automated tests stay offline
+#### Scenario: Automated tests stay fake and offline
 - **WHEN** future Z1–Z5 automated unit, integration, and Playwright suites run
-- **THEN** Apify, Ollama, DeepL, MiniMax, and marketplace network call counts are all zero
+- **THEN** Apify, marketplace, DeepL, and Ollama/model-inference call counts are all zero
 - **AND** those suites use fakes rather than the Z4 quality-gate model
 
-#### Scenario: Z4 quality gate exercises the real loopback validator
+#### Scenario: Z4 quality gate exercises the evaluated loopback model
 - **GIVEN** the five labeled datasets exist
+- **AND** the evaluated model identifier is `minimax-m3:cloud`
 - **WHEN** Z4 runs the semantic quality gate
 - **THEN** the same loopback validator adapter and pinned prompt are called
 - **AND** decisions are not replaced by fakes or prerecorded labels
-- **AND** Apify, marketplace, DeepL, MiniMax, and non-loopback Ollama calls remain zero
+- **AND** Apify, marketplace, and DeepL calls remain zero
+- **AND** only that evaluated model and `prompt_version` are inferred, through loopback Ollama
+- **AND** the recorded call count is greater than zero
+- **AND** the benchmark is not described as completely offline
+- **AND** the record does not claim MiniMax calls were zero
 
 #### Scenario: Quality gate precedes production cutover
 - **GIVEN** Z4 has not passed every acceptance criterion
@@ -768,6 +921,29 @@ Z4 minimum acceptance criteria SHALL be:
 - **WHEN** Z4 evaluates acceptance
 - **THEN** Z4 fails
 - **AND** Z5 MUST NOT start
+
+#### Scenario: Human-REVIEW must remain REVIEW
+- **GIVEN** a human-reviewed fixture is labeled REVIEW
+- **WHEN** Z4 evaluates acceptance
+- **THEN** the validator decision for that fixture is REVIEW
+- **AND** human-REVIEW classified RELEVANT fails the gate
+- **AND** human-REVIEW classified IRRELEVANT fails the gate
+
+#### Scenario: Missing human class leaves Z4 incomplete
+- **GIVEN** the labeled corpus has human RELEVANT and human IRRELEVANT fixtures
+- **AND** it has no real human REVIEW label
+- **WHEN** Z4 coverage is checked
+- **THEN** Z4 is incomplete
+- **AND** no fabricated REVIEW label is added
+- **AND** Z5 remains blocked
+
+#### Scenario: Z5 post-cutover quality gate is required
+- **GIVEN** Z5 has switched the Actor and wired GUI, diagnostics, currency, and export
+- **WHEN** the post-cutover gate runs
+- **THEN** format check, lint, mypy, unit, integration, applicable Playwright, and the E.7-equivalent compatibility gate all run
+- **AND** tracking, refresh, landed cost, negotiation, H0019, positional comparison, generation guards, CSV, and currency provenance are retested
+- **AND** those automated suites remain fake/offline and start no Apify or real-model calls
+- **AND** Z5 cannot complete or merge if that gate fails
 
 #### Scenario: Z5 rejects a model or prompt that did not pass Z4
 - **GIVEN** Z4 recorded `model = llama-gate:tag` and `prompt_version = zen-semantic-v1`
