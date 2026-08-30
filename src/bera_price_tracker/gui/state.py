@@ -775,7 +775,39 @@ class TrackerState(rx.State):
 
     def set_alibaba_negotiation_product_key(self, value: str) -> None:
         key = value.split(" · ", 1)[0].strip()
+        if key == self.alibaba_negotiation_product_key:
+            return
         self.alibaba_negotiation_product_key = key
+        self._invalidate_alibaba_negotiation_plan()
+
+    def _invalidate_alibaba_negotiation_plan(self) -> None:
+        """Drop plan-owned monetary state when the selected product changes."""
+
+        self.alibaba_negotiation_error = ""
+        self.alibaba_negotiation_has_plan = False
+        self.alibaba_negotiation_public = ""
+        self.alibaba_negotiation_opening = ""
+        self.alibaba_negotiation_target = ""
+        self.alibaba_negotiation_ceiling = ""
+        self.alibaba_negotiation_next_tier = ""
+        self.alibaba_negotiation_proximity = ""
+        self.alibaba_negotiation_quantity_shown = ""
+        self.alibaba_negotiation_explanation = ""
+        self.alibaba_negotiation_attractiveness = ""
+        self.alibaba_negotiation_message = ""
+        self.alibaba_negotiation_supplier_text = ""
+        self.alibaba_negotiation_analysis_summary = ""
+        self.alibaba_negotiation_analysis_decision = ""
+        self.alibaba_negotiation_analysis_notes = ""
+        self.alibaba_negotiation_plan_payload = {}
+        self.alibaba_negotiation_original_ceiling = ""
+        self.alibaba_negotiation_profitability_ceiling = ""
+        self.alibaba_negotiation_effective_ceiling = ""
+        self.alibaba_negotiation_ceiling_provenance = ""
+        self.alibaba_negotiation_profitability_note = ""
+        self.alibaba_negotiation_has_profitability = False
+        self.alibaba_negotiation_profitability_hint = ""
+        self.alibaba_negotiation_is_drafting = False
 
     def set_alibaba_negotiation_quantity(self, value: str) -> None:
         self.alibaba_negotiation_quantity = value
@@ -936,12 +968,20 @@ class TrackerState(rx.State):
             )
         except Exception as exc:  # noqa: BLE001 — sanitized before display
             async with self:
-                self.alibaba_negotiation_is_drafting = False
+                if not self._keep_alibaba_negotiation_draft_result():
+                    return
                 self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
             return
         async with self:
-            self.alibaba_negotiation_is_drafting = False
+            if not self._keep_alibaba_negotiation_draft_result():
+                return
             self.alibaba_negotiation_message = message
+
+    def _keep_alibaba_negotiation_draft_result(self) -> bool:
+        """Keep an in-flight draft only when the selected product still has a plan."""
+
+        self.alibaba_negotiation_is_drafting = False
+        return self.alibaba_negotiation_has_plan
 
     @rx.event(background=True)
     async def analyze_alibaba_supplier_reply(self) -> None:
@@ -960,11 +1000,13 @@ class TrackerState(rx.State):
             )
         except Exception as exc:  # noqa: BLE001 — sanitized before display
             async with self:
-                self.alibaba_negotiation_is_drafting = False
+                if not self._keep_alibaba_negotiation_draft_result():
+                    return
                 self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
             return
         async with self:
-            self.alibaba_negotiation_is_drafting = False
+            if not self._keep_alibaba_negotiation_draft_result():
+                return
             self.alibaba_negotiation_analysis_summary = analysis_row.get("response_summary", "")
             self.alibaba_negotiation_analysis_decision = analysis_row.get("decision", "")
             notes = analysis_row.get("notes", "")
@@ -991,11 +1033,13 @@ class TrackerState(rx.State):
             )
         except Exception as exc:  # noqa: BLE001 — sanitized before display
             async with self:
-                self.alibaba_negotiation_is_drafting = False
+                if not self._keep_alibaba_negotiation_draft_result():
+                    return
                 self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
             return
         async with self:
-            self.alibaba_negotiation_is_drafting = False
+            if not self._keep_alibaba_negotiation_draft_result():
+                return
             self.alibaba_negotiation_message = message
 
     def set_alibaba_landed_quantity(self, value: str) -> None:
