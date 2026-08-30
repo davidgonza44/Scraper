@@ -1093,11 +1093,23 @@ class TrackerState(rx.State):
             self.alibaba_landed_has_result = False
             self.alibaba_landed_result = {}
             self.alibaba_landed_product_id = ""
+            self._sync_profitability_after_landed_change()
             return
         self.alibaba_landed_error = ""
         self.alibaba_landed_has_result = True
         self.alibaba_landed_result = row
         self.alibaba_landed_product_id = self.alibaba_landed_draft_product_id
+        self._sync_profitability_after_landed_change()
+
+    def _sync_profitability_after_landed_change(self) -> None:
+        updated = services.sync_alibaba_profitability_after_landed_change(
+            self.alibaba_negotiation_plan_payload,
+            self.alibaba_landed_result if self.alibaba_landed_has_result else None,
+            plan_product_id=self.alibaba_negotiation_plan_payload.get("product_id"),
+            landed_product_id=self.alibaba_landed_product_id,
+        )
+        if updated is not None:
+            self._apply_negotiation_plan(updated)
 
     def set_alibaba_query(self, value: str) -> None:
         self.alibaba_query = value
