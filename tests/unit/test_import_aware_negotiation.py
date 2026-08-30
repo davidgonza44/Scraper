@@ -295,6 +295,100 @@ def test_gui_apply_updates_row_and_reconstructs_bounds() -> None:
     )
 
 
+def test_landed_recalc_does_not_keep_stale_profitability_ceiling() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    plan_row = services.calculate_alibaba_negotiation(
+        {
+            "title": "Wireless Mouse",
+            "source": "tracked",
+            "last_price": "5.00",
+            "price_min": "5.00",
+            "price_max": "5.00",
+            "currency": "USD",
+            "product_id": "mouse-1",
+        },
+        desired_quantity="40",
+    )
+    applied = services.apply_alibaba_profitability_ceiling(
+        plan_row,
+        {
+            "max_supplier_raw": "4.60",
+            "currency": "USD",
+            "rate_status": ShippingRateStatus.ESTIMATE.value,
+        },
+    )
+    assert applied["profitability_applied"] == "1"
+    assert Decimal(applied["profitability_ceiling_raw"]) == Decimal("4.60")
+    stale_quote = Decimal("4.20")
+    assert (
+        classify_supplier_price(stale_quote, services._plan_from_row(applied).bounds).decision
+        is CounterOfferDecision.ACCEPTABLE
+    )
+
+    state = TrackerState()
+    state._apply_negotiation_plan(applied)
+    state.alibaba_landed_draft_product_id = "mouse-1"
+    state.alibaba_landed_quantity = "40"
+    state.alibaba_landed_supplier_price = "4.03"
+    state.alibaba_landed_cartons = "2"
+    state.alibaba_landed_units_per_carton = "20"
+    state.alibaba_landed_length = "50"
+    state.alibaba_landed_width = "40"
+    state.alibaba_landed_height = "30"
+    state.alibaba_landed_weight = "8"
+    state.alibaba_landed_rate = "800"
+    state.alibaba_landed_sale_price = "8.00"
+    state.alibaba_landed_margin = "30"
+
+    state.calculate_alibaba_landed_cost()
+
+    assert state.alibaba_landed_has_result is True
+    new_max = Decimal(str(state.alibaba_landed_result["max_supplier_raw"]))
+    assert new_max < stale_quote
+    live_plan = services._plan_from_row(state.alibaba_negotiation_plan_payload)
+    assert classify_supplier_price(stale_quote, live_plan.bounds).decision is (
+        CounterOfferDecision.ABOVE_CEILING
+    )
+    assert live_plan.ceiling_price == new_max
+    assert state.alibaba_negotiation_plan_payload["profitability_applied"] == "1"
+
+
+def test_failed_landed_recalc_detaches_applied_profitability() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    plan_row = services.calculate_alibaba_negotiation(
+        {
+            "title": "Wireless Mouse",
+            "source": "tracked",
+            "last_price": "5.00",
+            "price_min": "5.00",
+            "price_max": "5.00",
+            "currency": "USD",
+            "product_id": "mouse-1",
+        },
+        desired_quantity="40",
+    )
+    applied = services.apply_alibaba_profitability_ceiling(
+        plan_row,
+        {
+            "max_supplier_raw": "4.60",
+            "currency": "USD",
+            "rate_status": ShippingRateStatus.ESTIMATE.value,
+        },
+    )
+    state = TrackerState()
+    state._apply_negotiation_plan(applied)
+    state.alibaba_landed_draft_product_id = "mouse-1"
+    state.calculate_alibaba_landed_cost()
+
+    assert state.alibaba_landed_has_result is False
+    assert state.alibaba_negotiation_plan_payload["profitability_applied"] == "0"
+    restored = services._plan_from_row(state.alibaba_negotiation_plan_payload)
+    assert restored.ceiling_price == Decimal(plan_row["public_raw"])
+    assert restored.opening_offer <= restored.target_price <= restored.ceiling_price
+
+
 def test_gui_apply_without_landed_keeps_plan() -> None:
     plan_row = services.calculate_alibaba_negotiation(
         {

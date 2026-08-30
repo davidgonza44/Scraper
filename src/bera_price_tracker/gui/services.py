@@ -1336,6 +1336,41 @@ def apply_alibaba_profitability_ceiling(
     return row
 
 
+def commercial_alibaba_negotiation_row(plan_row: Mapping[str, object]) -> dict[str, str]:
+    """Rebuild the commercial plan and drop any applied profitability snapshot."""
+
+    base = {str(key): str(value) for key, value in plan_row.items()}
+    plan = _plan_from_row({**base, "profitability_applied": "0"})
+    return {**base, **negotiation_plan_to_row(plan)}
+
+
+def sync_alibaba_profitability_after_landed_change(
+    plan_row: Mapping[str, object],
+    landed_row: Mapping[str, object] | None,
+    *,
+    plan_product_id: object,
+    landed_product_id: object,
+) -> dict[str, str] | None:
+    """Keep an applied ceiling aligned with the current landed-cost result.
+
+    A tighter landed max must replace the snapshot used by analyze/draft.
+    Product mismatch or a missing landed result restores the commercial plan.
+    """
+
+    from bera_price_tracker.application.alibaba_negotiation import AlibabaNegotiationError
+    from bera_price_tracker.application.landed_cost import LandedCostError
+    from bera_price_tracker.gui.comparison import landed_context_applies
+
+    if not plan_row or str(plan_row.get("profitability_applied") or "") != "1":
+        return None
+    if landed_row is None or not landed_context_applies(plan_product_id, landed_product_id):
+        return commercial_alibaba_negotiation_row(plan_row)
+    try:
+        return apply_alibaba_profitability_ceiling(plan_row, landed_row)
+    except (AlibabaNegotiationError, LandedCostError):
+        return commercial_alibaba_negotiation_row(plan_row)
+
+
 MERCADOLIBRE_GENERIC_USER_MESSAGE = "No se pudo completar la búsqueda en Mercado Libre Venezuela."
 MERCADOLIBRE_EMPTY_MESSAGE = "No se encontraron publicaciones en Mercado Libre Venezuela."
 MERCADOLIBRE_LOADING_MESSAGE = "Buscando publicaciones en Mercado Libre Venezuela..."
