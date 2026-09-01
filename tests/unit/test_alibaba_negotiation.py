@@ -1452,6 +1452,52 @@ def test_analyze_without_drafter_parses_supplier_text_in_python() -> None:
     assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
 
 
+@pytest.mark.parametrize(
+    ("plan_currency", "quote"),
+    (
+        ("USD", "We can do CNY 4.10 per unit"),
+        ("USD", "We can do EUR 4.10 per unit"),
+        ("USD", "We can do GBP 4.10 per unit"),
+        ("CNY", "We can do $4.10 per unit"),
+        ("CNY", "We can do USD 4.10 per unit"),
+        ("EUR", "We can do $4.10 per unit"),
+    ),
+)
+def test_supplier_quote_in_a_different_currency_is_not_classified(
+    plan_currency: str, quote: str
+) -> None:
+    plan = calculate_alibaba_negotiation_plan(_input(currency=plan_currency))
+    assert plan.currency == plan_currency
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, quote)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+
+def test_matching_iso_supplier_quote_is_still_classified() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, "We can do USD 4.10 per unit")
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
+def test_rmb_quote_is_classified_against_cny_plan() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input(currency="CNY"))
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, "We can do RMB 4.10")
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
+def test_unmarked_supplier_quote_still_uses_plan_currency() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input(currency="CNY"))
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, "We can do 4.10")
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
 def test_unattractive_acceptable_reply_is_still_drafted() -> None:
     plan = calculate_alibaba_negotiation_plan(
         _input(resale=Decimal("5.00"), margin=Decimal("40"), shipping=Decimal("1.00"))

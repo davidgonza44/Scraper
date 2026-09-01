@@ -55,6 +55,9 @@ _MONEY_PATTERN = re.compile(
     r"(?:USD\s*)?\$?\s*(\d+(?:\.\d{1,2})?)\s*(?:USD)?",
     re.IGNORECASE,
 )
+_QUOTE_ISO_PATTERN = re.compile(r"\b(?:USD|CNY|EUR|GBP|RMB)\b", re.IGNORECASE)
+_US_DOLLAR_PATTERN = re.compile(r"\bUS\s*\$", re.IGNORECASE)
+_QUOTE_CURRENCY_WINDOW = 8
 _QTY_PATTERN = re.compile(
     r"(?:moq|min(?:imum)?\s*order|qty|quantity|unidades|units)\s*[:=]?\s*(\d+)",
     re.IGNORECASE,
@@ -812,6 +815,37 @@ def extract_supplier_money(text: str) -> tuple[Decimal, ...]:
     return tuple(found)
 
 
+def _normalize_quote_currency_token(token: str) -> str:
+    currency = token.strip().upper()
+    return "CNY" if currency == "RMB" else currency
+
+
+def _quote_currency_markers(text: str, match: re.Match[str]) -> set[str]:
+    """ISO or ``$`` markers adjacent to one extracted amount. ``$`` means USD here."""
+
+    start, end = match.span()
+    window = text[
+        max(0, start - _QUOTE_CURRENCY_WINDOW) : min(len(text), end + _QUOTE_CURRENCY_WINDOW)
+    ]
+    markers = {
+        _normalize_quote_currency_token(item.group(0))
+        for item in _QUOTE_ISO_PATTERN.finditer(window)
+    }
+    if _US_DOLLAR_PATTERN.search(window) is not None or "$" in window:
+        markers.add("USD")
+    return markers
+
+
+def _extracted_quote_currencies(text: str) -> set[str]:
+    markers: set[str] = set()
+    for match in _MONEY_PATTERN.finditer(text):
+        parsed = _parse_money(match.group(1))
+        if parsed is None or _looks_like_quantity(match, text):
+            continue
+        markers.update(_quote_currency_markers(text, match))
+    return markers
+
+
 def extract_supplier_quantity(text: str) -> int | None:
     match = _QTY_PATTERN.search(text)
     if match is None:
@@ -829,6 +863,7 @@ def parse_supplier_response(
     quoted_quantity: object = None,
     quoted_moq: object = None,
     shipping_mentioned: bool = False,
+    expected_currency: object = None,
 ) -> SupplierCounterOffer:
     """Extract numbers from pasted text. Ambiguous prices need human review."""
 
@@ -838,6 +873,11 @@ def parse_supplier_response(
     extracted_qty = extract_supplier_quantity(sanitized)
     shipping = shipping_mentioned or bool(_SHIPPING_PATTERN.search(sanitized))
     suggested = _parse_money(quoted_unit_price)
+    expected = explicit_alibaba_currency(expected_currency)
+    quote_currencies = _extracted_quote_currencies(sanitized)
+    currency_mismatch = expected is not None and any(
+        marker != expected for marker in quote_currencies
+    )
     if suggested is not None and suggested not in prices:
         return SupplierCounterOffer(
             raw_text=sanitized,
@@ -850,7 +890,7 @@ def parse_supplier_response(
             notes=NEEDS_HUMAN_REVIEW_NOTE,
             extracted_prices=prices,
         )
-    if len(prices) != 1:
+    if len(prices) != 1 or currency_mismatch:
         return SupplierCounterOffer(
             raw_text=sanitized,
             response_summary=sanitize_negotiation_text(summary, MAX_NEGOTIATION_NOTES_LENGTH),
@@ -1167,6 +1207,7 @@ class AnalyzeSupplierResponse:
             quoted_quantity=draft.quoted_quantity,
             quoted_moq=draft.quoted_moq,
             shipping_mentioned=draft.shipping_mentioned,
+            expected_currency=plan.currency,
         )
         recommendation = classify_supplier_price(
             parsed.quoted_unit_price,
