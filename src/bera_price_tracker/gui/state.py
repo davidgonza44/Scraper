@@ -1087,6 +1087,7 @@ class TrackerState(rx.State):
                 expected_sale_price=self.alibaba_landed_sale_price,
                 target_margin_percent=self.alibaba_landed_margin,
                 product_title=self.alibaba_negotiation_plan_payload.get("title", ""),
+                currency=self.alibaba_negotiation_plan_payload.get("currency", ""),
             )
         except Exception as exc:  # noqa: BLE001 — sanitized before display
             self.alibaba_landed_error = services.sanitize_alibaba_landed_cost_error(exc)
