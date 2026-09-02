@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -587,6 +588,87 @@ def test_gui_cny_plan_cny_landed_applies() -> None:
     assert applied["profitability_applied"] == "1"
     assert applied["ceiling_price"] == "CNY 4.10"
     assert "$4.10" not in applied.values()
+
+
+def _fill_gui_landed_form(state: Any) -> None:
+    state.alibaba_landed_quantity = "40"
+    state.alibaba_landed_supplier_price = "4.03"
+    state.alibaba_landed_cartons = "2"
+    state.alibaba_landed_units_per_carton = "20"
+    state.alibaba_landed_length = "50"
+    state.alibaba_landed_width = "40"
+    state.alibaba_landed_height = "30"
+    state.alibaba_landed_weight = "8"
+    state.alibaba_landed_rate = "800"
+    state.alibaba_landed_rate_confirmed = False
+    state.alibaba_landed_sale_price = "10.00"
+    state.alibaba_landed_margin = "30"
+
+
+def test_gui_landed_calc_does_not_relabel_cny_plan_as_usd() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    plan_row = _cny_plan_row()
+    plan_row["product_id"] = "P-CNY"
+    state = TrackerState()
+    state.alibaba_negotiation_has_plan = True
+    state.alibaba_negotiation_plan_payload = dict(plan_row)
+    _fill_gui_landed_form(state)
+
+    state.calculate_alibaba_landed_cost()
+
+    assert state.alibaba_landed_has_result is True
+    assert state.alibaba_landed_result["currency"] == "CNY"
+    assert state.alibaba_landed_result["landed_cost_per_unit"].startswith("CNY")
+    assert "$" not in state.alibaba_landed_result["landed_cost_per_unit"]
+    assert "$" not in state.alibaba_landed_result["max_supplier_price"]
+
+
+def test_gui_cny_plan_landed_calc_can_apply_profitability() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    plan_row = _cny_plan_row()
+    plan_row["product_id"] = "P-CNY"
+    state = TrackerState()
+    state.alibaba_negotiation_has_plan = True
+    state.alibaba_negotiation_plan_payload = dict(plan_row)
+    state.alibaba_negotiation_opening = plan_row["opening_offer"]
+    state.alibaba_negotiation_target = plan_row["target_price"]
+    state.alibaba_negotiation_ceiling = plan_row["ceiling_price"]
+    _fill_gui_landed_form(state)
+    state.use_negotiation_values_for_landed_cost()
+    _fill_gui_landed_form(state)
+
+    state.calculate_alibaba_landed_cost()
+    assert state.alibaba_landed_result["currency"] == "CNY"
+    state.apply_alibaba_profitability_ceiling()
+
+    assert state.alibaba_negotiation_has_profitability is True
+    assert state.alibaba_negotiation_plan_payload["profitability_applied"] == "1"
+    assert state.alibaba_negotiation_plan_payload["landed_currency"] == "CNY"
+    assert "USD" not in state.alibaba_negotiation_ceiling
+    assert "$" not in state.alibaba_negotiation_ceiling
+
+
+def test_gui_landed_calc_keeps_usd_plan_and_standalone_default() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    usd_state = TrackerState()
+    usd_plan = _usd_plan_row()
+    usd_plan["product_id"] = "P-USD"
+    usd_state.alibaba_negotiation_plan_payload = dict(usd_plan)
+    _fill_gui_landed_form(usd_state)
+    usd_state.calculate_alibaba_landed_cost()
+    assert usd_state.alibaba_landed_has_result is True
+    assert usd_state.alibaba_landed_result["currency"] == "USD"
+    assert usd_state.alibaba_landed_result["landed_cost_per_unit"] == "$6.43"
+
+    standalone = TrackerState()
+    _fill_gui_landed_form(standalone)
+    standalone.calculate_alibaba_landed_cost()
+    assert standalone.alibaba_landed_has_result is True
+    assert standalone.alibaba_landed_result["currency"] == "USD"
+    assert standalone.alibaba_landed_result["landed_cost_per_unit"] == "$6.43"
 
 
 def test_gui_mismatch_does_not_call_apply(monkeypatch: pytest.MonkeyPatch) -> None:
