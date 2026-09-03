@@ -1760,6 +1760,36 @@ def test_integer_usd_and_dollar_amounts_are_prices_not_quantities() -> None:
     assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
 
 
+def test_technical_spec_decimals_are_not_supplier_unit_prices() -> None:
+    assert extract_supplier_money("1.5kW motor, 220V, IP67") == ()
+    assert extract_supplier_money("This is 1.5 kW, FOB Shenzhen") == ()
+    assert extract_supplier_money("Battery 3.7V 2000mAh") == ()
+    assert extract_supplier_money("Cable 2.5mm, FOB") == ()
+    assert extract_supplier_money("margin is 10.5%") == ()
+    assert extract_supplier_money("1.5kW motor, we can do $4.10") == (Decimal("4.10"),)
+    assert extract_supplier_money("1.5kW, we can do 4.10") == (Decimal("4.10"),)
+
+
+def test_technical_spec_does_not_become_an_acceptable_quote() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    parsed, recommendation = AnalyzeSupplierResponse().execute(
+        plan, "1.5kW motor, MOQ 100pcs, price 4"
+    )
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+
+def test_marked_price_beside_technical_spec_is_still_classified() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    parsed, recommendation = AnalyzeSupplierResponse().execute(
+        plan, "1.5kW motor, we can do $4.10 per unit"
+    )
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
 def test_reference_price_accepts_zero_and_full_proximity() -> None:
     public = Decimal("4.30")
     nxt = Decimal("4.00")
