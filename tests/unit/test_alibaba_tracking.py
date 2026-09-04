@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from bera_price_tracker.application.alibaba_tracking import (
+    CURRENCY_MISMATCH,
     FOLLOW_SOURCE,
     MISSING_CURRENCY,
     MISSING_PRICE,
@@ -69,13 +70,14 @@ def _observation(
     display: str = "$1.30-1.60",
     title: str = "Wireless Mouse",
     query: str = "wireless mouse",
+    currency: str = "USD",
 ) -> AlibabaFollowObservation:
     return AlibabaFollowObservation(
         product_id=product_id,
         title=title,
         url=f"https://www.alibaba.com/product-detail/{product_id}.html",
         representative_price=price,
-        currency="USD",
+        currency=currency,
         query=query,
         price_display=display,
         min_price=minimum,
@@ -299,6 +301,68 @@ def test_refollow_after_unfollow_reactivates(tmp_path: Path) -> None:
     )
     assert again.is_active is True
     assert again.variation.snapshot_count == 2
+
+
+def test_refollow_different_currency_does_not_append_or_compare(tmp_path: Path) -> None:
+    """Unfollow + re-follow in another ISO must not mix history or crash Seguimiento."""
+
+    settings = _settings(tmp_path)
+    composition = ApplicationComposition(settings=settings)
+    composition.follow_alibaba_price(_observation(), clock=_clock(BASE))
+    composition.unfollow_alibaba_price("1600000000000")
+    raised: Exception | None = None
+    try:
+        composition.follow_alibaba_price(
+            _observation(
+                price=Decimal("10.00"),
+                minimum=Decimal("10.00"),
+                maximum=Decimal("10.00"),
+                display="CNY 10.00",
+                currency="CNY",
+            ),
+            clock=_clock(BASE + timedelta(days=2)),
+        )
+    except Exception as exc:  # noqa: BLE001 — assert the exact fail-closed error
+        raised = exc
+    with SQLiteListingRepository(settings.database_path) as repository:
+        assert repository.count_price_snapshots() == 1
+        history = repository.get_price_history(ListingKey(FOLLOW_SOURCE, "1600000000000"))
+        assert [item.snapshot.currency for item in history] == ["USD"]
+    remaining = composition.list_alibaba_tracked(active_only=False)
+    assert len(remaining) == 1
+    assert remaining[0].variation.snapshot_count == 1
+    assert remaining[0].history[0].currency == "USD"
+    assert remaining[0].is_active is False
+    assert isinstance(raised, AlibabaFollowError)
+    assert str(raised) == CURRENCY_MISMATCH
+
+
+def test_snapshot_different_currency_does_not_append_or_crash_list(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    composition = ApplicationComposition(settings=settings)
+    composition.follow_alibaba_price(_observation(), clock=_clock(BASE))
+    raised: Exception | None = None
+    try:
+        composition.record_alibaba_price_snapshot(
+            _observation(
+                price=Decimal("72.00"),
+                minimum=Decimal("72.00"),
+                maximum=Decimal("72.00"),
+                display="CNY 72.00",
+                currency="CNY",
+            ),
+            clock=_clock(BASE + timedelta(hours=3)),
+        )
+    except Exception as exc:  # noqa: BLE001 — assert the exact fail-closed error
+        raised = exc
+    with SQLiteListingRepository(settings.database_path) as repository:
+        assert repository.count_price_snapshots() == 1
+    active = composition.list_alibaba_tracked()
+    assert len(active) == 1
+    assert active[0].variation.snapshot_count == 1
+    assert active[0].history[0].currency == "USD"
+    assert isinstance(raised, AlibabaFollowError)
+    assert str(raised) == CURRENCY_MISMATCH
 
 
 def test_search_does_not_auto_follow(tmp_path: Path) -> None:
