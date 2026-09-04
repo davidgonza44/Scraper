@@ -34,6 +34,7 @@ MISSING_PRICE = "Este producto no tiene un precio utilizable."
 MISSING_URL = "Este producto no tiene un enlace público."
 MISSING_TITLE = "Este producto no tiene título."
 MISSING_CURRENCY = "No se puede seguir un producto Alibaba sin una moneda explícita."
+CURRENCY_MISMATCH = "No se puede registrar un precio en una moneda distinta a la del seguimiento."
 UNKNOWN_LISTING = "Este producto no está en el seguimiento."
 PERCENT_UNAVAILABLE = "unavailable"
 
@@ -192,12 +193,15 @@ def listing_from_observation(
     observation: AlibabaFollowObservation,
     collected_at: datetime,
 ) -> Listing:
+    currency = explicit_alibaba_currency(observation.currency)
+    if currency is None:
+        raise AlibabaFollowError(MISSING_CURRENCY)
     return Listing(
         source=FOLLOW_SOURCE,
         external_id=observation.product_id,
         title=observation.title,
         price=observation.representative_price,
-        currency=observation.currency,
+        currency=currency,
         url=observation.url,
         query=SearchQuery(observation.query),
         collected_at=collected_at,
@@ -347,11 +351,38 @@ def tracked_product_from_repository(
     )
 
 
+def _existing_tracking_currency(
+    repository: AlibabaTrackingRepository,
+    key: ListingKey,
+) -> str | None:
+    """Return the explicit ISO already persisted for this listing, if any."""
+
+    history = history_from_repository(repository, key)
+    if history is None:
+        return None
+    codes = {
+        explicit_alibaba_currency(item.currency)
+        for item in history.observations
+        if explicit_alibaba_currency(item.currency) is not None
+    }
+    if not codes:
+        return None
+    if len(codes) != 1:
+        raise AlibabaFollowError(CURRENCY_MISMATCH)
+    return next(iter(codes))
+
+
 def _record_observation(
     repository: AlibabaTrackingRepository,
     observation: AlibabaFollowObservation,
     collected_at: datetime,
 ) -> AlibabaTrackedProduct:
+    incoming = explicit_alibaba_currency(observation.currency)
+    if incoming is None:
+        raise AlibabaFollowError(MISSING_CURRENCY)
+    existing = _existing_tracking_currency(repository, alibaba_listing_key(observation.product_id))
+    if existing is not None and existing != incoming:
+        raise AlibabaFollowError(CURRENCY_MISMATCH)
     listing = listing_from_observation(observation, collected_at)
     repository.record_collection(
         CollectionBatch.from_listings(
@@ -434,6 +465,7 @@ class ListAlibabaTracked:
 
 
 __all__ = [
+    "CURRENCY_MISMATCH",
     "FOLLOW_SOURCE",
     "MISSING_CURRENCY",
     "MISSING_PRICE",
