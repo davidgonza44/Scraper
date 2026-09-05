@@ -178,6 +178,102 @@ def test_follow_with_explicit_usd_still_works() -> None:
     assert observation.representative_price == Decimal("1.45")
 
 
+def test_cny_search_row_without_usd_representative_can_be_followed() -> None:
+    """Search leaves representative empty for non-USD rows; published bounds remain usable."""
+
+    observation = observation_from_loaded_row(
+        {
+            "product_id": "1600000000001",
+            "title": "CNY mouse",
+            "url": "https://www.alibaba.com/product-detail/1600000000001.html",
+            "representative": "",
+            "price": "CNY 4.30",
+            "price_min": "4.30",
+            "price_max": "4.30",
+            "currency": "CNY",
+            "supplier_name": "Factory",
+        },
+        "mouse",
+    )
+    assert observation.currency == "CNY"
+    assert observation.representative_price == Decimal("4.30")
+    assert observation.min_price == Decimal("4.30")
+    assert observation.max_price == Decimal("4.30")
+
+
+def test_non_usd_range_follow_uses_published_midpoint() -> None:
+    observation = observation_from_loaded_row(
+        {
+            "product_id": "1600000000002",
+            "title": "EUR mouse",
+            "url": "https://www.alibaba.com/product-detail/1600000000002.html",
+            "representative": "",
+            "price_min": "1.30",
+            "price_max": "1.60",
+            "currency": "EUR",
+        },
+        "mouse",
+    )
+    assert observation.currency == "EUR"
+    assert observation.representative_price == Decimal("1.45")
+    assert observation.min_price == Decimal("1.30")
+    assert observation.max_price == Decimal("1.60")
+
+
+def test_follow_without_representative_or_bounds_is_still_rejected() -> None:
+    with pytest.raises(AlibabaFollowError, match=MISSING_PRICE):
+        observation_from_loaded_row(
+            {
+                "product_id": "1600000000003",
+                "title": "Mouse",
+                "url": "https://www.alibaba.com/product-detail/1600000000003.html",
+                "representative": "",
+                "currency": "CNY",
+            },
+            "mouse",
+        )
+
+
+def test_unusable_representative_does_not_fall_back_to_bounds() -> None:
+    with pytest.raises(AlibabaFollowError, match=MISSING_PRICE):
+        observation_from_loaded_row(
+            {
+                "product_id": "1600000000004",
+                "title": "Mouse",
+                "url": "https://www.alibaba.com/product-detail/1600000000004.html",
+                "representative": "not-a-price",
+                "price_min": "4.30",
+                "price_max": "4.30",
+                "currency": "CNY",
+            },
+            "mouse",
+        )
+
+
+def test_follow_cny_search_row_persists_without_usd_representative(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    composition = ApplicationComposition(settings=settings)
+    row = {
+        "product_id": "1600000000001",
+        "title": "CNY mouse",
+        "url": "https://www.alibaba.com/product-detail/1600000000001.html",
+        "representative": "",
+        "price": "CNY 4.30",
+        "price_min": "4.30",
+        "price_max": "4.30",
+        "currency": "CNY",
+    }
+    tracked = services.follow_alibaba_price(
+        row, "mouse", settings=settings, composition=composition
+    )
+    assert tracked["currency"] == "CNY"
+    assert tracked["last_price"] == "CNY 4.30"
+    assert "$" not in tracked["last_price"]
+    with SQLiteListingRepository(settings.database_path) as repository:
+        assert repository.count_listings() == 1
+        assert repository.count_price_snapshots() == 1
+
+
 def test_range_uses_representative_for_history_and_keeps_bounds(tmp_path: Path) -> None:
     composition = ApplicationComposition(settings=_settings(tmp_path))
     tracked = composition.follow_alibaba_price(_observation(), clock=_clock(BASE))
