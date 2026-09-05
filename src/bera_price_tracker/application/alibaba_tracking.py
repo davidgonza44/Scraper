@@ -11,9 +11,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from types import SimpleNamespace
 from typing import Any, Protocol
 
-from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
+from bera_price_tracker.application.alibaba_statistics import (
+    alibaba_representative_price,
+    explicit_alibaba_currency,
+)
 from bera_price_tracker.application.statistics import calculate_listing_statistics
 from bera_price_tracker.domain import (
     CollectionBatch,
@@ -157,10 +161,31 @@ def _parse_decimal(value: object) -> Decimal | None:
     return parsed
 
 
+def _has_explicit_representative(value: object) -> bool:
+    if value is None:
+        return False
+    return not (isinstance(value, str) and not value.strip())
+
+
+def _follow_price_from_loaded_row(row: Mapping[str, object]) -> Decimal | None:
+    """Use the search representative when present; otherwise published min/max.
+
+    Search rows only populate ``representative`` for USD statistics. Non-USD
+    listings still carry explicit ISO currency plus published bounds.
+    """
+
+    raw = row.get("representative")
+    if _has_explicit_representative(raw):
+        return _parse_decimal(raw)
+    minimum = _parse_decimal(row.get("price_min", row.get("min_price")))
+    maximum = _parse_decimal(row.get("price_max", row.get("max_price")))
+    return alibaba_representative_price(SimpleNamespace(min_price=minimum, max_price=maximum))
+
+
 def observation_from_loaded_row(row: Mapping[str, object], query: str) -> AlibabaFollowObservation:
     """Build a follow observation from already-loaded GUI/search fields only."""
 
-    representative = _parse_decimal(row.get("representative"))
+    representative = _follow_price_from_loaded_row(row)
     if representative is None:
         raise AlibabaFollowError(MISSING_PRICE)
     title = _optional_text(row.get("title"))
