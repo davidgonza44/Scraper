@@ -41,6 +41,7 @@ from enum import StrEnum
 from typing import Protocol
 from urllib.parse import urlsplit
 
+from bera_price_tracker.application.alibaba_statistics import explicit_alibaba_currency
 from bera_price_tracker.application.alibaba_tracking import (
     FOLLOW_SOURCE,
     REFRESH_QUERY_PREFIX,
@@ -402,9 +403,18 @@ def _last_representative(tracked: AlibabaTrackedProduct) -> Decimal | None:
     return None if observation is None else observation.price
 
 
-def _last_currency(tracked: AlibabaTrackedProduct) -> str | None:
-    observation = _last_canonical_observation(tracked)
-    return None if observation is None else observation.currency
+def _history_iso_currencies(tracked: AlibabaTrackedProduct) -> frozenset[str]:
+    """Explicit ISO codes already persisted for this product.
+
+    Provisional discovery snapshots still own the listing currency. A later
+    refresh may establish the canonical baseline, but it must not change ISO.
+    """
+
+    return frozenset(
+        code
+        for item in tracked.history
+        if (code := explicit_alibaba_currency(item.currency)) is not None
+    )
 
 
 def _operation_already_recorded(
@@ -487,8 +497,8 @@ def _item_status_for_record(
     normalized = normalize_refresh_price(record)
     if normalized is None:
         return ProductRefreshStatus.INVALID_PRICE, None, ISO_CURRENCY_REQUIRED
-    last_currency = _last_currency(tracked)
-    if last_currency is not None and last_currency != normalized.currency:
+    persisted = _history_iso_currencies(tracked)
+    if persisted and (len(persisted) != 1 or normalized.currency not in persisted):
         return ProductRefreshStatus.INVALID_PRICE, None, "currency mismatch"
     last_price = _last_representative(tracked)
     if last_price is not None and last_price == normalized.tracking_price:

@@ -487,6 +487,44 @@ def test_currency_mismatch(tmp_path: Path) -> None:
     assert composition.list_alibaba_tracked()[0].history[-1].currency == "USD"
 
 
+def test_refresh_does_not_replace_provisional_usd_follow_with_cny(
+    tmp_path: Path,
+) -> None:
+    """A range follow is provisional, not currency-less.
+
+    Refresh must not persist a different ISO as the first canonical baseline.
+    """
+
+    settings = _settings(tmp_path)
+    composition = ApplicationComposition(settings=settings)
+    composition.follow_alibaba_price(
+        _follow_observation(
+            price=Decimal("3.40"),
+            minimum=Decimal("3.20"),
+            maximum=Decimal("3.60"),
+            display="US $3.20-$3.60",
+        ),
+        clock=_clock(BASE),
+    )
+    provider = FakeAlibabaProductRefreshProvider(
+        [_record(currency="CNY", prices=(Decimal("24.00"), Decimal("20.00")))]
+    )
+    summary = composition.refresh_alibaba_products(
+        ["1600000000000"],
+        operation_id="op-provisional-fx",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+    assert summary.invalid_price == 1
+    assert summary.updated == 0
+    tracked = composition.list_alibaba_tracked()[0]
+    assert tracked.variation.snapshot_count == 1
+    assert [item.currency for item in tracked.history] == ["USD"]
+    assert tracked.history[0].price == Decimal("3.40")
+    with SQLiteListingRepository(settings.database_path) as repository:
+        assert repository.count_price_snapshots() == 1
+
+
 def test_provider_failure(tmp_path: Path) -> None:
     composition = ApplicationComposition(settings=_settings(tmp_path))
     composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
