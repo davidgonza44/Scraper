@@ -770,6 +770,10 @@ def build_alibaba_negotiation_catalog(
             continue
         seen.add(product_id)
         title = str(row.get("title") or product_id)
+        baseline = str(row.get("baseline") or "").strip()
+        has_canonical = str(row.get("has_canonical_baseline") or "").strip()
+        if not has_canonical:
+            has_canonical = "1" if baseline and baseline != "—" else "0"
         catalog.append(
             {
                 "key": f"t:{product_id}",
@@ -784,6 +788,8 @@ def build_alibaba_negotiation_catalog(
                 "moq": "",
                 "representative": "",
                 "currency": str(row.get("currency") or ""),
+                "baseline": baseline,
+                "has_canonical_baseline": has_canonical,
             }
         )
     for row in result_rows:

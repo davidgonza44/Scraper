@@ -817,6 +817,7 @@ class TrackerState(rx.State):
                 "price_min": row.price_min,
                 "price_max": row.price_max,
                 "currency": row.currency,
+                "baseline": row.baseline,
             }
             for row in self.alibaba_tracked_rows
         ]

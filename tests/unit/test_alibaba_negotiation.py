@@ -222,6 +222,27 @@ def test_range_midpoint_is_not_used_as_public() -> None:
     assert MISSING_PUBLIC_PRICE
 
 
+def test_tracked_provisional_midpoint_is_not_used_as_public() -> None:
+    """Follow of a published range stores the discovery midpoint as last_price.
+
+    That midpoint is not a canonical tracking price. Negotiation must not
+    treat it as the public unit price.
+    """
+
+    row = {
+        "source": "tracked",
+        "last_price": "$98.70",
+        "price_min": "89.20",
+        "price_max": "108.20",
+        "currency": "USD",
+        "baseline": "—",
+        "has_canonical_baseline": "0",
+    }
+    assert public_price_from_catalog_row(row) is None
+    with pytest.raises(AlibabaNegotiationError, match="precio comparable"):
+        services.calculate_alibaba_negotiation(row, desired_quantity="40")
+
+
 def test_tracked_canonical_price_is_usable_without_ladder() -> None:
     assert public_price_from_catalog_row(
         {
@@ -230,6 +251,7 @@ def test_tracked_canonical_price_is_usable_without_ladder() -> None:
             "price_min": "89.20",
             "price_max": "108.20",
             "currency": "USD",
+            "has_canonical_baseline": "1",
         }
     ) == Decimal("108.20")
 
@@ -419,6 +441,7 @@ def test_gui_calculate_uses_ladder_and_does_not_call_network() -> None:
             "price_min": "3.50",
             "price_max": "4.30",
             "currency": "USD",
+            "has_canonical_baseline": "1",
         },
         desired_quantity="40",
         ladder_text="1-49:4.30\n50-199:4.00",
@@ -856,6 +879,7 @@ def test_xtracto_usd_normalized_row_still_negotiates() -> None:
         "price_min": Decimal("3.50"),
         "price_max": Decimal("4.30"),
         "currency": "USD",
+        "has_canonical_baseline": "1",
     }
     assert public_price_from_catalog_row(row) == Decimal("4.30")
     plan_row = services.calculate_alibaba_negotiation(row, desired_quantity="40")
@@ -978,6 +1002,67 @@ def test_negotiation_catalog_preserves_explicit_currency() -> None:
     )
     assert catalog[0]["currency"] == "USD"
     assert catalog[1]["currency"] == "CNY"
+
+
+def test_negotiation_catalog_marks_provisional_range_follow() -> None:
+    catalog = services.build_alibaba_negotiation_catalog(
+        [
+            {
+                "product_id": "1601769395876",
+                "title": "Wireless Mouse",
+                "last_price": "$98.70",
+                "price_min": "89.20",
+                "price_max": "108.20",
+                "currency": "USD",
+                "baseline": "—",
+            }
+        ],
+        [],
+    )
+    assert catalog[0]["has_canonical_baseline"] == "0"
+    assert public_price_from_catalog_row(catalog[0]) is None
+
+
+def test_state_provisional_range_follow_cannot_negotiate_midpoint() -> None:
+    from bera_price_tracker.gui.state import AlibabaTrackedRow, TrackerState
+
+    state = TrackerState()
+    state.alibaba_tracked_rows = [
+        AlibabaTrackedRow(
+            product_id="1601769395876",
+            title="Wireless Mouse",
+            last_price="$98.70",
+            price_min="89.20",
+            price_max="108.20",
+            currency="USD",
+            baseline="—",
+            first_price_tag="Discovery",
+        )
+    ]
+    state.set_alibaba_negotiation_product_key("t:1601769395876")
+    state.alibaba_negotiation_quantity = "40"
+    state.calculate_alibaba_negotiation()
+    assert state.alibaba_negotiation_has_plan is False
+    assert "precio comparable" in state.alibaba_negotiation_error
+
+
+def test_negotiation_catalog_marks_canonical_refresh_baseline() -> None:
+    catalog = services.build_alibaba_negotiation_catalog(
+        [
+            {
+                "product_id": "1601769395876",
+                "title": "Wireless Mouse",
+                "last_price": "$108.20",
+                "price_min": "89.20",
+                "price_max": "108.20",
+                "currency": "USD",
+                "baseline": "$108.20",
+            }
+        ],
+        [],
+    )
+    assert catalog[0]["has_canonical_baseline"] == "1"
+    assert public_price_from_catalog_row(catalog[0]) == Decimal("108.20")
 
 
 def test_tier_rejects_non_int_and_inverted_bounds() -> None:

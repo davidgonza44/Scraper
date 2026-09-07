@@ -1210,6 +1210,27 @@ class GenerateNegotiationReply:
         return _reject_unauthorized_draft(self._drafter.draft_counter(context), context)
 
 
+def _canonical_flag(value: object) -> bool:
+    return str(value or "").strip().casefold() in {"1", "true", "yes"}
+
+
+def _has_canonical_tracked_price(
+    row: Mapping[str, object],
+    minimum: Decimal | None,
+    maximum: Decimal | None,
+) -> bool:
+    """True when last_price is a simple price or a confirmed tracking baseline."""
+
+    if minimum is None or maximum is None or minimum == maximum:
+        return True
+    if _canonical_flag(row.get("has_canonical_baseline")):
+        return True
+    baseline = row.get("baseline")
+    if isinstance(baseline, str) and baseline.strip() and baseline.strip() != "—":
+        return True
+    return False
+
+
 def public_price_from_catalog_row(row: Mapping[str, object]) -> Decimal | None:
     """Use a simple or canonical price. Never a discovery range midpoint.
 
@@ -1224,7 +1245,8 @@ def public_price_from_catalog_row(row: Mapping[str, object]) -> Decimal | None:
     maximum = _parse_money(row.get("price_max"))
     source = row.get("source")
     if source == "tracked" and last_price is not None:
-        return last_price
+        if _has_canonical_tracked_price(row, minimum, maximum):
+            return last_price
     if minimum is not None and maximum is not None and minimum == maximum:
         return minimum
     if last_price is not None and (minimum is None or maximum is None or minimum == maximum):
