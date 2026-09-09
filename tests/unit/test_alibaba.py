@@ -2447,6 +2447,43 @@ def test_parse_conflicting_us_dollar_and_iso_markers_remain_invalid() -> None:
         assert currency is None
 
 
+def test_map_conflicting_price_marker_and_currency_field_stays_unknown() -> None:
+    """A separate currency field must not relabel a conflicting price-string ISO.
+
+    memo23 SEARCH authorizes ``US $`` on the raw price field as USD. If a payload
+    also carries ``currency: CNY``, treating 3.20 dollars as yuan (or 28 yuan as
+    dollars) would compute negotiation bounds in the wrong money.
+    """
+
+    usd_marked = map_alibaba_item({"title": "Mouse", "price": "US $3.20", "currency": "CNY"})
+    assert usd_marked is not None
+    assert usd_marked.min_price == Decimal("3.20")
+    assert usd_marked.max_price == Decimal("3.20")
+    assert usd_marked.currency is None
+    assert infer_alibaba_currency(usd_marked) is None
+    usd_stats = calculate_alibaba_price_statistics([usd_marked])
+    assert usd_stats.priced_products == 0
+    assert usd_stats.currency is None
+
+    cny_marked = map_alibaba_item({"title": "Mouse", "price": "CNY 28.00", "currency": "USD"})
+    assert cny_marked is not None
+    assert cny_marked.min_price == Decimal("28.00")
+    assert cny_marked.max_price == Decimal("28.00")
+    assert cny_marked.currency is None
+    assert infer_alibaba_currency(cny_marked) is None
+    mixed_stats = calculate_alibaba_price_statistics([cny_marked])
+    assert mixed_stats.priced_products == 0
+    assert mixed_stats.currency is None
+
+    consistent = map_alibaba_item({"title": "Mouse", "price": "US $3.20", "currency": "USD"})
+    assert consistent is not None
+    assert consistent.currency == "USD"
+
+    field_only = map_alibaba_item({"title": "Mouse", "price": "$3.20", "currency": "USD"})
+    assert field_only is not None
+    assert field_only.currency == "USD"
+
+
 def test_parse_bare_us_prefix_does_not_infer_usd() -> None:
     display, min_price, max_price, currency = parse_alibaba_price("US 3.20")
     assert display == "US 3.20"
