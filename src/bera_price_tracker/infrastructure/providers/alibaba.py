@@ -244,7 +244,10 @@ def map_alibaba_item(raw: object) -> AlibabaProduct | None:
         return None
     price_display, min_price, max_price, currency = parse_alibaba_price(record.get("price"))
     explicit = explicit_alibaba_currency(record.get("currency"))
-    if explicit is not None:
+    if currency is not None and explicit is not None and currency != explicit:
+        # Conflicting ISO evidence is not a currency. Do not pick a winner.
+        currency = None
+    elif explicit is not None:
         currency = explicit
     return AlibabaProduct(
         title=title,
