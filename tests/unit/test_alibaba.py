@@ -2783,8 +2783,9 @@ def test_profitability_ceiling_fails_closed_on_currency_mismatch() -> None:
         rate_usd_per_cbm="800",
         expected_sale_price="10.00",
         target_margin_percent="30",
-        currency="CNY",
+        currency="USD",
     )
+    landed_cny = {**landed_cny, "currency": "CNY"}
     with pytest.raises(LandedCostError, match="moneda"):
         gui_services.apply_alibaba_profitability_ceiling(plan, landed_cny)
     state = TrackerState()

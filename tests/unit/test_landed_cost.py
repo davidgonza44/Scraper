@@ -23,6 +23,7 @@ from bera_price_tracker.application.landed_cost import (
     MISSING_GROSS_WEIGHT,
     MISSING_LOGISTICS_PREFIX,
     MISSING_UNITS_PER_CARTON,
+    UNSUPPORTED_LANDED_CURRENCY,
     CargoPackagingInput,
     ImportOtherCosts,
     LandedCostError,
@@ -357,7 +358,80 @@ def test_boolean_quantity_is_rejected() -> None:
         calculate_landed_cost(_input(quantity=True))
 
 
-def test_gui_landed_row_can_carry_explicit_cny_iso() -> None:
+def test_usd_freight_is_not_added_into_cny_merchandise() -> None:
+    """USD/CBM freight must not be summed into a CNY-labeled landed total."""
+
+    with pytest.raises(LandedCostError, match=UNSUPPORTED_LANDED_CURRENCY):
+        calculate_landed_cost(
+            LandedCostInput(
+                quantity=40,
+                supplier_unit_price=Decimal("4.03"),
+                currency="CNY",
+                packaging=_packaging(),
+                rate=ShippingRateProfile(rate_usd_per_cbm=TEST_RATE),
+            )
+        )
+
+
+def test_usd_freight_is_not_added_into_eur_merchandise() -> None:
+    with pytest.raises(LandedCostError, match=UNSUPPORTED_LANDED_CURRENCY):
+        calculate_landed_cost(
+            LandedCostInput(
+                quantity=40,
+                supplier_unit_price=Decimal("4.03"),
+                currency="EUR",
+                packaging=_packaging(),
+                rate=ShippingRateProfile(rate_usd_per_cbm=TEST_RATE),
+            )
+        )
+
+
+def test_dollar_symbol_is_not_usd_landed_currency() -> None:
+    with pytest.raises(LandedCostError, match=UNSUPPORTED_LANDED_CURRENCY):
+        calculate_landed_cost(
+            LandedCostInput(
+                quantity=40,
+                supplier_unit_price=Decimal("4.03"),
+                currency="$",
+                packaging=_packaging(),
+                rate=ShippingRateProfile(rate_usd_per_cbm=TEST_RATE),
+            )
+        )
+
+
+def test_lowercase_usd_iso_is_accepted_for_landed_cost() -> None:
+    analysis = calculate_landed_cost(
+        LandedCostInput(
+            quantity=40,
+            supplier_unit_price=Decimal("4.03"),
+            currency="usd",
+            packaging=_packaging(),
+            rate=ShippingRateProfile(rate_usd_per_cbm=TEST_RATE),
+        )
+    )
+    assert analysis.currency == "USD"
+    assert analysis.total_landed_cost == Decimal("257.20")
+
+
+def test_gui_landed_cost_rejects_cny_plus_usd_freight() -> None:
+    with pytest.raises(LandedCostError, match=UNSUPPORTED_LANDED_CURRENCY):
+        services.calculate_alibaba_landed_cost(
+            quantity="40",
+            supplier_unit_price="4.03",
+            cartons="2",
+            units_per_carton="20",
+            carton_length_cm="50",
+            carton_width_cm="40",
+            carton_height_cm="30",
+            gross_weight_kg_per_carton="8",
+            rate_usd_per_cbm="800",
+            expected_sale_price="10.00",
+            target_margin_percent="30",
+            currency="CNY",
+        )
+
+
+def test_gui_landed_row_keeps_explicit_usd_iso() -> None:
     row = services.calculate_alibaba_landed_cost(
         quantity="40",
         supplier_unit_price="4.03",
@@ -370,13 +444,11 @@ def test_gui_landed_row_can_carry_explicit_cny_iso() -> None:
         rate_usd_per_cbm="800",
         expected_sale_price="10.00",
         target_margin_percent="30",
-        currency="CNY",
+        currency="USD",
     )
-    assert row["currency"] == "CNY"
+    assert row["currency"] == "USD"
     assert row["max_supplier_raw"] == "4.60"
-    assert row["max_supplier_price"] == "CNY 4.60"
-    assert "$" not in row["max_supplier_price"]
-    assert "$" not in row["landed_cost_per_unit"]
+    assert row["landed_cost_per_unit_raw"] == "6.43"
 
 
 def test_string_and_int_money_inputs_match_decimal_formula() -> None:

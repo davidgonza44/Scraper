@@ -39,6 +39,10 @@ DEFAULT_LANDED_CURRENCY = "USD"
 
 INVALID_LANDED_QUANTITY = "Indica una cantidad mayor que cero."
 INVALID_SUPPLIER_PRICE = "El precio del proveedor no es utilizable."
+UNSUPPORTED_LANDED_CURRENCY = (
+    "El flete está en USD/CBM. No se puede sumar a mercancía en otra moneda "
+    "sin una conversión explícita."
+)
 INVALID_CARGO_RATE = "La tarifa USD/CBM debe ser mayor que cero."
 INVALID_BATTERY_MULTIPLIER = "El multiplicador de batería debe ser mayor que cero."
 INVALID_SURCHARGE = "Un recargo logístico no es utilizable."
@@ -320,11 +324,25 @@ def carton_cbm(
     return volume.quantize(CBM_QUANTUM)
 
 
+def _explicit_landed_iso(value: object) -> str | None:
+    """Return a 3-letter ISO code. Symbols such as ``$`` are not currency."""
+
+    if not isinstance(value, str):
+        return None
+    currency = value.strip().upper()
+    if len(currency) != 3 or not currency.isascii() or not currency.isalpha():
+        return None
+    return currency
+
+
 def calculate_landed_cost(payload: LandedCostInput) -> LandedCostAnalysis:
     """Deterministic landed cost for Venezuela. All Decimal, no network."""
 
     if not isinstance(payload, LandedCostInput):
         raise TypeError("payload must be a LandedCostInput")
+    currency = _explicit_landed_iso(payload.currency)
+    if currency != DEFAULT_LANDED_CURRENCY:
+        raise LandedCostError(UNSUPPORTED_LANDED_CURRENCY)
     if (
         isinstance(payload.quantity, bool)
         or not isinstance(payload.quantity, int)
@@ -398,7 +416,7 @@ def calculate_landed_cost(payload: LandedCostInput) -> LandedCostAnalysis:
 
     return LandedCostAnalysis(
         quantity=payload.quantity,
-        currency=payload.currency,
+        currency=currency,
         merchandise_cost=merchandise_cost,
         carton_cbm=one_carton_cbm,
         total_cbm=total_cbm,
@@ -468,6 +486,7 @@ __all__ = [
     "MISSING_LOGISTICS_PREFIX",
     "MISSING_UNITS_PER_CARTON",
     "PERCENT_QUANTUM",
+    "UNSUPPORTED_LANDED_CURRENCY",
     "WEIGHT_QUANTUM",
     "CargoPackagingInput",
     "ImportOtherCosts",
