@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -800,23 +801,26 @@ def test_analysis_currency_is_used_when_landed_currency_omitted() -> None:
 
 
 def test_cny_analysis_does_not_cap_usd_plan() -> None:
-    analysis = calculate_landed_cost(
-        LandedCostInput(
-            quantity=40,
-            supplier_unit_price=Decimal("4.03"),
-            currency="CNY",
-            packaging=CargoPackagingInput(
-                cartons=2,
-                units_per_carton=20,
-                carton_length_cm=Decimal("50"),
-                carton_width_cm=Decimal("40"),
-                carton_height_cm=Decimal("30"),
-                gross_weight_kg_per_carton=Decimal("8"),
-            ),
-            rate=ShippingRateProfile(rate_usd_per_cbm=Decimal("800")),
-            expected_sale_price_per_unit=Decimal("10.00"),
-            target_margin_percent=Decimal("40"),
-        )
+    analysis = replace(
+        calculate_landed_cost(
+            LandedCostInput(
+                quantity=40,
+                supplier_unit_price=Decimal("4.03"),
+                currency="USD",
+                packaging=CargoPackagingInput(
+                    cartons=2,
+                    units_per_carton=20,
+                    carton_length_cm=Decimal("50"),
+                    carton_width_cm=Decimal("40"),
+                    carton_height_cm=Decimal("30"),
+                    gross_weight_kg_per_carton=Decimal("8"),
+                ),
+                rate=ShippingRateProfile(rate_usd_per_cbm=Decimal("800")),
+                expected_sale_price_per_unit=Decimal("10.00"),
+                target_margin_percent=Decimal("40"),
+            )
+        ),
+        currency="CNY",
     )
     assert analysis.currency == "CNY"
     assert analysis.maximum_supplier_unit_price is not None
