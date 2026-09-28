@@ -419,6 +419,82 @@ def test_failed_landed_calculation_clears_product_provenance() -> None:
     assert state.alibaba_landed_product_id == ""
 
 
+def _two_negotiation_search_products(state: Any) -> None:
+    state.alibaba_results = [
+        AlibabaResultRow(
+            product_id="A",
+            title="Mouse A",
+            price_min="4.30",
+            price_max="4.30",
+            representative="4.30",
+            currency="USD",
+        ),
+        AlibabaResultRow(
+            product_id="B",
+            title="Mouse B",
+            price_min="8.50",
+            price_max="8.50",
+            representative="8.50",
+            currency="USD",
+        ),
+    ]
+
+
+def test_landed_calc_after_product_switch_does_not_keep_previous_provenance() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    _two_negotiation_search_products(state)
+    state.set_alibaba_negotiation_product_key("s:A")
+    state.alibaba_negotiation_quantity = "40"
+    state.calculate_alibaba_negotiation()
+    assert state.alibaba_negotiation_plan_payload["product_id"] == "A"
+    plan_a = dict(state.alibaba_negotiation_plan_payload)
+    state.use_negotiation_values_for_landed_cost()
+    assert state.alibaba_landed_draft_product_id == "A"
+    _fill_valid_landed_inputs(state)
+    state.alibaba_landed_supplier_price = "4.03"
+    state.calculate_alibaba_landed_cost()
+    assert state.alibaba_landed_product_id == "A"
+
+    state.set_alibaba_negotiation_product_key("s:B · leftover")
+    state.alibaba_negotiation_quantity = "40"
+    state.calculate_alibaba_negotiation()
+    assert state.alibaba_negotiation_plan_payload["product_id"] == "B"
+    _fill_valid_landed_inputs(state)
+    state.alibaba_landed_supplier_price = "8.50"
+    state.calculate_alibaba_landed_cost()
+
+    assert state.alibaba_landed_has_result is True
+    assert state.alibaba_landed_product_id == "B"
+    assert state._landed_for_ml_product("A") is None
+    assert state._landed_for_ml_product("B") is not None
+
+    state.alibaba_negotiation_has_plan = True
+    state.alibaba_negotiation_plan_payload = plan_a
+    state.apply_alibaba_profitability_ceiling()
+    assert state.alibaba_negotiation_has_profitability is False
+    assert (
+        state.alibaba_negotiation_profitability_hint
+        == gui_services.ALIBABA_PROFITABILITY_PRODUCT_MISMATCH
+    )
+
+
+def test_landed_calc_uses_selected_product_when_draft_is_stale() -> None:
+    from bera_price_tracker.gui.state import TrackerState
+
+    state = TrackerState()
+    _two_negotiation_search_products(state)
+    state.set_alibaba_negotiation_product_key("s:B")
+    state.alibaba_landed_draft_product_id = "A"
+    _fill_valid_landed_inputs(state)
+    state.alibaba_landed_supplier_price = "8.50"
+    state.calculate_alibaba_landed_cost()
+    assert state.alibaba_landed_has_result is True
+    assert state.alibaba_landed_product_id == "B"
+    assert state._landed_for_ml_product("A") is None
+
+
 def test_query_change_hides_association_without_new_request() -> None:
     from bera_price_tracker.gui.state import TrackerState
 
