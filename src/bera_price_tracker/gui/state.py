@@ -775,7 +775,12 @@ class TrackerState(rx.State):
 
     def set_alibaba_negotiation_product_key(self, value: str) -> None:
         key = value.split(" · ", 1)[0].strip()
+        previous = self.alibaba_negotiation_product_key
         self.alibaba_negotiation_product_key = key
+        if key == previous:
+            return
+        selected = self._selected_negotiation_product()
+        self.alibaba_landed_draft_product_id = str((selected or {}).get("product_id") or "").strip()
 
     def set_alibaba_negotiation_quantity(self, value: str) -> None:
         self.alibaba_negotiation_quantity = value
@@ -1097,7 +1102,9 @@ class TrackerState(rx.State):
         self.alibaba_landed_error = ""
         self.alibaba_landed_has_result = True
         self.alibaba_landed_result = row
-        self.alibaba_landed_product_id = self.alibaba_landed_draft_product_id
+        selected = self._selected_negotiation_product()
+        selected_id = str((selected or {}).get("product_id") or "").strip()
+        self.alibaba_landed_product_id = selected_id or self.alibaba_landed_draft_product_id
 
     def set_alibaba_query(self, value: str) -> None:
         self.alibaba_query = value
