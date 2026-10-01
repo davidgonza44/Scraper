@@ -624,6 +624,7 @@ class TrackerState(rx.State):
     alibaba_negotiation_analysis_decision: str = ""
     alibaba_negotiation_analysis_notes: str = ""
     alibaba_negotiation_is_drafting: bool = False
+    alibaba_negotiation_generation: int = 0
     alibaba_negotiation_plan_payload: dict[str, str] = {}
     alibaba_negotiation_original_ceiling: str = ""
     alibaba_negotiation_profitability_ceiling: str = ""
@@ -841,7 +842,36 @@ class TrackerState(rx.State):
                 return item
         return None
 
+    def _finalize_alibaba_negotiation_draft(
+        self,
+        *,
+        request_generation: int,
+        message: str | None = None,
+        error_message: str | None = None,
+        analysis_row: dict[str, str] | None = None,
+    ) -> None:
+        if request_generation != self.alibaba_negotiation_generation:
+            self.alibaba_negotiation_is_drafting = False
+            return
+        self.alibaba_negotiation_is_drafting = False
+        if error_message is not None:
+            self.alibaba_negotiation_error = error_message
+            return
+        if analysis_row is not None:
+            self.alibaba_negotiation_analysis_summary = analysis_row.get("response_summary", "")
+            self.alibaba_negotiation_analysis_decision = analysis_row.get("decision", "")
+            notes = analysis_row.get("notes", "")
+            quoted = analysis_row.get("quoted_unit_price", "")
+            authorized = analysis_row.get("authorized_price", "")
+            self.alibaba_negotiation_analysis_notes = (
+                f"{notes} Precio citado: {quoted}. Precio autorizado: {authorized}."
+            )
+            return
+        if message is not None:
+            self.alibaba_negotiation_message = message
+
     def _apply_negotiation_plan(self, row: dict[str, str]) -> None:
+        self.alibaba_negotiation_generation += 1
         self.alibaba_negotiation_has_plan = True
         self.alibaba_negotiation_error = ""
         self.alibaba_negotiation_public = row.get("public_unit_price", "")
@@ -880,6 +910,7 @@ class TrackerState(rx.State):
                 ladder_text=self.alibaba_negotiation_ladder,
             )
         except Exception as exc:  # noqa: BLE001 — sanitized before display
+            self.alibaba_negotiation_generation += 1
             self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
             self.alibaba_negotiation_has_plan = False
             return
@@ -929,6 +960,7 @@ class TrackerState(rx.State):
             self.alibaba_negotiation_is_drafting = True
             self.alibaba_negotiation_error = ""
             payload = dict(self.alibaba_negotiation_plan_payload)
+            generation = self.alibaba_negotiation_generation
         try:
             message = await asyncio.to_thread(
                 services.generate_alibaba_negotiation_opening,
@@ -936,12 +968,16 @@ class TrackerState(rx.State):
             )
         except Exception as exc:  # noqa: BLE001 — sanitized before display
             async with self:
-                self.alibaba_negotiation_is_drafting = False
-                self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
+                self._finalize_alibaba_negotiation_draft(
+                    request_generation=generation,
+                    error_message=services.sanitize_alibaba_negotiation_error(exc),
+                )
             return
         async with self:
-            self.alibaba_negotiation_is_drafting = False
-            self.alibaba_negotiation_message = message
+            self._finalize_alibaba_negotiation_draft(
+                request_generation=generation,
+                message=message,
+            )
 
     @rx.event(background=True)
     async def analyze_alibaba_supplier_reply(self) -> None:
@@ -952,6 +988,7 @@ class TrackerState(rx.State):
             self.alibaba_negotiation_error = ""
             payload = dict(self.alibaba_negotiation_plan_payload)
             supplier_text = self.alibaba_negotiation_supplier_text
+            generation = self.alibaba_negotiation_generation
         try:
             analysis_row = await asyncio.to_thread(
                 services.analyze_alibaba_supplier_reply,
@@ -960,18 +997,15 @@ class TrackerState(rx.State):
             )
         except Exception as exc:  # noqa: BLE001 — sanitized before display
             async with self:
-                self.alibaba_negotiation_is_drafting = False
-                self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
+                self._finalize_alibaba_negotiation_draft(
+                    request_generation=generation,
+                    error_message=services.sanitize_alibaba_negotiation_error(exc),
+                )
             return
         async with self:
-            self.alibaba_negotiation_is_drafting = False
-            self.alibaba_negotiation_analysis_summary = analysis_row.get("response_summary", "")
-            self.alibaba_negotiation_analysis_decision = analysis_row.get("decision", "")
-            notes = analysis_row.get("notes", "")
-            quoted = analysis_row.get("quoted_unit_price", "")
-            authorized = analysis_row.get("authorized_price", "")
-            self.alibaba_negotiation_analysis_notes = (
-                f"{notes} Precio citado: {quoted}. Precio autorizado: {authorized}."
+            self._finalize_alibaba_negotiation_draft(
+                request_generation=generation,
+                analysis_row=analysis_row,
             )
 
     @rx.event(background=True)
@@ -983,6 +1017,7 @@ class TrackerState(rx.State):
             self.alibaba_negotiation_error = ""
             payload = dict(self.alibaba_negotiation_plan_payload)
             supplier_text = self.alibaba_negotiation_supplier_text
+            generation = self.alibaba_negotiation_generation
         try:
             message = await asyncio.to_thread(
                 services.generate_alibaba_negotiation_reply,
@@ -991,12 +1026,16 @@ class TrackerState(rx.State):
             )
         except Exception as exc:  # noqa: BLE001 — sanitized before display
             async with self:
-                self.alibaba_negotiation_is_drafting = False
-                self.alibaba_negotiation_error = services.sanitize_alibaba_negotiation_error(exc)
+                self._finalize_alibaba_negotiation_draft(
+                    request_generation=generation,
+                    error_message=services.sanitize_alibaba_negotiation_error(exc),
+                )
             return
         async with self:
-            self.alibaba_negotiation_is_drafting = False
-            self.alibaba_negotiation_message = message
+            self._finalize_alibaba_negotiation_draft(
+                request_generation=generation,
+                message=message,
+            )
 
     def set_alibaba_landed_quantity(self, value: str) -> None:
         self.alibaba_landed_quantity = value
