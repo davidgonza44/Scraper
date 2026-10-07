@@ -424,6 +424,96 @@ def test_inactive_product_is_ignored(tmp_path: Path) -> None:
         assert repository.count_price_snapshots() == 1
 
 
+class _UnfollowDuringRefreshProvider:
+    """Provider stand-in that unfollows after the refresh request is accepted."""
+
+    def __init__(
+        self,
+        unfollow: Callable[[], object],
+        records: Sequence[ProductRefreshRecord],
+    ) -> None:
+        self._unfollow = unfollow
+        self.records = list(records)
+        self.calls: list[list[TrackedAlibabaProduct]] = []
+
+    def refresh_products(self, products: Sequence[TrackedAlibabaProduct]) -> ProductRefreshBatch:
+        self.calls.append(list(products))
+        self._unfollow()
+        return ProductRefreshBatch(records=tuple(self.records))
+
+
+def test_unfollow_during_refresh_does_not_persist_snapshot(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
+    later_price = Decimal("18.00")
+    provider = _UnfollowDuringRefreshProvider(
+        unfollow=lambda: composition.unfollow_alibaba_price("1600000000000"),
+        records=[_record(prices=[later_price, Decimal("12.50")])],
+    )
+
+    summary = composition.refresh_alibaba_products(
+        ["1600000000000"],
+        operation_id="op-unfollow-during-refresh",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+
+    assert provider.calls and [item.product_id for item in provider.calls[0]] == ["1600000000000"]
+    assert summary.updated == 0
+    assert summary.unchanged == 0
+    assert summary.failed == 1
+    assert summary.items[0].status is ProductRefreshStatus.FAILED
+    tracked = composition.list_alibaba_tracked(active_only=False)
+    assert len(tracked) == 1
+    assert tracked[0].is_active is False
+    assert tracked[0].variation.snapshot_count == 1
+    assert tracked[0].variation.last_price == Decimal("15.25")
+    assert all(not item.query.text.startswith("alibaba-refresh:") for item in tracked[0].history)
+    with SQLiteListingRepository(_settings(tmp_path).database_path) as repository:
+        stored = repository.get_listing(ListingKey(MarketplaceSource.ALIBABA, "1600000000000"))
+        assert stored is not None
+        assert stored.is_active is False
+        assert repository.count_price_snapshots() == 1
+
+
+def test_unfollow_during_refresh_persists_only_still_followed_peer(tmp_path: Path) -> None:
+    composition = ApplicationComposition(settings=_settings(tmp_path))
+    composition.follow_alibaba_price(_follow_observation(), clock=_clock(BASE))
+    composition.follow_alibaba_price(
+        _follow_observation(product_id="1600000000001"),
+        clock=_clock(BASE),
+    )
+    provider = _UnfollowDuringRefreshProvider(
+        unfollow=lambda: composition.unfollow_alibaba_price("1600000000000"),
+        records=[
+            _record(prices=[Decimal("18.00"), Decimal("12.50")]),
+            _record(product_id="1600000000001", prices=[Decimal("19.00"), Decimal("13.50")]),
+        ],
+    )
+
+    summary = composition.refresh_alibaba_products(
+        ["1600000000000", "1600000000001"],
+        operation_id="op-unfollow-one-of-batch",
+        clock=_clock(BASE + timedelta(hours=1)),
+        refresh_provider=provider,
+    )
+
+    by_id = {item.product_id: item for item in summary.items}
+    assert by_id["1600000000000"].status is ProductRefreshStatus.FAILED
+    assert by_id["1600000000001"].status is ProductRefreshStatus.UPDATED
+    tracked = {
+        item.product_id: item for item in composition.list_alibaba_tracked(active_only=False)
+    }
+    assert tracked["1600000000000"].is_active is False
+    assert tracked["1600000000000"].variation.snapshot_count == 1
+    assert tracked["1600000000000"].variation.last_price == Decimal("15.25")
+    assert tracked["1600000000001"].is_active is True
+    assert tracked["1600000000001"].variation.snapshot_count == 2
+    assert tracked["1600000000001"].variation.last_price == Decimal("19.00")
+    with SQLiteListingRepository(_settings(tmp_path).database_path) as repository:
+        assert repository.count_price_snapshots() == 3
+
+
 def test_identity_mismatch_does_not_persist(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     composition = ApplicationComposition(settings=settings)

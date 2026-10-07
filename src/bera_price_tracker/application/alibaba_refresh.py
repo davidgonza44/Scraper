@@ -22,7 +22,8 @@ Without ladder:
 
 Identity:
     Persist a snapshot only when returned ``productId`` equals
-    ``Listing.external_id``. No title or supplier matching.
+    ``Listing.external_id``. No title or supplier matching. A product
+    unfollowed after the provider call starts must not receive a snapshot.
 
 Idempotency:
     The collection query is ``alibaba-refresh:{operation_id}``. A second
@@ -650,15 +651,38 @@ class RefreshTrackedAlibabaProducts:
         listings: list[Listing] = []
         if persistable:
             for observation, _status in persistable:
+                try:
+                    key = alibaba_listing_key(observation.product_id)
+                except AlibabaFollowError:
+                    current = None
+                else:
+                    current = self.repository.get_listing(key)
+                if current is None or not current.is_active:
+                    for index, item in enumerate(items):
+                        if item.product_id != observation.product_id:
+                            continue
+                        if item.status not in {
+                            ProductRefreshStatus.UPDATED,
+                            ProductRefreshStatus.UNCHANGED,
+                        }:
+                            continue
+                        items[index] = AlibabaRefreshItemResult(
+                            product_id=observation.product_id,
+                            status=ProductRefreshStatus.FAILED,
+                            message="Producto inactivo.",
+                        )
+                        break
+                    continue
                 listings.append(listing_from_observation(observation, collected_at))
-            self.repository.record_collection(
-                CollectionBatch.from_listings(
-                    source=FOLLOW_SOURCE,
-                    query=operation_query,
-                    collected_at=collected_at,
-                    listings=tuple(listings),
+            if listings:
+                self.repository.record_collection(
+                    CollectionBatch.from_listings(
+                        source=FOLLOW_SOURCE,
+                        query=operation_query,
+                        collected_at=collected_at,
+                        listings=tuple(listings),
+                    )
                 )
-            )
 
         tracked_after = tuple(
             product
