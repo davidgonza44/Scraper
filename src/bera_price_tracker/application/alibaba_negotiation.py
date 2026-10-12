@@ -51,10 +51,12 @@ _EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGN
 _URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
 _PHONE_CANDIDATE_PATTERN = re.compile(r"(?<!\w)\+?\d[\d\s().-]{5,}\d(?!\w)")
 _LADDER_LINE = re.compile(r"^\s*(\d+)\s*(?:-\s*(\d+))?\s*[:=]\s*(\d+(?:\.\d+)?)\s*$")
+_MONEY_AMOUNT = r"(?:\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)"
 _MONEY_PATTERN = re.compile(
-    r"(?:USD\s*)?\$?\s*(\d+(?:\.\d{1,2})?)\s*(?:USD)?",
+    rf"(?:USD\s*)?\$?\s*({_MONEY_AMOUNT})\s*(?:USD)?",
     re.IGNORECASE,
 )
+_INCOMPLETE_GROUPED_AMOUNT = re.compile(r",\d")
 _QTY_PATTERN = re.compile(
     r"(?:moq|min(?:imum)?\s*order|qty|quantity|unidades|units)\s*[:=]?\s*(\d+)",
     re.IGNORECASE,
@@ -802,6 +804,8 @@ def extract_supplier_money(text: str) -> tuple[Decimal, ...]:
     found: list[Decimal] = []
     seen: set[Decimal] = set()
     for match in _MONEY_PATTERN.finditer(text):
+        if _INCOMPLETE_GROUPED_AMOUNT.match(text[match.end() :]):
+            continue
         parsed = _parse_money(match.group(1))
         if parsed is None or parsed in seen:
             continue
