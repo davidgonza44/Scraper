@@ -1951,3 +1951,31 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+def test_thousands_separator_quote_is_not_truncated_to_a_cheap_unit_price() -> None:
+    """Alibaba replies commonly write $1,500. Truncating to $1 would ACCEPT a ceiling breach."""
+
+    assert extract_supplier_money("$1,500") == (Decimal("1500.00"),)
+    assert extract_supplier_money("USD 1,500 per unit") == (Decimal("1500.00"),)
+    assert extract_supplier_money("The best price is $12,000") == (Decimal("12000.00"),)
+    assert extract_supplier_money("$1,500.00") == (Decimal("1500.00"),)
+    parsed = parse_supplier_response("We can do $1,500 per unit")
+    assert parsed.quoted_unit_price == Decimal("1500.00")
+    assert parsed.needs_human_review is False
+    plan = calculate_alibaba_negotiation_plan(_input())
+    analyzed, recommendation = AnalyzeSupplierResponse().execute(plan, "We can do $1,500 per unit")
+    assert analyzed.quoted_unit_price == Decimal("1500.00")
+    assert recommendation.decision is CounterOfferDecision.ABOVE_CEILING
+
+
+def test_grouped_quantity_does_not_become_the_quoted_unit_price() -> None:
+    parsed = parse_supplier_response("MOQ 1,000 units at $4.10")
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+
+
+def test_incomplete_comma_group_is_not_truncated_to_a_unit_price() -> None:
+    parsed = parse_supplier_response("We can do $1,50 per unit")
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
