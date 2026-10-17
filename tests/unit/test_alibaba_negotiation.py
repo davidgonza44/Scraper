@@ -1760,6 +1760,26 @@ def test_integer_usd_and_dollar_amounts_are_prices_not_quantities() -> None:
     assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
 
 
+def test_percentage_discount_is_not_classified_as_unit_price() -> None:
+    """A percent-only reply must not become a below-target ACCEPTABLE quote."""
+
+    plan = calculate_alibaba_negotiation_plan(_input(tiers=(), public=Decimal("10.00")))
+    assert plan.target_price == Decimal("10.00")
+    assert plan.ceiling_price == Decimal("10.00")
+
+    reply = "We can offer 5.5% off for 500 units."
+    assert extract_supplier_money(reply) == ()
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+    quoted = parse_supplier_response("We can do $8.50 (5.5% off) for 500 units.")
+    assert quoted.quoted_unit_price == Decimal("8.50")
+    assert quoted.extracted_prices == (Decimal("8.50"),)
+    assert quoted.needs_human_review is False
+
+
 def test_reference_price_accepts_zero_and_full_proximity() -> None:
     public = Decimal("4.30")
     nxt = Decimal("4.00")
