@@ -112,6 +112,11 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_DURATION_SUFFIX = re.compile(
+    r"^\s*-?\s*(?:working\s+)?(?:days?|weeks?|months?|hours?|years?|"
+    r"d[ií]as?|semanas?|meses?|horas?|a[nñ]os?)\b",
+    re.IGNORECASE,
+)
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,12 +791,15 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, lead-time durations, and bare integers as non-prices."""
 
-    if _QUANTITY_SUFFIX.match(text[match.end() :]):
+    rest = text[match.end() :]
+    if _QUANTITY_SUFFIX.match(rest):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()
+    if not has_money_marker and _DURATION_SUFFIX.match(rest):
+        return True
     has_decimal = "." in match.group(1)
     return not has_money_marker and not has_decimal
 
