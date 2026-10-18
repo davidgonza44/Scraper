@@ -1760,6 +1760,35 @@ def test_integer_usd_and_dollar_amounts_are_prices_not_quantities() -> None:
     assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
 
 
+def test_lead_time_duration_is_not_classified_as_unit_price() -> None:
+    """A duration-only reply must not become a below-target ACCEPTABLE quote."""
+
+    plan = calculate_alibaba_negotiation_plan(_input(tiers=(), public=Decimal("10.00")))
+    assert plan.target_price == Decimal("10.00")
+    assert plan.ceiling_price == Decimal("10.00")
+
+    reply = "Lead time 1.5 months, MOQ 100pcs"
+    assert extract_supplier_money(reply) == ()
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+    assert extract_supplier_money("Lead time 7.5 days") == ()
+    assert extract_supplier_money("Production time 2.5 weeks") == ()
+    assert extract_supplier_money("Lead time 7.5 working days") == ()
+    assert extract_supplier_money("Tiempo de entrega 1.5 meses") == ()
+
+    quoted = parse_supplier_response("Lead time 1.5 months, we can do $8.50")
+    assert quoted.quoted_unit_price == Decimal("8.50")
+    assert quoted.extracted_prices == (Decimal("8.50"),)
+    assert quoted.needs_human_review is False
+
+    allowed = frozenset({Decimal("8.50")})
+    assert unauthorized_prices_in_text("Lead time 1.5 months, we can do $8.50", allowed) == ()
+    assert unauthorized_prices_in_text("Please confirm 1.5 months lead time.", allowed) == ()
+
+
 def test_reference_price_accepts_zero_and_full_proximity() -> None:
     public = Decimal("4.30")
     nxt = Decimal("4.00")
