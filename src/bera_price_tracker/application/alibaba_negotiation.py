@@ -112,6 +112,15 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_RATING_SUFFIX = re.compile(
+    r"^\s*(?:/\s*5(?:\.0+)?\b|(?:stars?|estrellas?|out\s+of\s+5)\b)",
+    re.IGNORECASE,
+)
+_RATING_SCALE_PREFIX = re.compile(
+    r"(?:/|out\s+of)\s*$",
+    re.IGNORECASE,
+)
+_RATING_SCALE_VALUES = frozenset({"5", "5.0", "5.00"})
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,9 +795,14 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, rating scores, and bare integers as not money."""
 
-    if _QUANTITY_SUFFIX.match(text[match.end() :]):
+    rest = text[match.end() :]
+    if _QUANTITY_SUFFIX.match(rest) or _RATING_SUFFIX.match(rest):
+        return True
+    if match.group(1) in _RATING_SCALE_VALUES and _RATING_SCALE_PREFIX.search(
+        text[: match.start()]
+    ):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()

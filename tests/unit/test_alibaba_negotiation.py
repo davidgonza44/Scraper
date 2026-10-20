@@ -1452,6 +1452,38 @@ def test_analyze_without_drafter_parses_supplier_text_in_python() -> None:
     assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
 
 
+def test_rating_score_is_not_extracted_as_unit_price() -> None:
+    assert extract_supplier_money("Quality rating 4.8/5, MOQ 100pcs") == ()
+    assert extract_supplier_money("Rating 4.8/5.0, MOQ 100pcs") == ()
+    assert extract_supplier_money("Our factory rating is 4.9 stars, MOQ 100pcs") == ()
+    assert extract_supplier_money("4.8 out of 5, MOQ 100") == ()
+    assert extract_supplier_money("4.8 out of 5.0") == ()
+    assert extract_supplier_money("Calificación 4.8 estrellas") == ()
+    assert extract_supplier_money("Rating 4.8/5, we can do $4.10") == (Decimal("4.10"),)
+    assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
+
+
+def test_rating_score_does_not_become_an_acceptable_quote() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input(tiers=(), public=Decimal("10.00")))
+    assert plan.target_price == Decimal("10.00")
+    parsed, recommendation = AnalyzeSupplierResponse().execute(
+        plan, "Quality rating 4.8/5, MOQ 100pcs"
+    )
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+
+def test_marked_price_beside_rating_score_is_still_classified() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    parsed, recommendation = AnalyzeSupplierResponse().execute(
+        plan, "Rating 4.8/5, we can do $4.10 per unit"
+    )
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
 def test_unattractive_acceptable_reply_is_still_drafted() -> None:
     plan = calculate_alibaba_negotiation_plan(
         _input(resale=Decimal("5.00"), margin=Decimal("40"), shipping=Decimal("1.00"))
