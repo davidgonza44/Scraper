@@ -1760,6 +1760,40 @@ def test_integer_usd_and_dollar_amounts_are_prices_not_quantities() -> None:
     assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
 
 
+def test_shipping_volume_is_not_classified_as_unit_price() -> None:
+    """A CBM-only reply must not become a below-target ACCEPTABLE quote."""
+
+    plan = calculate_alibaba_negotiation_plan(_input(tiers=(), public=Decimal("10.00")))
+    assert plan.target_price == Decimal("10.00")
+    assert plan.ceiling_price == Decimal("10.00")
+
+    reply = "Carton volume 2.5 CBM, MOQ 100pcs"
+    assert extract_supplier_money(reply) == ()
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+    assert extract_supplier_money("Volume 0.06 CBM per carton") == ()
+    assert extract_supplier_money("2.5cbm, FOB Shenzhen") == ()
+    assert extract_supplier_money("Cargo 2.5 m3, MOQ 100") == ()
+    assert extract_supplier_money("Volumen 2.5 m³") == ()
+    assert extract_supplier_money("Shipping USD 2.5/CBM, MOQ 100") == ()
+    assert extract_supplier_money("CBM: 2.5, MOQ 100pcs") == ()
+    assert extract_supplier_money("2.5 cubic meters, FOB") == ()
+    assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
+
+
+def test_marked_price_beside_shipping_volume_is_still_classified() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    parsed, recommendation = AnalyzeSupplierResponse().execute(
+        plan, "Volume 2.5 CBM, we can do $4.10 per unit"
+    )
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
 def test_reference_price_accepts_zero_and_full_proximity() -> None:
     public = Decimal("4.30")
     nxt = Decimal("4.00")
