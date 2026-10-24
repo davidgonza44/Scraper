@@ -112,6 +112,15 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_TECHNICAL_UNIT_SUFFIX = re.compile(
+    r"^\s*(?:"
+    r"kWh|kW|mAh|Ah|kVA|VA|kV|VAC|VDC|"
+    r"rpm|DPI|GHz|MHz|kHz|Hz|"
+    r"Nm|mm|cm|ml|kg|CBM|HP|"
+    r"V|W|L|g|A"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,9 +795,10 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, technical units, and bare integers as not money."""
 
-    if _QUANTITY_SUFFIX.match(text[match.end() :]):
+    rest = text[match.end() :]
+    if _QUANTITY_SUFFIX.match(rest) or _TECHNICAL_UNIT_SUFFIX.match(rest):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()
