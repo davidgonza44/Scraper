@@ -1951,3 +1951,38 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+@pytest.mark.parametrize(
+    ("reply", "spec_token"),
+    [
+        ("This 18650 cell is 3.7V lithium. Please send your target price.", "3.7V"),
+        ("Capacity is 2.5Ah. Lead time 15 days. Advise your target.", "2.5Ah"),
+        ("Net weight 1.5kg per unit. MOQ 100 pcs, no price yet.", "1.5kg"),
+        ("LED module 12.5W, same quality. Waiting for your offer.", "12.5W"),
+        ("Storage pack 1.5kWh, please advise your target price.", "1.5kWh"),
+    ],
+)
+def test_decimal_technical_units_are_not_supplier_unit_prices(reply: str, spec_token: str) -> None:
+    """Spec-only decimals must not classify ACCEPTABLE below the negotiation target."""
+
+    plan = calculate_alibaba_negotiation_plan(_input())
+    assert spec_token in reply
+    assert extract_supplier_money(reply) == ()
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, reply)
+    assert parsed.quoted_unit_price is None
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+
+def test_marked_price_beside_a_voltage_spec_stays_a_price() -> None:
+    reply = "This cell is 3.7V. We can do $4.15 for 40 units."
+    assert extract_supplier_money(reply) == (Decimal("4.15"),)
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price == Decimal("4.15")
+    assert parsed.needs_human_review is False
+    plan = calculate_alibaba_negotiation_plan(_input())
+    recommendation = classify_supplier_price(parsed.quoted_unit_price, plan.bounds)
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
