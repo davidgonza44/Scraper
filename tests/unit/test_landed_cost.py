@@ -292,6 +292,63 @@ def test_gui_service_returns_display_row() -> None:
     assert row["landed_cost_per_unit_raw"] == "6.43"
 
 
+def test_gui_spanish_decimal_comma_does_not_inflate_landed_money() -> None:
+    """Spanish forms use 4,03 not 4.03. Stripping the comma would 100x the price."""
+
+    period = services.calculate_alibaba_landed_cost(
+        quantity="40",
+        supplier_unit_price="4.03",
+        cartons="2",
+        units_per_carton="20",
+        carton_length_cm="50.5",
+        carton_width_cm="40.5",
+        carton_height_cm="30.5",
+        gross_weight_kg_per_carton="8.5",
+        rate_usd_per_cbm="800",
+        insurance="1.50",
+        expected_sale_price="10.00",
+        target_margin_percent="30",
+    )
+    comma = services.calculate_alibaba_landed_cost(
+        quantity="40",
+        supplier_unit_price="4,03",
+        cartons="2",
+        units_per_carton="20",
+        carton_length_cm="50,5",
+        carton_width_cm="40,5",
+        carton_height_cm="30,5",
+        gross_weight_kg_per_carton="8,5",
+        rate_usd_per_cbm="800",
+        insurance="1,50",
+        expected_sale_price="10,00",
+        target_margin_percent="30",
+    )
+    assert comma["merchandise_cost"] == period["merchandise_cost"] == "$161.20"
+    assert comma["total_cbm"] == period["total_cbm"]
+    assert comma["shipping_total"] == period["shipping_total"]
+    assert comma["total_landed_cost"] == period["total_landed_cost"]
+    assert comma["landed_cost_per_unit"] == period["landed_cost_per_unit"]
+    assert comma["max_supplier_price"] == period["max_supplier_price"]
+    assert comma["unattractive"] == "0"
+
+
+def test_gui_thousands_comma_still_means_one_thousand_five_hundred() -> None:
+    row = services.calculate_alibaba_landed_cost(
+        quantity="40",
+        supplier_unit_price="4.03",
+        cartons="2",
+        units_per_carton="20",
+        carton_length_cm="50",
+        carton_width_cm="40",
+        carton_height_cm="30",
+        gross_weight_kg_per_carton="8",
+        rate_usd_per_cbm="800",
+        insurance="1,500",
+    )
+    assert row["shipping_surcharges"] == "$1500.00"
+    assert row["shipping_total"] == "$1596.00"
+
+
 def test_gui_service_battery_and_confirmed_quote() -> None:
     row = services.calculate_alibaba_landed_cost(
         quantity="40",

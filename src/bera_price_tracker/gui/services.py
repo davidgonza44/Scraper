@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
@@ -18,6 +19,8 @@ from bera_price_tracker.gui.display import as_decimal, format_price, is_valid_pr
 from bera_price_tracker.gui.images import safe_public_image_url
 
 logger = logging.getLogger(__name__)
+
+_FORM_DECIMAL_COMMA = re.compile(r"^(\d+),(\d{1,2})$")
 
 UNAVAILABLE_USER_MESSAGE = "Facebook Marketplace no está disponible temporalmente."
 GENERIC_USER_MESSAGE = "No se pudo consultar Facebook Marketplace."
@@ -719,16 +722,33 @@ def sanitize_alibaba_negotiation_error(exc: BaseException) -> str:
     return ALIBABA_NEGOTIATION_GENERIC_ERROR
 
 
+def _parse_form_decimal(value: str) -> Decimal | None:
+    """Parse a GUI amount. Spanish ``4,03`` is 4.03; ``1,500`` stays 1500."""
+
+    compact = value.strip().replace("$", "").replace(" ", "")
+    if not compact:
+        return None
+    decimal_comma = _FORM_DECIMAL_COMMA.fullmatch(compact)
+    if decimal_comma is not None:
+        compact = f"{decimal_comma.group(1)}.{decimal_comma.group(2)}"
+    else:
+        compact = compact.replace(",", "")
+    try:
+        parsed = Decimal(compact)
+    except InvalidOperation:
+        return None
+    if not parsed.is_finite():
+        return None
+    return parsed
+
+
 def _optional_form_money(value: object) -> Decimal | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value.strip():
         return None
-    try:
-        parsed = Decimal(value.strip().replace(",", "").replace("$", ""))
-    except InvalidOperation:
-        return None
-    if not parsed.is_finite() or parsed <= Decimal("0"):
+    parsed = _parse_form_decimal(value)
+    if parsed is None or parsed <= Decimal("0"):
         return None
     return parsed
 
@@ -1094,11 +1114,8 @@ def _zero_or_form_money(value: object, message: str) -> Decimal:
         return Decimal("0")
     if not isinstance(value, str):
         raise LandedCostError(message)
-    try:
-        parsed = Decimal(value.strip().replace(",", "").replace("$", ""))
-    except InvalidOperation:
-        raise LandedCostError(message) from None
-    if not parsed.is_finite() or parsed < Decimal("0"):
+    parsed = _parse_form_decimal(value)
+    if parsed is None or parsed < Decimal("0"):
         raise LandedCostError(message)
     return parsed
 
