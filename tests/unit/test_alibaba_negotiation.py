@@ -408,6 +408,31 @@ def test_zero_quantity_is_rejected() -> None:
         calculate_alibaba_negotiation_plan(_input(quantity=0, tiers=()))
 
 
+def test_gui_spanish_decimal_comma_resale_does_not_become_a_thousand() -> None:
+    row = {
+        "product_id": "1601763520797",
+        "title": "Wireless Mouse",
+        "source": "search",
+        "price_min": "4.30",
+        "price_max": "4.30",
+        "currency": "USD",
+    }
+    period = services.calculate_alibaba_negotiation(
+        row,
+        desired_quantity="40",
+        expected_resale_price="10.00",
+        target_margin_percent="30",
+    )
+    comma = services.calculate_alibaba_negotiation(
+        row,
+        desired_quantity="40",
+        expected_resale_price="10,00",
+        target_margin_percent="30",
+    )
+    assert comma["expected_resale_price"] == period["expected_resale_price"] == "10.00"
+    assert comma["ceiling_price"] == period["ceiling_price"]
+
+
 def test_gui_calculate_uses_ladder_and_does_not_call_network() -> None:
     row = services.calculate_alibaba_negotiation(
         {
