@@ -1951,3 +1951,41 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+def test_decimal_comma_usd_suffix_is_not_the_fractional_part_as_dollars() -> None:
+    """Spanish replies write 4,10 USD. Taking 10 USD would reject a negotiable quote."""
+
+    assert extract_supplier_money("Nuestra oferta es 4,10 USD por unidad") == (Decimal("4.10"),)
+    assert extract_supplier_money("podemos hacer 4,03 usd") == (Decimal("4.03"),)
+    assert extract_supplier_money("Precio unitario: 4,03USD") == (Decimal("4.03"),)
+    parsed = parse_supplier_response("Nuestra oferta es 4,10 USD por unidad")
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+    plan = calculate_alibaba_negotiation_plan(_input())
+    analyzed, recommendation = AnalyzeSupplierResponse().execute(
+        plan, "Nuestra oferta es 4,10 USD por unidad"
+    )
+    assert analyzed.quoted_unit_price == Decimal("4.10")
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
+def test_decimal_comma_usd_prefix_is_not_truncated_to_the_integer() -> None:
+    """USD 4,10 truncated to 4.00 would ACCEPT a quote that is actually NEGOTIABLE."""
+
+    assert extract_supplier_money("USD 4,10 per unit") == (Decimal("4.10"),)
+    parsed = parse_supplier_response("USD 4,10 per unit")
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+    plan = calculate_alibaba_negotiation_plan(_input())
+    analyzed, recommendation = AnalyzeSupplierResponse().execute(plan, "USD 4,10 per unit")
+    assert analyzed.quoted_unit_price == Decimal("4.10")
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
+def test_period_usd_quotes_remain_unchanged() -> None:
+    assert extract_supplier_money("We can do 4.10 USD per unit") == (Decimal("4.10"),)
+    assert extract_supplier_money("USD 4.10 per unit") == (Decimal("4.10"),)
+    parsed = parse_supplier_response("We can do 4.10 USD per unit")
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
