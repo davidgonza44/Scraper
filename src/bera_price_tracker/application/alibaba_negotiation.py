@@ -55,6 +55,14 @@ _MONEY_PATTERN = re.compile(
     r"(?:USD\s*)?\$?\s*(\d+(?:\.\d{1,2})?)\s*(?:USD)?",
     re.IGNORECASE,
 )
+_DECIMAL_COMMA_BEFORE_USD = re.compile(
+    r"(?<!\d)(\d+),(\d{1,2})(?=\s*USD\b)",
+    re.IGNORECASE,
+)
+_USD_PREFIX_DECIMAL_COMMA = re.compile(
+    r"\b(USD\s+)(\d+),(\d{1,2})(?!\d)",
+    re.IGNORECASE,
+)
 _QTY_PATTERN = re.compile(
     r"(?:moq|min(?:imum)?\s*order|qty|quantity|unidades|units)\s*[:=]?\s*(\d+)",
     re.IGNORECASE,
@@ -796,16 +804,29 @@ def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
     return not has_money_marker and not has_decimal
 
 
+def _normalize_decimal_comma_usd(text: str) -> str:
+    """Rewrite ``4,10 USD`` / ``USD 4,10`` as period decimals.
+
+    Spanish supplier replies use a decimal comma. The money matcher would
+    otherwise treat ``10 USD`` or ``USD 4`` as the unit price. Thousands
+    groups such as ``$1,500`` are left unchanged.
+    """
+
+    rewritten = _DECIMAL_COMMA_BEFORE_USD.sub(r"\1.\2", text)
+    return _USD_PREFIX_DECIMAL_COMMA.sub(r"\1\2.\3", rewritten)
+
+
 def extract_supplier_money(text: str) -> tuple[Decimal, ...]:
     """Unique unit-price candidates found in pasted supplier text."""
 
+    normalized = _normalize_decimal_comma_usd(text)
     found: list[Decimal] = []
     seen: set[Decimal] = set()
-    for match in _MONEY_PATTERN.finditer(text):
+    for match in _MONEY_PATTERN.finditer(normalized):
         parsed = _parse_money(match.group(1))
         if parsed is None or parsed in seen:
             continue
-        if _looks_like_quantity(match, text):
+        if _looks_like_quantity(match, normalized):
             continue
         seen.add(parsed)
         found.append(parsed)
