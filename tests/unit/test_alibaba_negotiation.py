@@ -1760,6 +1760,41 @@ def test_integer_usd_and_dollar_amounts_are_prices_not_quantities() -> None:
     assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
 
 
+@pytest.mark.parametrize(
+    ("reply", "spec_token"),
+    [
+        ("Yes Bluetooth 5.3 available, MOQ 100pcs. Waiting for your price.", "5.3"),
+        ("This is USB 3.0 version, please send your target.", "3.0"),
+        ("HDMI 2.1 port ready. Advise your target price.", "2.1"),
+        ("PCIe 4.0 interface, same quality. Waiting for your offer.", "4.0"),
+        ("We upgraded to version 2.0 of the board. Please send your target.", "2.0"),
+        ("USB2.0 interface, waiting for offer.", "2.0"),
+    ],
+)
+def test_protocol_version_specs_are_not_supplier_unit_prices(reply: str, spec_token: str) -> None:
+    """Interface versions must not classify ACCEPTABLE below the negotiation target."""
+
+    plan = calculate_alibaba_negotiation_plan(_input(tiers=(), public=Decimal("10.00")))
+    assert plan.target_price == Decimal("10.00")
+    assert spec_token in reply
+    assert extract_supplier_money(reply) == ()
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+
+def test_marked_price_beside_a_bluetooth_version_stays_a_price() -> None:
+    reply = "We can do $4.15 Bluetooth 5.3 for 40 units."
+    assert extract_supplier_money(reply) == (Decimal("4.15"),)
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price == Decimal("4.15")
+    assert parsed.needs_human_review is False
+    plan = calculate_alibaba_negotiation_plan(_input())
+    recommendation = classify_supplier_price(parsed.quoted_unit_price, plan.bounds)
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
 def test_reference_price_accepts_zero_and_full_proximity() -> None:
     public = Decimal("4.30")
     nxt = Decimal("4.00")
