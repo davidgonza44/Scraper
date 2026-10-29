@@ -112,6 +112,10 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_PROTOCOL_VERSION_PREFIX = re.compile(
+    r"(?:^|(?<=\W))(?:bluetooth|ble|wi-?fi|usb|hdmi|pci-?e|sata|nvme|version|ver\.?|v)\s*-?\s*$",
+    re.IGNORECASE,
+)
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,12 +790,15 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, protocol versions, and bare integers as non-prices."""
 
-    if _QUANTITY_SUFFIX.match(text[match.end() :]):
+    rest = text[match.end() :]
+    if _QUANTITY_SUFFIX.match(rest):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()
+    if not has_money_marker and _PROTOCOL_VERSION_PREFIX.search(text[: match.start()]):
+        return True
     has_decimal = "." in match.group(1)
     return not has_money_marker and not has_decimal
 
