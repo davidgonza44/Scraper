@@ -1760,6 +1760,41 @@ def test_integer_usd_and_dollar_amounts_are_prices_not_quantities() -> None:
     assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
 
 
+def test_dotted_delivery_dates_are_not_supplier_unit_prices() -> None:
+    """A date-only reply must not classify ACCEPTABLE against nearby bounds."""
+
+    plan = calculate_alibaba_negotiation_plan(
+        _input(
+            public=Decimal("16.00"),
+            tiers=(
+                NegotiationTier(min_quantity=1, max_quantity=None, unit_price=Decimal("16.00")),
+            ),
+        )
+    )
+    assert plan.target_price == Decimal("16.00")
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, "We can deliver 15.11")
+    assert parsed.quoted_unit_price is None
+    assert parsed.extracted_prices == ()
+    assert parsed.needs_human_review is True
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+    october = parse_supplier_response("Delivery 4.10")
+    assert october.quoted_unit_price is None
+    assert october.needs_human_review is True
+    short_year = parse_supplier_response("ETA 15.11.26")
+    assert short_year.quoted_unit_price is None
+    assert "15.11" not in {str(amount) for amount in short_year.extracted_prices}
+    spanish = parse_supplier_response("Fecha de entrega 15.11")
+    assert spanish.quoted_unit_price is None
+
+    priced = parse_supplier_response("We can do $4.10, deliver 15.11")
+    assert priced.quoted_unit_price == Decimal("4.10")
+    assert priced.needs_human_review is False
+    assert parse_supplier_response("Delivery $4.10").quoted_unit_price == Decimal("4.10")
+    assert parse_supplier_response("ETA $10.12").quoted_unit_price == Decimal("10.12")
+    assert extract_supplier_money("We can do 4.10") == (Decimal("4.10"),)
+
+
 def test_reference_price_accepts_zero_and_full_proximity() -> None:
     public = Decimal("4.30")
     nxt = Decimal("4.00")
