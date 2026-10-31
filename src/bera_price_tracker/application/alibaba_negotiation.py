@@ -112,6 +112,13 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_DATE_PREFIX = re.compile(
+    r"\b(?:date|delivery|deliver|eta|etd|fecha|entrega|llegada|despacho|"
+    r"dispatch|arrival|arriving|deadline)\s*[:\-]?\s*$",
+    re.IGNORECASE,
+)
+_DATE_TRAILING_YEAR = re.compile(r"^\.\d{2,4}\b")
+_YEAR_LIKE_INTEGER = re.compile(r"^(?:19|20)\d{2}$")
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,12 +793,20 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, dates, and bare integers as units, not USD amounts."""
 
     if _QUANTITY_SUFFIX.match(text[match.end() :]):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()
+    if not has_money_marker:
+        if _DATE_TRAILING_YEAR.match(text[match.end() :]):
+            return True
+        if _DATE_PREFIX.search(text[: match.start()]):
+            return True
+        integer_part = match.group(1).split(".", 1)[0]
+        if _YEAR_LIKE_INTEGER.fullmatch(integer_part):
+            return True
     has_decimal = "." in match.group(1)
     return not has_money_marker and not has_decimal
 
