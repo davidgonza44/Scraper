@@ -112,6 +112,10 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_PACK_DENOMINATOR = re.compile(
+    r"^\s*(?:/\s*\d+|\b(?:per|por)\s+\d+)",
+    re.IGNORECASE,
+)
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,9 +790,14 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, pack lots, and bare integers as units, not prices.
 
-    if _QUANTITY_SUFFIX.match(text[match.end() :]):
+    ``$1.50/1000 pcs`` and ``$1.50 per 1000 pieces`` are lot quotes, not a
+    unit price of 1.50. ``$1.50/pc`` and ``$1.50 per unit`` stay unit prices.
+    """
+
+    rest = text[match.end() :]
+    if _QUANTITY_SUFFIX.match(rest) or _PACK_DENOMINATOR.match(rest):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()

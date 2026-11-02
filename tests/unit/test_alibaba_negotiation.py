@@ -1932,6 +1932,41 @@ def test_counter_payload_keeps_authorized_counter_instruction() -> None:
     assert "authorized_counter_offer" in instruction
 
 
+def test_per_thousand_pack_quote_is_not_a_unit_price() -> None:
+    quotes = (
+        "Our best price is $1.50/1000 pcs",
+        "USD 1.50/1000pcs",
+        "$1.50 / 1000 pieces",
+        "Best price $1.50 per 1000 pieces",
+        "Precio $1.50 por 1000 unidades",
+    )
+    for text in quotes:
+        parsed = parse_supplier_response(text)
+        assert parsed.quoted_unit_price is None, text
+        assert parsed.needs_human_review is True, text
+        assert Decimal("1.50") not in parsed.extracted_prices, text
+
+
+def test_per_thousand_pack_quote_does_not_classify_acceptable() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input(tiers=(), public=Decimal("2.00")))
+    assert plan.target_price == Decimal("2.00")
+    parsed, recommendation = AnalyzeSupplierResponse().execute(
+        plan, "Our best price is $1.50/1000 pcs"
+    )
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+
+def test_true_unit_prices_are_still_extracted_beside_pack_denominators() -> None:
+    assert extract_supplier_money("$1.50 per unit") == (Decimal("1.50"),)
+    assert extract_supplier_money("$1.50/pc") == (Decimal("1.50"),)
+    assert extract_supplier_money("$1.50/pcs") == (Decimal("1.50"),)
+    parsed = parse_supplier_response("We can do $1.50 per unit")
+    assert parsed.quoted_unit_price == Decimal("1.50")
+    assert parsed.needs_human_review is False
+
+
 def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     plan = calculate_alibaba_negotiation_plan(_input())
     parsed = parse_supplier_response("We can do $4.05 for 40 units.")
