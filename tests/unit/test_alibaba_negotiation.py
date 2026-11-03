@@ -1951,3 +1951,23 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+def test_metric_thread_pitch_is_not_a_supplier_unit_price() -> None:
+    text = "Standard thread is M10x1.5, lead time 15 days"
+    assert extract_supplier_money(text) == ()
+    parsed = parse_supplier_response(text)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert parsed.extracted_prices == ()
+
+    plan = calculate_alibaba_negotiation_plan(_input())
+    _parsed, recommendation = AnalyzeSupplierResponse().execute(plan, text)
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+    quoted = parse_supplier_response("M10x1.5, we can do $4.10 per unit")
+    assert quoted.quoted_unit_price == Decimal("4.10")
+    assert quoted.needs_human_review is False
+    assert classify_supplier_price(quoted.quoted_unit_price, plan.bounds).decision is (
+        CounterOfferDecision.NEGOTIABLE
+    )
