@@ -112,6 +112,7 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_THREAD_PITCH_PREFIX = re.compile(r"\bM\d{1,2}\s*[xX×]\s*$")
 
 
 class AlibabaNegotiationError(ValueError):
@@ -789,6 +790,8 @@ def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
     """Treat quantity words and bare integers as units, not USD amounts."""
 
     if _QUANTITY_SUFFIX.match(text[match.end() :]):
+        return True
+    if _THREAD_PITCH_PREFIX.search(text[: match.start()]):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()
