@@ -1951,3 +1951,32 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+def test_hs_codes_are_not_supplier_unit_prices() -> None:
+    hs_only = "Dear buyer, HS code is 8471.30. Lead time 15 days. Please confirm quantity."
+    assert extract_supplier_money(hs_only) == ()
+    parsed = parse_supplier_response(hs_only)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert parsed.extracted_prices == ()
+
+    for text in (
+        "HTS code 8504.40 for this inverter.",
+        "NCM 8471.30.12 as requested.",
+        "Tariff code: 8471.30. Please advise.",
+        "Customs code 8471.30, waiting for your PO.",
+        "H.S. code 8471.30 available from stock.",
+    ):
+        assert extract_supplier_money(text) == (), text
+
+    with_price = "HS code 8471.30. Unit price $4.50 FOB."
+    assert extract_supplier_money(with_price) == (Decimal("4.50"),)
+    assert extract_supplier_money("promo code 4.50") == (Decimal("4.50"),)
+
+    expensive = calculate_alibaba_negotiation_plan(
+        _input(quantity=2, tiers=(), public=Decimal("12000.00"))
+    )
+    _parsed, recommendation = AnalyzeSupplierResponse().execute(expensive, hs_only)
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+    assert recommendation.authorized_price is None
