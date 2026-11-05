@@ -112,6 +112,10 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_THOUSANDS_ABBREV_SUFFIX = re.compile(
+    r"^\s*k(?:ilo)?\b",
+    re.IGNORECASE,
+)
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,9 +790,15 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, k-thousands abbreviations, and bare integers as not money.
 
-    if _QUANTITY_SUFFIX.match(text[match.end() :]):
+    ``2.5k USD`` and ``$5k`` are magnitude abbreviations, not $2.50 / $5.00.
+    They must not classify as a unit price. ``kW`` / ``kg`` / ``kHz`` stay
+    intact because ``k`` is not a whole word there.
+    """
+
+    rest = text[match.end() :]
+    if _QUANTITY_SUFFIX.match(rest) or _THOUSANDS_ABBREV_SUFFIX.match(rest):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()

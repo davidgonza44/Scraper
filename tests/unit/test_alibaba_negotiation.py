@@ -1951,3 +1951,40 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    (
+        "We can offer 2.5k USD per unit FOB Shenzhen. Please confirm.",
+        "Best price is $2.5k per unit.",
+        "USD 2.5k /pc, MOQ 100.",
+        "The unit price is 1.5k.",
+        "$5k per set, lead time 20 days.",
+    ),
+)
+def test_thousands_k_abbreviation_is_not_a_unit_price(reply: str) -> None:
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert Decimal("2.50") not in parsed.extracted_prices
+    assert Decimal("1.50") not in parsed.extracted_prices
+    assert Decimal("5.00") not in parsed.extracted_prices
+
+
+def test_thousands_k_abbreviation_does_not_classify_acceptable() -> None:
+    plan = calculate_alibaba_negotiation_plan(_input())
+    parsed, recommendation = AnalyzeSupplierResponse().execute(
+        plan,
+        "We can offer 2.5k USD per unit FOB Shenzhen. Please confirm.",
+    )
+    assert parsed.quoted_unit_price is None
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+    assert Decimal("2.50") not in parsed.extracted_prices
+
+
+def test_marked_two_decimal_price_is_still_extracted_beside_k_quantity() -> None:
+    parsed = parse_supplier_response("MOQ 2.5k pcs, we can do $4.10 per unit.")
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    assert parsed.needs_human_review is False
+    assert Decimal("2.50") not in parsed.extracted_prices
