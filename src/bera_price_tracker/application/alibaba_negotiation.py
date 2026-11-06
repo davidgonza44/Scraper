@@ -112,6 +112,14 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_PROPERTY_CLASS_PREFIX = re.compile(
+    r"(?:property\s+class|\bgrade|\bclass)\s*$",
+    re.IGNORECASE,
+)
+_PROPERTY_CLASS_SUFFIX = re.compile(
+    r"^\s*(?:grade|class)\b",
+    re.IGNORECASE,
+)
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,14 +794,24 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, fastener property classes, and bare integers as not money.
 
-    if _QUANTITY_SUFFIX.match(text[match.end() :]):
+    Metric property classes such as ``Grade 8.8`` / ``Class 10.9`` / ``12.9``
+    are material specs, not unit prices. Marked ``$`` / ``USD`` amounts still
+    extract as prices.
+    """
+
+    rest = text[match.end() :]
+    if _QUANTITY_SUFFIX.match(rest):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()
+    if has_money_marker:
+        return False
+    if _PROPERTY_CLASS_SUFFIX.match(rest) or _PROPERTY_CLASS_PREFIX.search(text[: match.start()]):
+        return True
     has_decimal = "." in match.group(1)
-    return not has_money_marker and not has_decimal
+    return not has_decimal
 
 
 def extract_supplier_money(text: str) -> tuple[Decimal, ...]:
