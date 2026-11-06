@@ -1951,3 +1951,57 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    (
+        "We can supply Grade 8.8 carbon steel bolts. Please advise your target price.",
+        "Material is Class 10.9, MOQ 1000 pcs, no unit price yet.",
+        "Property class 12.9 hex bolts, lead time 15 days.",
+        "These are 8.8 grade fasteners. Send your target.",
+        "Available in 10.9 class only. Waiting for your offer.",
+    ),
+)
+def test_metric_property_class_is_not_a_unit_price(reply: str) -> None:
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert Decimal("8.80") not in parsed.extracted_prices
+    assert Decimal("10.90") not in parsed.extracted_prices
+    assert Decimal("12.90") not in parsed.extracted_prices
+
+
+def test_metric_property_class_does_not_classify_acceptable() -> None:
+    plan = calculate_alibaba_negotiation_plan(
+        _input(tiers=(), public=Decimal("12.00"), quantity=1000)
+    )
+    parsed, recommendation = AnalyzeSupplierResponse().execute(
+        plan,
+        "We can supply Grade 8.8 carbon steel bolts. Please advise your target price.",
+    )
+    assert parsed.quoted_unit_price is None
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+    assert Decimal("8.80") not in parsed.extracted_prices
+
+
+def test_marked_price_beside_a_property_class_stays_a_price() -> None:
+    parsed = parse_supplier_response("Grade 8.8 bolts. We can do $4.15 for 40 units.")
+    assert parsed.quoted_unit_price == Decimal("4.15")
+    assert parsed.needs_human_review is False
+    assert Decimal("8.80") not in parsed.extracted_prices
+    plan = calculate_alibaba_negotiation_plan(_input())
+    recommendation = classify_supplier_price(parsed.quoted_unit_price, plan.bounds)
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
+def test_unmarked_decimal_price_is_not_treated_as_a_property_class() -> None:
+    parsed = parse_supplier_response("We can do 8.80 per unit.")
+    assert parsed.quoted_unit_price == Decimal("8.80")
+    assert parsed.needs_human_review is False
+
+
+def test_marked_price_immediately_after_grade_stays_a_price() -> None:
+    parsed = parse_supplier_response("Grade $8.80 per unit for these bolts.")
+    assert parsed.quoted_unit_price == Decimal("8.80")
+    assert parsed.needs_human_review is False
