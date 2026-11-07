@@ -1951,3 +1951,56 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    (
+        "This is 1.5 ton split AC, R410A. Please advise your target price.",
+        "Cooling capacity 2.5 tons, MOQ 50 pcs, no unit price yet.",
+        "1.5 tonne hoist, lead time 15 days. Send your target.",
+        "Capacidad 1.5 toneladas, esperamos su precio objetivo.",
+        "Available in 1.5 ton only. Waiting for your offer.",
+    ),
+)
+def test_tonnage_capacity_is_not_a_unit_price(reply: str) -> None:
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    assert Decimal("1.50") not in parsed.extracted_prices
+    assert Decimal("2.50") not in parsed.extracted_prices
+
+
+def test_tonnage_capacity_does_not_classify_acceptable() -> None:
+    plan = calculate_alibaba_negotiation_plan(
+        _input(tiers=(), public=Decimal("180.00"), quantity=50)
+    )
+    parsed, recommendation = AnalyzeSupplierResponse().execute(
+        plan,
+        "This is 1.5 ton split AC, R410A. Please advise your target price.",
+    )
+    assert parsed.quoted_unit_price is None
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+    assert Decimal("1.50") not in parsed.extracted_prices
+
+
+def test_marked_price_beside_tonnage_capacity_stays_a_price() -> None:
+    parsed = parse_supplier_response("1.5 ton split AC. We can do $4.15 for 40 units.")
+    assert parsed.quoted_unit_price == Decimal("4.15")
+    assert parsed.needs_human_review is False
+    assert Decimal("1.50") not in parsed.extracted_prices
+    plan = calculate_alibaba_negotiation_plan(_input())
+    recommendation = classify_supplier_price(parsed.quoted_unit_price, plan.bounds)
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
+def test_unmarked_decimal_price_is_not_treated_as_tonnage() -> None:
+    parsed = parse_supplier_response("We can do 1.50 per unit.")
+    assert parsed.quoted_unit_price == Decimal("1.50")
+    assert parsed.needs_human_review is False
+
+
+def test_marked_price_immediately_after_ton_stays_a_price() -> None:
+    parsed = parse_supplier_response("Capacity ton $1.50 per unit for this hoist.")
+    assert parsed.quoted_unit_price == Decimal("1.50")
+    assert parsed.needs_human_review is False
