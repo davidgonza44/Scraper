@@ -1951,3 +1951,30 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+def test_plus_minus_tolerance_is_not_a_supplier_unit_price() -> None:
+    """Spec-only ±0.05 replies must not classify ACCEPTABLE below target."""
+
+    plan = calculate_alibaba_negotiation_plan(_input())
+    assert plan.target_price == Decimal("4.06")
+    for text in (
+        "Tolerance is ±0.05, 316L stainless, lead time 20 days.",
+        "We can hold +/-0.05 as requested.",
+        "Dimensional tolerance ± 0.05 mm.",
+    ):
+        parsed = parse_supplier_response(text)
+        assert parsed.quoted_unit_price is None, text
+        assert parsed.needs_human_review is True, text
+        recommendation = classify_supplier_price(
+            parsed.quoted_unit_price,
+            plan.bounds,
+            ambiguous=parsed.needs_human_review,
+        )
+        assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW, text
+
+    quoted = parse_supplier_response("We can offer $4.15, tolerance ±0.05 mm.")
+    assert quoted.quoted_unit_price == Decimal("4.15")
+    assert quoted.needs_human_review is False
+    recommendation = classify_supplier_price(quoted.quoted_unit_price, plan.bounds)
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
