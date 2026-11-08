@@ -112,6 +112,7 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_TOLERANCE_PREFIX = re.compile(r"(?:±|\+/-)\s*$")
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,9 +787,11 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, tolerances, and bare integers as units, not USD amounts."""
 
     if _QUANTITY_SUFFIX.match(text[match.end() :]):
+        return True
+    if _TOLERANCE_PREFIX.search(text[: match.start()]):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()
