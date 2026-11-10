@@ -1951,3 +1951,49 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+@pytest.mark.parametrize(
+    ("reply", "spec_token"),
+    [
+        ("Cable length is 1.5m. Please advise your target price.", "1.5m"),
+        ("Length 1.5 m, MOQ 100 pcs, no price yet.", "1.5 m"),
+        ("Roll width 1.5 meters. Please send your target.", "1.5 meters"),
+        ("Thickness 1.5 inch, waiting for your offer.", "1.5 inch"),
+        ("This is a 1.5in BSP fitting. Advise your target.", "1.5in"),
+        ('Hose is 1.5". Lead time 15 days.', '1.5"'),
+    ],
+)
+def test_decimal_length_units_are_not_supplier_unit_prices(reply: str, spec_token: str) -> None:
+    """Spec-only length tokens must not classify ACCEPTABLE below the target."""
+
+    plan = calculate_alibaba_negotiation_plan(_input())
+    assert spec_token in reply
+    assert extract_supplier_money(reply) == ()
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, reply)
+    assert parsed.quoted_unit_price is None
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+
+def test_marked_price_beside_a_length_spec_stays_a_price() -> None:
+    reply = "Cable length is 1.5m. We can do $4.15 for 40 units."
+    assert extract_supplier_money(reply) == (Decimal("4.15"),)
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price == Decimal("4.15")
+    assert parsed.needs_human_review is False
+    plan = calculate_alibaba_negotiation_plan(_input())
+    recommendation = classify_supplier_price(parsed.quoted_unit_price, plan.bounds)
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
+
+
+def test_spaced_in_does_not_hide_a_real_unit_price() -> None:
+    reply = "We can do 4.10 in stock tomorrow."
+    assert extract_supplier_money(reply) == (Decimal("4.10"),)
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price == Decimal("4.10")
+    plan = calculate_alibaba_negotiation_plan(_input())
+    recommendation = classify_supplier_price(parsed.quoted_unit_price, plan.bounds)
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
