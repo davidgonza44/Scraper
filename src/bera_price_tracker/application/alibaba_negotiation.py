@@ -112,6 +112,7 @@ _QUANTITY_SUFFIX = re.compile(
     r"^\s*(?:units?|pcs|pieces|unidades|qty|quantity)\b",
     re.IGNORECASE,
 )
+_CHINESE_SCALE_SUFFIX = re.compile(r"^\s*[万萬亿億](?:元|圆|圓)?")
 
 
 class AlibabaNegotiationError(ValueError):
@@ -786,9 +787,11 @@ def classify_supplier_price(
 
 
 def _looks_like_quantity(match: re.Match[str], text: str) -> bool:
-    """Treat quantity words and bare integers as units, not USD amounts."""
+    """Treat quantity words, Chinese 万/亿 scale, and bare integers as not money."""
 
-    if _QUANTITY_SUFFIX.match(text[match.end() :]):
+    rest = text[match.end() :]
+    after_number = text[match.end(1) :]
+    if _QUANTITY_SUFFIX.match(rest) or _CHINESE_SCALE_SUFFIX.match(after_number):
         return True
     token = match.group(0)
     has_money_marker = "$" in token or "usd" in token.lower()

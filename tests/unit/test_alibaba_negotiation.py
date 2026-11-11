@@ -1951,3 +1951,43 @@ def test_acceptable_payload_keeps_decision_and_quoted_price() -> None:
     instruction = instructions["instruction"]
     assert isinstance(instruction, str)
     assert "quoted unit price" in instruction.lower()
+
+
+@pytest.mark.parametrize(
+    ("reply", "spec_token"),
+    [
+        ("单价可以做到1.5万，请确认。", "1.5万"),
+        ("Unit price 1.5万, please confirm your target.", "1.5万"),
+        ("We can do 2.5万 per unit. MOQ 100 pcs, no USD quote yet.", "2.5万"),
+        ("报价1.5 万元，等您回复。", "1.5 万"),
+        ("Best is 1.5亿 for the whole lot. Advise your target.", "1.5亿"),
+        ("Traditional quote 1.5萬元. Waiting for your offer.", "1.5萬"),
+        ("Quote is $1.5万, please confirm your target.", "$1.5万"),
+    ],
+)
+def test_chinese_myriad_scale_tokens_are_not_supplier_unit_prices(
+    reply: str, spec_token: str
+) -> None:
+    """1.5万 means 15,000, not a $1.50 unit price below the target."""
+
+    plan = calculate_alibaba_negotiation_plan(_input())
+    assert spec_token in reply
+    assert plan.target_price == Decimal("4.06")
+    assert extract_supplier_money(reply) == ()
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price is None
+    assert parsed.needs_human_review is True
+    parsed, recommendation = AnalyzeSupplierResponse().execute(plan, reply)
+    assert parsed.quoted_unit_price is None
+    assert recommendation.decision is CounterOfferDecision.NEEDS_HUMAN_REVIEW
+
+
+def test_marked_price_beside_a_chinese_myriad_token_stays_a_price() -> None:
+    reply = "Monthly capacity 1.5万 pcs. We can do $4.15 for 40 units."
+    assert extract_supplier_money(reply) == (Decimal("4.15"),)
+    parsed = parse_supplier_response(reply)
+    assert parsed.quoted_unit_price == Decimal("4.15")
+    assert parsed.needs_human_review is False
+    plan = calculate_alibaba_negotiation_plan(_input())
+    recommendation = classify_supplier_price(parsed.quoted_unit_price, plan.bounds)
+    assert recommendation.decision is CounterOfferDecision.NEGOTIABLE
